@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CatalogItem } from '../services/catalogService';
 import { catalogService } from '../services/catalogService';
-import { seedCatalog } from '../services/seeder';
+// import { seedCatalog } from '../services/seeder'; // Removed legacy seeder
 import { ThumbsUp, Download, PenTool, Palette, ArrowLeft, Database, AlertCircle } from 'lucide-react';
 
 interface CatalogPageProps {
@@ -64,19 +64,9 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     }
   };
 
-  const handleManualSeed = async () => {
-    setSeeding(true);
-    setError(null);
-    try {
-      await seedCatalog();
-      await loadCatalog(); // Reload after seeding
-    } catch (e: any) {
-      console.error("Seeding failed", e);
-      setError("Seeding failed: " + (e.message || "Check permissions"));
-    } finally {
-      setSeeding(false);
-    }
-  };
+// const handleManualSeed = async () => { ... } // Removed legacy manual seed
+// Button removed from UI
+
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-gray-50 dark:bg-[#0d1117]">
@@ -119,17 +109,8 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
           <div className="text-center py-20 text-slate-500 flex flex-col items-center">
             <p className="mb-2">No {category}s found in the catalog yet.</p>
             <p className="text-xs mb-6">Be the first to contribute or populate with defaults.</p>
-            
-            <button 
-              onClick={handleManualSeed} 
-              disabled={seeding}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-200 dark:bg-[#30363d] hover:bg-gray-300 dark:hover:bg-[#3b434d] rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-            >
-              <Database size={16} />
-              {seeding ? 'Seeding Catalog...' : 'Seed Default Items'}
-            </button>
             <p className="text-[10px] text-slate-400 mt-2 max-w-xs">
-              Note: You may need to be logged in or check Firestore permissions if this fails.
+              System defaults are seeded automatically for admins.
             </p>
           </div>
         ) : (
