@@ -247,18 +247,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       onClick={onClick}
       className={`h-full px-3 py-2 border rounded-lg flex items-center gap-2 transition-all min-w-[140px] md:min-w-[160px] justify-between group ${
         isActive 
-          ? 'bg-gray-100 dark:bg-[#1c2128] border-brand-red text-brand-red dark:text-brand-orange' 
+          ? 'bg-gray-100 dark:bg-[#1c2128] border-brand-teal text-brand-teal dark:text-brand-teal' 
           : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
       }`}
     >
       <div className="flex items-center gap-2.5 overflow-hidden text-left">
-        <Icon size={16} className={isActive ? "text-brand-red dark:text-brand-orange" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
+        <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
         <div className="flex flex-col">
           <span className="text-[10px] uppercase font-bold text-slate-500 leading-none mb-0.5">{subLabel}</span>
           <span className="truncate text-xs font-medium max-w-[90px]">{label}</span>
         </div>
       </div>
-      <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ${isActive ? 'rotate-180 text-brand-red dark:text-brand-orange' : ''}`} />
+      <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ${isActive ? 'rotate-180 text-brand-teal dark:text-brand-teal' : ''}`} />
     </button>
   );
 
@@ -277,7 +277,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'mr-2' : ''}`}>
         <button 
           onClick={(e) => handleEdit(e, type, item)} 
-          className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-brand-red dark:hover:text-brand-orange transition-colors"
+          className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
           title="Edit"
         >
           <Pencil size={12} />
@@ -292,7 +292,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </button>
         )}
       </div>
-      {isSelected && <Check size={14} className="text-brand-red dark:text-brand-orange" />}
+      {isSelected && <Check size={14} className="text-brand-teal dark:text-brand-teal" />}
     </div>
   );
 
@@ -322,15 +322,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       return (
                         <div key={t.id} className="group flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('graphicTypeId', t.id)}>
                           <div className="flex items-center gap-3">
-                            <Icon size={16} className={isSelected ? 'text-brand-red dark:text-brand-orange' : 'text-slate-500'} />
-                            <span className={`text-xs ${isSelected ? 'text-brand-red dark:text-brand-orange font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{t.name}</span>
+                            <Icon size={16} className={isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} />
+                            <span className={`text-xs ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{t.name}</span>
                           </div>
                           <ItemActions type="type" item={t} isSelected={isSelected} />
                         </div>
                       );
                     })}
                   </div>
-                  <button onClick={() => openModal('type')} className="w-full text-left p-3 text-xs font-bold text-brand-red dark:text-brand-orange border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
+                  <button onClick={() => openModal('type')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Type
                   </button>
                 </div>
@@ -356,8 +356,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         <div key={s.id} className="group relative p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('visualStyleId', s.id)}>
                           <div className="flex justify-between items-start">
                              <div className="flex items-center gap-3">
-                                <Icon size={16} className={`mt-0.5 ${isSelected ? 'text-brand-red dark:text-brand-orange' : 'text-slate-500'}`} />
-                                <span className={`text-xs block ${isSelected ? 'text-brand-red dark:text-brand-orange font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{s.name}</span>
+                                <Icon size={16} className={`mt-0.5 ${isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'}`} />
+                                <span className={`text-xs block ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{s.name}</span>
                              </div>
                              <ItemActions type="style" item={s} isSelected={isSelected} />
                           </div>
@@ -366,7 +366,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       );
                     })}
                   </div>
-                  <button onClick={() => openModal('style')} className="w-full text-left p-3 text-xs font-bold text-brand-red dark:text-brand-orange border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
+                  <button onClick={() => openModal('style')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Style
                   </button>
                 </div>
@@ -427,15 +427,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       return (
                         <div key={r.value} className="group flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('aspectRatio', r.value)}>
                           <div className="flex items-center gap-3">
-                             <Icon size={16} className={isSelected ? 'text-brand-red dark:text-brand-orange' : 'text-slate-500'} />
-                             <span className={`text-xs ${isSelected ? 'text-brand-red dark:text-brand-orange font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{r.label}</span>
+                             <Icon size={16} className={isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} />
+                             <span className={`text-xs ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{r.label}</span>
                           </div>
                           <ItemActions type="size" item={r} isSelected={isSelected} />
                         </div>
                       );
                     })}
                   </div>
-                  <button onClick={() => openModal('size')} className="w-full text-left p-3 text-xs font-bold text-brand-red dark:text-brand-orange border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
+                  <button onClick={() => openModal('size')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Size
                   </button>
                 </div>
@@ -460,9 +460,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                  title="Upload Brand Guidelines (PDF or Image)"
                >
                   {isAnalyzing ? (
-                    <Loader2 size={16} className="animate-spin text-brand-red dark:text-brand-orange" />
+                    <Loader2 size={16} className="animate-spin text-brand-teal dark:text-brand-teal" />
                   ) : (
-                    <UploadCloud size={16} className="text-brand-red dark:text-brand-orange" />
+                    <UploadCloud size={16} className="text-brand-teal dark:text-brand-teal" />
                   )}
                   <div className="flex flex-col text-left">
                     <span className="text-[10px] uppercase font-bold text-slate-500 leading-none mb-0.5">Brand</span>
