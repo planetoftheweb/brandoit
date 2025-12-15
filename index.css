@@ -1,13 +1,18 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "@github/mona-sans";
 
-@font-face {
-  font-family: 'Mona Sans';
-  src: url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.1/dist/Mona-Sans.woff2') format('woff2 supports variations'),
-       url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.1/dist/Mona-Sans.woff2') format('woff2-variations');
-  font-weight: 200 900;
-  font-stretch: 75% 125%;
+@theme {
+  --font-sans: "Mona Sans", "Inter", sans-serif;
+  
+  --color-brand-teal: #00A9A5;
+  --color-brand-orange: #FF7F50;
+  --color-brand-red: #B93135;
+  --color-brand-dark: #0B4F6C;
+
+  --color-dark-bg: #0d1117;
+  --color-dark-card: #161b22;
+  --color-dark-border: #30363d;
+  --color-dark-hover: #21262d;
 }
 
 /* Custom Scrollbar */
@@ -31,4 +36,3 @@
 .dark ::-webkit-scrollbar-thumb:hover {
   background: #484f58; 
 }
-
