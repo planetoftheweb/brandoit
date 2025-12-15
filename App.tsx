@@ -62,10 +62,22 @@ const App: React.FC = () => {
 
   // Check for session on mount
   useEffect(() => {
-    const currentUser = authService.getCurrentUser();
-    if (currentUser) {
-      handleLoginSuccess(currentUser);
-    }
+    // Set up real-time listener for auth state
+    const unsubscribe = authService.onAuthStateChange((currentUser) => {
+      if (currentUser) {
+        handleLoginSuccess(currentUser);
+      } else {
+        // Handle logout / no user
+        setUser(null);
+        // Reset to defaults if logged out
+        setBrandColors(BRAND_COLORS);
+        setVisualStyles(VISUAL_STYLES);
+        setGraphicTypes(GRAPHIC_TYPES);
+        setAspectRatios(ASPECT_RATIOS);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Effect to toggle body class
