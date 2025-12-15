@@ -8,7 +8,8 @@ import {
   doc,
   deleteDoc,
   or,
-  and
+  and,
+  updateDoc
 } from "firebase/firestore";
 import { BrandColor, VisualStyle, GraphicType, AspectRatioOption } from "../types";
 import { 
@@ -140,6 +141,17 @@ export const resourceService = {
       return { ...item, id: docRef.id, scope };
     } catch (error) {
       console.error(`Error adding to ${collectionName}:`, error);
+      throw error;
+    }
+  },
+
+  updateCustomItem: async (collectionName: string, itemId: string, item: any) => {
+    try {
+      const docRef = doc(db, collectionName, itemId);
+      await updateDoc(docRef, item);
+      return { ...item, id: itemId };
+    } catch (error) {
+      console.error(`Error updating ${collectionName}:`, error);
       throw error;
     }
   },

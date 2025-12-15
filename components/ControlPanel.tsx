@@ -232,61 +232,64 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const handleSaveItem = async () => {
     if (!newItemName) return;
 
-    let newItem: any = null;
-    let collectionName = '';
-
     try {
       if (modalType === 'type') {
-        const newType = { name: newItemName };
+        const newType = { name: newItemName, scope: itemScope, teamId: selectedTeamId };
         if (user) {
-           const saved = await resourceService.addCustomItem('graphic_types', newType, user.id, itemScope, selectedTeamId);
-           setOptions.setGraphicTypes(prev => [...prev, saved as GraphicType]);
-           handleChange('graphicTypeId', saved.id);
-        } else {
-           // Local fallback
-           const tempId = `temp-type-${Date.now()}`;
-           const tempItem = { ...newType, id: tempId, scope: 'private' } as any;
-           setOptions.setGraphicTypes(prev => [...prev, tempItem]);
-           handleChange('graphicTypeId', tempId);
+           if (editingId) {
+             const updated = await resourceService.updateCustomItem('graphic_types', editingId, newType);
+             setOptions.setGraphicTypes(prev => prev.map(x => x.id === editingId ? { ...x, ...updated } as GraphicType : x));
+           } else {
+             const saved = await resourceService.addCustomItem('graphic_types', newType, user.id, itemScope, selectedTeamId);
+             setOptions.setGraphicTypes(prev => [...prev, saved as GraphicType]);
+             handleChange('graphicTypeId', saved.id);
+           }
         }
       } 
       else if (modalType === 'style') {
-        const newStyle = { name: newItemName, description: newItemDescription || newItemName };
+        const newStyle = { name: newItemName, description: newItemDescription || newItemName, scope: itemScope, teamId: selectedTeamId };
         if (user) {
-           const saved = await resourceService.addCustomItem('visual_styles', newStyle, user.id, itemScope, selectedTeamId);
-           setOptions.setVisualStyles(prev => [...prev, saved as VisualStyle]);
-           handleChange('visualStyleId', saved.id);
-        } else {
-           const tempId = `temp-style-${Date.now()}`;
-           const tempItem = { ...newStyle, id: tempId, scope: 'private' } as any;
-           setOptions.setVisualStyles(prev => [...prev, tempItem]);
-           handleChange('visualStyleId', tempId);
+           if (editingId) {
+             const updated = await resourceService.updateCustomItem('visual_styles', editingId, newStyle);
+             setOptions.setVisualStyles(prev => prev.map(x => x.id === editingId ? { ...x, ...updated } as VisualStyle : x));
+           } else {
+             const saved = await resourceService.addCustomItem('visual_styles', newStyle, user.id, itemScope, selectedTeamId);
+             setOptions.setVisualStyles(prev => [...prev, saved as VisualStyle]);
+             handleChange('visualStyleId', saved.id);
+           }
         }
       }
       else if (modalType === 'color') {
         const colors = newItemColors.length > 0 ? newItemColors : ['#888888'];
-        const newColor = { name: newItemName, colors };
+        const newColor = { name: newItemName, colors, scope: itemScope, teamId: selectedTeamId };
         if (user) {
-           const saved = await resourceService.addCustomItem('brand_colors', newColor, user.id, itemScope, selectedTeamId);
-           setOptions.setBrandColors(prev => [...prev, saved as BrandColor]);
-           handleChange('colorSchemeId', saved.id);
-        } else {
-           const tempId = `temp-color-${Date.now()}`;
-           const tempItem = { ...newColor, id: tempId, scope: 'private' } as any;
-           setOptions.setBrandColors(prev => [...prev, tempItem]);
-           handleChange('colorSchemeId', tempId);
+           if (editingId) {
+             const updated = await resourceService.updateCustomItem('brand_colors', editingId, newColor);
+             setOptions.setBrandColors(prev => prev.map(x => x.id === editingId ? { ...x, ...updated } as BrandColor : x));
+           } else {
+             const saved = await resourceService.addCustomItem('brand_colors', newColor, user.id, itemScope, selectedTeamId);
+             setOptions.setBrandColors(prev => [...prev, saved as BrandColor]);
+             handleChange('colorSchemeId', saved.id);
+           }
         }
       }
       else if (modalType === 'size') {
         const newVal = newItemValue.trim() || '1:1';
-        const newSize = { label: newItemName, value: newVal };
+        const newSize = { label: newItemName, value: newVal, scope: itemScope, teamId: selectedTeamId };
         if (user) {
-           const saved = await resourceService.addCustomItem('aspect_ratios', newSize, user.id, itemScope, selectedTeamId);
-           setOptions.setAspectRatios(prev => [...prev, saved as AspectRatioOption]);
-           handleChange('aspectRatio', saved.value);
-        } else {
-           setOptions.setAspectRatios(prev => [...prev, { ...newSize, scope: 'private' } as any]);
-           handleChange('aspectRatio', newVal);
+           if (editingId) {
+              // Note: Sizes use value as ID sometimes, but editingId should be the doc ID if coming from DB
+              // If it's a local edit of a temp item, this might fail, but we only allow editing owned items which have IDs.
+              // Wait, aspect ratios in constants don't have IDs, they use value. 
+              // But custom ones from Firestore DO have IDs.
+              // Let's assume editingId is the Firestore ID.
+              await resourceService.updateCustomItem('aspect_ratios', editingId, newSize);
+              setOptions.setAspectRatios(prev => prev.map(x => (x as any).id === editingId ? { ...x, ...newSize } : x));
+           } else {
+              const saved = await resourceService.addCustomItem('aspect_ratios', newSize, user.id, itemScope, selectedTeamId);
+              setOptions.setAspectRatios(prev => [...prev, saved as AspectRatioOption]);
+              handleChange('aspectRatio', saved.value);
+           }
         }
       }
 
@@ -374,7 +377,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
          </div>
       )}
       
-      <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'mr-2' : ''}`}>
+      <div className={`flex items-center gap-1 transition-opacity ${isSelected ? 'mr-2' : ''}`}>
         {!item.isSystem && item.authorId === user?.id && (
           <>
             <button 
