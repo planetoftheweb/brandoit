@@ -134,40 +134,126 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setActiveDropdown(activeDropdown === name ? null : name);
   };
 
-  // Helper to filter and sort items
-  const getFilteredAndSortedItems = (items: any[]) => {
-    return items
-      .filter(item => {
+  const handleToggleDefault = async (e: React.MouseEvent, type: 'type'|'style'|'color'|'size', item: any) => {
+    e.stopPropagation();
+    if (!item.id || item.scope === 'system') return; // Cannot toggle already system items easily without unsetting? Wait, we want to toggle.
+    // Actually, if it is system, we might want to unset it.
+    
+    // Logic: If scope is 'system', set to 'public'. If not 'system', set to 'system'.
+    const newScope = item.scope === 'system' ? 'public' : 'system';
+    
+    try {
+        let collectionName = '';
+        if (type === 'type') collectionName = 'graphic_types';
+        else if (type === 'style') collectionName = 'visual_styles';
+        else if (type === 'color') collectionName = 'brand_colors';
+        else if (type === 'size') collectionName = 'aspect_ratios';
+
+        await resourceService.updateCustomItem(collectionName, item.id, { scope: newScope, isSystem: newScope === 'system' });
+        
+        // Optimistic Update
+        const updateState = (prev: any[]) => prev.map(x => (x.id === item.id ? { ...x, scope: newScope, isSystem: newScope === 'system' } : x));
+        
+        if (type === 'type') setOptions.setGraphicTypes(updateState);
+        else if (type === 'style') setOptions.setVisualStyles(updateState);
+        else if (type === 'color') setOptions.setBrandColors(updateState);
+        else if (type === 'size') setOptions.setAspectRatios(updateState);
+
+    } catch (e) {
+        console.error("Failed to toggle default status", e);
+        alert("Failed to update default status.");
+    }
+  };
+
+  // Grouped List Component
+  const GroupedList = ({ items, type, configKey, onSelect }: any) => {
+    const filtered = items.filter((item: any) => {
         if (!searchTerm) return true;
         const term = searchTerm.toLowerCase();
-        const name = (item.name || item.label || '').toLowerCase();
-        const desc = (item.description || '').toLowerCase();
-        return name.includes(term) || desc.includes(term);
-      })
-      .sort((a, b) => {
-        // 1. System/Default First
-        const aIsSystem = a.isSystem || (!a.authorId && !a.scope);
-        const bIsSystem = b.isSystem || (!b.authorId && !b.scope);
-        
-        if (aIsSystem && !bIsSystem) return -1;
-        if (!aIsSystem && bIsSystem) return 1;
-        
-        // 2. Private/Team Second, Public Third
-        const getScopeOrder = (scope?: string) => {
-            if (scope === 'private') return 1;
-            if (scope === 'team') return 1;
-            if (scope === 'public') return 2;
-            return 3;
-        };
-        
-        const aScope = getScopeOrder(a.scope);
-        const bScope = getScopeOrder(b.scope);
-        
-        if (aScope !== bScope) return aScope - bScope;
-        
-        // 3. Alphabetical
-        return (a.name || a.label || '').localeCompare(b.name || b.label || '');
-      });
+        return (item.name || item.label || '').toLowerCase().includes(term) || (item.description || '').toLowerCase().includes(term);
+    });
+
+    const groups = {
+        default: filtered.filter((i: any) => i.scope === 'system' || (i.isSystem && i.scope !== 'private')), // Fallback for legacy
+        private: filtered.filter((i: any) => i.scope === 'private'),
+        team: filtered.filter((i: any) => i.scope === 'team'),
+        public: filtered.filter((i: any) => i.scope === 'public' && !i.isSystem)
+    };
+
+    const renderGroup = (groupItems: any[], title: string) => {
+        if (groupItems.length === 0) return null;
+        return (
+            <div className="mb-2">
+                <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-gray-50 dark:bg-[#161b22] sticky top-0 z-10 border-b border-gray-100 dark:border-[#30363d]">
+                    {title}
+                </div>
+                {groupItems.sort((a: any, b: any) => (a.name || a.label).localeCompare(b.name || b.label)).map((item: any) => {
+                    const Icon = item.icon || (type === 'type' ? Layout : type === 'style' ? PenTool : type === 'size' ? Maximize : Palette);
+                    const isSelected = config[configKey] === (item.id || item.value);
+                    
+                    return (
+                        <div 
+                            key={item.id || item.value} 
+                            className="group relative flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" 
+                            onClick={() => {
+                                handleChange(configKey, item.id || item.value); 
+                                setActiveDropdown(null);
+                            }}
+                        >
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <Icon size={16} className={isSelected ? 'text-brand-teal dark:text-brand-teal shrink-0' : 'text-slate-500 shrink-0'} />
+                                <div className="flex flex-col min-w-0">
+                                    <span className={`text-xs truncate ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>
+                                        {item.name || item.label}
+                                    </span>
+                                    {type === 'color' && (
+                                        <div className="flex h-1.5 w-16 rounded-sm overflow-hidden ring-1 ring-black/5 mt-1">
+                                            {item.colors.map((c: string, i: number) => (
+                                                <div key={i} className="flex-1 h-full" style={{ backgroundColor: c }} />
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-1">
+                                {/* Admin "Make Default" Toggle */}
+                                {user?.username === 'planetoftheweb' && (
+                                    <button
+                                        onClick={(e) => handleToggleDefault(e, type, item)}
+                                        className={`p-1.5 rounded-md transition-colors ${
+                                            item.scope === 'system' 
+                                                ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20' 
+                                                : 'text-slate-300 hover:text-yellow-500 hover:bg-gray-100 dark:hover:bg-[#30363d]'
+                                        }`}
+                                        title={item.scope === 'system' ? "Remove from Defaults" : "Make Default"}
+                                    >
+                                        <Sparkles size={12} fill={item.scope === 'system' ? "currentColor" : "none"} />
+                                    </button>
+                                )}
+
+                                <ItemActions type={type} item={item} isSelected={isSelected} />
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    return (
+        <div className="max-h-60 overflow-y-auto custom-scrollbar p-1 space-y-1">
+            {renderGroup(groups.default, 'Defaults')}
+            {renderGroup(groups.private, 'Private')}
+            {renderGroup(groups.team, 'Team')}
+            {renderGroup(groups.public, 'Public')}
+            {filtered.length === 0 && (
+                <div className="p-4 text-center text-xs text-slate-500">
+                    No items found.
+                </div>
+            )}
+        </div>
+    );
   };
 
   const openModal = (type: 'type' | 'style' | 'color' | 'size') => {
@@ -484,21 +570,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               {activeDropdown === 'type' && (
                 <div className="absolute top-full left-0 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   <SearchInput />
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                    {getFilteredAndSortedItems(options.graphicTypes).map(t => {
-                      const Icon = t.icon || Layout;
-                      const isSelected = config.graphicTypeId === t.id;
-                      return (
-                        <div key={t.id} className="group flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('graphicTypeId', t.id)}>
-                          <div className="flex items-center gap-3">
-                            <Icon size={16} className={isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} />
-                            <span className={`text-xs ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{t.name}</span>
-                          </div>
-                          <ItemActions type="type" item={t} isSelected={isSelected} />
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <GroupedList 
+                    items={options.graphicTypes} 
+                    type="type" 
+                    configKey="graphicTypeId" 
+                  />
                   <button onClick={() => openModal('type')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Type
                   </button>
@@ -518,24 +594,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                {activeDropdown === 'style' && (
                 <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   <SearchInput />
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                    {getFilteredAndSortedItems(options.visualStyles).map(s => {
-                      const Icon = s.icon || PenTool;
-                      const isSelected = config.visualStyleId === s.id;
-                      return (
-                        <div key={s.id} className="group relative p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('visualStyleId', s.id)}>
-                          <div className="flex justify-between items-start">
-                             <div className="flex items-center gap-3">
-                                <Icon size={16} className={`mt-0.5 ${isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} ${s.scope === 'team' ? 'text-brand-orange' : ''}`} />
-                                <span className={`text-xs block ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{s.name}</span>
-                             </div>
-                             <ItemActions type="style" item={s} isSelected={isSelected} />
-                          </div>
-                          <span className="text-[10px] text-slate-500 block mt-0.5 pl-7 truncate pr-2">{s.description}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <GroupedList 
+                    items={options.visualStyles} 
+                    type="style" 
+                    configKey="visualStyleId" 
+                  />
                   <button onClick={() => openModal('style')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Style
                   </button>
@@ -556,24 +619,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               {activeDropdown === 'color' && (
                 <div className="absolute top-full left-0 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   <SearchInput />
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                    {getFilteredAndSortedItems(options.brandColors).map(c => {
-                      const isSelected = config.colorSchemeId === c.id;
-                      return (
-                        <div key={c.id} className="group p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('colorSchemeId', c.id)}>
-                          <div className="flex justify-between items-center mb-1.5">
-                            <span className={`text-xs ${isSelected ? 'text-brand-red dark:text-brand-orange font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{c.name}</span>
-                            <ItemActions type="color" item={c} isSelected={isSelected} />
-                          </div>
-                          <div className="flex h-2 w-full rounded-sm overflow-hidden ring-1 ring-gray-200 dark:ring-[#30363d]/50">
-                            {c.colors.map((hex, i) => (
-                              <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <GroupedList 
+                    items={options.brandColors} 
+                    type="color" 
+                    configKey="colorSchemeId" 
+                  />
                   <button onClick={() => openModal('color')} className="w-full text-left p-3 text-xs font-bold text-brand-red dark:text-brand-orange border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Palette
                   </button>
@@ -593,21 +643,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               {activeDropdown === 'size' && (
                 <div className="absolute top-full left-0 mt-2 w-56 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   <SearchInput />
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-1">
-                    {getFilteredAndSortedItems(options.aspectRatios).map(r => {
-                      const Icon = r.icon || Maximize;
-                      const isSelected = config.aspectRatio === r.value;
-                      return (
-                        <div key={r.value} className="group flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('aspectRatio', r.value)}>
-                          <div className="flex items-center gap-3">
-                             <Icon size={16} className={isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} />
-                             <span className={`text-xs ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{r.label}</span>
-                          </div>
-                          <ItemActions type="size" item={r} isSelected={isSelected} />
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <GroupedList 
+                    items={options.aspectRatios} 
+                    type="size" 
+                    configKey="aspectRatio" 
+                  />
                   <button onClick={() => openModal('size')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Size
                   </button>
