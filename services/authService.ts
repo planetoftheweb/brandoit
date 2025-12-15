@@ -1,4 +1,12 @@
 import { 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  updateProfile, 
+  User as FirebaseUser,
+  onAuthStateChanged
+} from "firebase/auth";
+import { 
   collection,
   query,
   where,
