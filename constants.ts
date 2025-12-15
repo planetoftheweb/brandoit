@@ -16,35 +16,35 @@ import {
   Smartphone
 } from 'lucide-react';
 
-// Combined Visual Styles + Default Colors
+// Combined Visual Styles + Default Colors (using actual Hex codes now)
 export const VISUAL_STYLES: VisualStyle[] = [
   {
     id: 'minimalist-vector',
     name: 'Minimalist Vector',
     description: 'Flat design, clean lines, no gradients, plenty of whitespace.',
     icon: Minimize2,
-    colors: ['Deep Navy', 'Electric Blue', 'White', 'Slate Gray'] // Tech Blue default
+    colors: ['#0B4F6C', '#00A9A5', '#FFFFFF', '#708090'] // Tech Blue: Deep Navy, Electric Blue, White, Slate Gray
   },
   {
     id: 'corporate-flat',
     name: 'Corporate Flat',
     description: 'Professional, trustworthy, isometric clean shapes.',
     icon: Building2,
-    colors: ['Terracotta', 'Sage Green', 'Beige', 'Charcoal'] // Organic Earth default
+    colors: ['#E2725B', '#9DC183', '#F5F5DC', '#36454F'] // Organic Earth: Terracotta, Sage Green, Beige, Charcoal
   },
   {
     id: 'hand-drawn',
     name: 'Hand Drawn Sketch',
     description: 'Rough edges, pencil texture, approachable and human.',
     icon: PenTool,
-    colors: ['Black', 'Dark Gray', 'Light Gray', 'White'] // Monochrome default
+    colors: ['#000000', '#A9A9A9', '#D3D3D3', '#FFFFFF'] // Monochrome: Black, Dark Gray, Light Gray, White
   },
   {
     id: '3d-render',
     name: 'Soft 3D Render',
     description: 'Smooth lighting, soft shadows, claymorphism style.',
     icon: Box,
-    colors: ['Hot Pink', 'Cyan', 'Yellow', 'Black'] // Vibrant Pop default
+    colors: ['#FF69B4', '#00FFFF', '#FFFF00', '#000000'] // Vibrant Pop: Hot Pink, Cyan, Yellow, Black
   }
 ];
 
