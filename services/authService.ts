@@ -1,12 +1,8 @@
 import { 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut, 
-  updateProfile, 
-  User as FirebaseUser,
-  onAuthStateChanged
-} from "firebase/auth";
-import { 
+  collection,
+  query,
+  where,
+  getDocs,
   doc, 
   setDoc, 
   getDoc, 
@@ -65,9 +61,31 @@ const transformUser = (firebaseUser: FirebaseUser, userData: any): User => {
   };
 };
 
+const checkUsernameUnique = async (username: string, excludeUserId?: string): Promise<void> => {
+  if (!username) return; // Empty username check is handled by UI validation for requirement
+  
+  const usersRef = collection(db, "users");
+  const q = query(usersRef, where("username", "==", username));
+  const querySnapshot = await getDocs(q);
+
+  if (!querySnapshot.empty) {
+    // If excluding a user (e.g. current user updating profile), check if the found doc is NOT them
+    if (excludeUserId) {
+      const isTakenByOther = querySnapshot.docs.some(doc => doc.id !== excludeUserId);
+      if (isTakenByOther) throw new Error("Username is already taken.");
+    } else {
+      throw new Error("Username is already taken.");
+    }
+  }
+};
+
 export const authService = {
   register: async (name: string, email: string, password: string, username?: string): Promise<User> => {
     try {
+      if (!username) throw new Error("Username is required.");
+      
+      await checkUsernameUnique(username);
+
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
@@ -76,7 +94,7 @@ export const authService = {
       // Create the user document in Firestore - SANITIZED
       const newUserProfile = {
         name,
-        username: username || '', // Save username
+        username,
         email,
         preferences: sanitizePreferences(defaultPreferences),
         createdAt: new Date().toISOString()
@@ -174,6 +192,10 @@ export const authService = {
 
   updateUserProfile: async (userId: string, data: { name?: string; username?: string }) => {
     try {
+      if (data.username) {
+        await checkUsernameUnique(data.username, userId);
+      }
+
       const userRef = doc(db, "users", userId);
       await updateDoc(userRef, data);
       
@@ -181,9 +203,9 @@ export const authService = {
       if (data.name && auth.currentUser && auth.currentUser.uid === userId) {
         await updateProfile(auth.currentUser, { displayName: data.name });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating user profile:", error);
-      throw new Error("Failed to update profile.");
+      throw new Error(error.message || "Failed to update profile.");
     }
   },
   
