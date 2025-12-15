@@ -70,11 +70,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         </button>
 
         <div className="p-8">
-          <div className="text-center mb-8">
-            <div className="w-12 h-12 bg-gradient-to-br from-brand-red via-brand-orange to-brand-teal rounded-xl flex items-center justify-center text-white text-2xl shadow-lg shadow-brand-red/20 mx-auto mb-4">
-              <Layers size={24} />
-            </div>
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+            <div className="text-center mb-8">
+              <img 
+                src="/brandoit.png" 
+                alt="BranDoIt Logo" 
+                className="w-16 h-16 rounded-full shadow-lg shadow-brand-red/20 object-cover mx-auto mb-4" 
+              />
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
               {isLogin ? 'Welcome back' : 'Create your account'}
             </h2>
             <p className="text-slate-500 dark:text-slate-400 text-sm mt-2">
