@@ -27,6 +27,7 @@ if (missingKeys.length > 0) {
   console.error("Missing Firebase Config Keys:", missingKeys);
 } else {
   console.log("Firebase Config Loaded successfully");
+  console.log("Storage Bucket:", firebaseConfig.storageBucket); // Log the bucket name
   if (!firebaseConfig.storageBucket) {
     console.warn("WARNING: VITE_FIREBASE_STORAGE_BUCKET is missing. File uploads will fail.");
   }
