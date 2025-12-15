@@ -4,71 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BranDoIt Studio</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['"Mona Sans"', 'Inter', 'sans-serif'],
-            },
-            colors: {
-              brand: {
-                teal: '#00A9A5',
-                orange: '#FF7F50',
-                red: '#B93135',
-                dark: '#0B4F6C'
-              },
-              dark: {
-                bg: '#0d1117',
-                card: '#161b22',
-                border: '#30363d',
-                hover: '#21262d'
-              }
-            }
-          }
-        }
-      }
-    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-      /* Import Mona Sans from jsDelivr */
-      @font-face {
-        font-family: 'Mona Sans';
-        src: url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.1/dist/Mona-Sans.woff2') format('woff2 supports variations'),
-             url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.1/dist/Mona-Sans.woff2') format('woff2-variations');
-        font-weight: 200 900;
-        font-stretch: 75% 125%;
-      }
-
-      body {
-        font-family: 'Mona Sans', 'Inter', sans-serif;
-      }
-      /* Custom Scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent; 
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #cbd5e1; 
-        border-radius: 4px;
-      }
-      .dark ::-webkit-scrollbar-thumb {
-        background: #30363d; 
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8; 
-      }
-      .dark ::-webkit-scrollbar-thumb:hover {
-        background: #484f58; 
-      }
-    </style>
   </head>
   <body class="bg-gray-50 dark:bg-[#0d1117] text-slate-900 dark:text-white overflow-x-hidden transition-colors duration-200">
     <div id="root"></div>

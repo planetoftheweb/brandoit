@@ -1,20 +1,70 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# BranDoIt Studio
 
-# Run and deploy your AI Studio app
+![BranDoIt Studio](./brandoit.png)
 
-This contains everything you need to run your app locally.
+An AI-powered brand design studio that helps you generate cohesive visual assets using Google's Gemini API.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1bFOU4c2vJYdKC4AEAyabaCPwuQ0u1X_q
+## Features
 
-## Run Locally
+- **AI Graphic Generation:** Create logos, icons, social media posts, and banners.
+- **Brand Consistency:** Enforce color palettes and visual styles across all generated assets.
+- **Smart Refinement:** Iteratively refine images with natural language prompts.
+- **Brand Analysis:** Upload brand guidelines to automatically extract colors and styles.
 
-**Prerequisites:**  Node.js
+## Tech Stack
 
+- **Frontend:** React 19, TypeScript, Vite
+- **Styling:** Tailwind CSS
+- **AI:** Google Gemini API (`gemini-2.5-flash-image`, `gemini-2.5-flash`)
+- **Icons:** Lucide React
+- **Font:** Mona Sans & Inter
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Getting Started
+
+### Prerequisites
+
+- Node.js (v18 or higher)
+- A Google Gemini API Key
+
+### Installation
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/planetoftheweb/brandoit.git
+    cd brandoit
+    ```
+
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+3.  Set up environment variables:
+    Create a `.env` file in the root directory and add your API key:
+    ```env
+    GEMINI_API_KEY=your_api_key_here
+    ```
+
+4.  Start the development server:
+    ```bash
+    npm run dev
+    ```
+
+## Building for Production
+
+To create a production build:
+
+```bash
+npm run build
+```
+
+The output will be in the `dist` directory.
+
+## Deployment
+
+This project is configured for deployment on [Render](https://render.com).
+Ensure you add the `GEMINI_API_KEY` environment variable in your Render service settings.
+
+## License
+
+MIT
