@@ -125,8 +125,8 @@ export const analyzeBrandGuidelines = async (file: File, customApiKey?: string):
   const prompt = `
     Analyze this brand guideline document. 
     Extract the following structured data:
-    1. Brand Colors: Provide a name for the palette (e.g., "Primary Brand") and a list of hex codes.
-    2. Visual Styles: Identify distinct visual styles described (e.g., "Line Art", "Isometric"). Provide a name and a short description for each.
+    1. Brand Colors: Extract up to 5 distinct color palettes found. Provide a descriptive name for each palette (e.g., "Primary Brand", "Secondary Accents") and a list of hex codes.
+    2. Visual Styles: Identify up to 5 distinct visual styles described or implied (e.g., "Line Art", "Isometric", "Photorealistic"). Provide a name and a short description for each.
     3. Graphic Types: Identify the types of graphics mentioned (e.g., "Icons", "Banners").
 
     Return the result as a strict JSON object matching the schema.

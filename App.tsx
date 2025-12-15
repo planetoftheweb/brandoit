@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
+import { BrandAnalysisModal } from './components/BrandAnalysisModal';
 import { SettingsModal } from './components/SettingsModal';
 import { CatalogPage } from './components/CatalogPage';
 import { RecentGenerations } from './components/RecentGenerations';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem, BrandGuidelinesAnalysis } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -76,6 +77,10 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Analysis Modal State
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<BrandGuidelinesAnalysis | null>(null);
 
   // Load Resources (Structures)
   const loadResources = async (userId?: string) => {
@@ -222,42 +227,85 @@ const App: React.FC = () => {
     try {
       const customKey = user?.preferences.geminiApiKey;
       const result = await analyzeBrandGuidelines(file, customKey);
-      
-      // Update state with new options, prepending them to the list
-      const newColors: BrandColor[] = result.brandColors.map((c, i) => ({
-        ...c,
-        id: `analyzed-color-${Date.now()}-${i}`
-      }));
-      
-      const newStyles: VisualStyle[] = result.visualStyles.map((s, i) => ({
-        ...s,
-        id: `analyzed-style-${Date.now()}-${i}`
-      }));
-
-      const newTypes: GraphicType[] = result.graphicTypes.map((t, i) => ({
-        ...t,
-        id: `analyzed-type-${Date.now()}-${i}`
-      }));
-
-      // Update lists
-      if (newColors.length) setBrandColors(prev => [...newColors, ...prev]);
-      if (newStyles.length) setVisualStyles(prev => [...newStyles, ...prev]);
-      if (newTypes.length) setGraphicTypes(prev => [...newTypes, ...prev]);
-
-      // Set defaults to the first new item found
-      setConfig(prev => ({
-        ...prev,
-        colorSchemeId: newColors.length ? newColors[0].id : prev.colorSchemeId,
-        visualStyleId: newStyles.length ? newStyles[0].id : prev.visualStyleId,
-        graphicTypeId: newTypes.length ? newTypes[0].id : prev.graphicTypeId
-      }));
-
-      // NOTE: The useEffect for syncing with user preferences will automatically handle saving these new options if a user is logged in.
-
+      setAnalysisResult(result);
+      setIsAnalysisModalOpen(true);
     } catch (err: any) {
       setError(err.message || 'Failed to analyze brand guidelines.');
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleConfirmAnalysis = async (selected: BrandGuidelinesAnalysis) => {
+    // 1. Prepare items with temporary IDs for immediate UI update
+    const tempColors: BrandColor[] = selected.brandColors.map((c, i) => ({
+        ...c,
+        id: `analyzed-color-${Date.now()}-${i}`,
+        authorId: user?.id || 'temp',
+        authorName: user?.name || 'You',
+        scope: 'private',
+        votes: 0,
+        voters: [],
+        createdAt: Date.now()
+    })) as BrandColor[];
+
+    const tempStyles: VisualStyle[] = selected.visualStyles.map((s, i) => ({
+        ...s,
+        id: `analyzed-style-${Date.now()}-${i}`,
+        authorId: user?.id || 'temp',
+        authorName: user?.name || 'You',
+        scope: 'private',
+        votes: 0,
+        voters: [],
+        createdAt: Date.now()
+    })) as VisualStyle[];
+
+    const tempTypes: GraphicType[] = selected.graphicTypes.map((t, i) => ({
+        ...t,
+        id: `analyzed-type-${Date.now()}-${i}`,
+        authorId: user?.id || 'temp',
+        authorName: user?.name || 'You',
+        scope: 'private',
+        votes: 0,
+        voters: [],
+        createdAt: Date.now()
+    })) as GraphicType[];
+
+    // 2. Update local state
+    if (tempColors.length) setBrandColors(prev => [...tempColors, ...prev]);
+    if (tempStyles.length) setVisualStyles(prev => [...tempStyles, ...prev]);
+    if (tempTypes.length) setGraphicTypes(prev => [...tempTypes, ...prev]);
+
+    // 3. Set config to use the first new items
+    setConfig(prev => ({
+        ...prev,
+        colorSchemeId: tempColors.length ? tempColors[0].id : prev.colorSchemeId,
+        visualStyleId: tempStyles.length ? tempStyles[0].id : prev.visualStyleId,
+        graphicTypeId: tempTypes.length ? tempTypes[0].id : prev.graphicTypeId
+    }));
+
+    // 4. Persist to Firestore if user is logged in
+    if (user) {
+        try {
+            // We iterate and save each item. 
+            // Note: In a real app, we might want a batch operation or a bulk add endpoint.
+            // Also, we don't update the local IDs to the Firestore IDs here, which means 
+            // these items might be duplicated in the list if we re-fetch immediately, 
+            // but typical usage won't trigger immediate re-fetch until page reload or specific action.
+            
+            for (const item of selected.brandColors) {
+                await resourceService.addCustomItem('brand_colors', { name: item.name, colors: item.colors }, user.id, 'private');
+            }
+            for (const item of selected.visualStyles) {
+                await resourceService.addCustomItem('visual_styles', { name: item.name, description: item.description }, user.id, 'private');
+            }
+            for (const item of selected.graphicTypes) {
+                await resourceService.addCustomItem('graphic_types', { name: item.name }, user.id, 'private');
+            }
+        } catch (e) {
+            console.error("Error saving analyzed items to Firestore", e);
+            setError("Items added locally, but failed to save to account.");
+        }
     }
   };
 
@@ -534,6 +582,14 @@ const App: React.FC = () => {
         onClose={() => setIsAuthModalOpen(false)} 
         onLoginSuccess={handleLoginSuccess}
         initialMode={authModalMode}
+      />
+
+      {/* Brand Analysis Modal */}
+      <BrandAnalysisModal
+        isOpen={isAnalysisModalOpen}
+        onClose={() => setIsAnalysisModalOpen(false)}
+        analysisResult={analysisResult}
+        onConfirm={handleConfirmAnalysis}
       />
 
       {/* Settings Modal */}
