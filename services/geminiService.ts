@@ -194,6 +194,83 @@ export const analyzeBrandGuidelines = async (file: File, customApiKey?: string):
   }
 };
 
+/**
+ * Analyzes a single image to extract a specific option type (Style or Color).
+ */
+export const analyzeImageForOption = async (
+  file: File, 
+  type: 'style' | 'color', 
+  customApiKey?: string
+): Promise<{ name: string; description?: string; colors?: string[] }> => {
+  const ai = getAiClient(customApiKey);
+  const base64Data = await fileToBase64(file);
+  const mimeType = file.type;
+
+  let prompt = '';
+  let responseSchema: any = {};
+
+  if (type === 'style') {
+    prompt = `
+      Analyze the visual style of this image.
+      Provide a short, catchy Name for this style (e.g. "Neon Cyberpunk", "Minimal Line Art").
+      Provide a concise Description of the visual characteristics (e.g. lighting, texture, line weight, composition) that could be used to generate similar images.
+    `;
+    responseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        description: { type: Type.STRING }
+      },
+      required: ["name", "description"]
+    };
+  } else if (type === 'color') {
+    prompt = `
+      Analyze the color palette of this image.
+      Provide a descriptive Name for this palette (e.g. "Sunset Vibes", "Corporate Blue").
+      Extract the 4-5 dominant colors as HEX codes.
+    `;
+    responseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        colors: { 
+          type: Type.ARRAY, 
+          items: { type: Type.STRING } 
+        }
+      },
+      required: ["name", "colors"]
+    };
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: ANALYSIS_MODEL,
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType,
+            },
+          },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema
+      }
+    });
+
+    if (!response.text) throw new Error("No analysis result generated");
+    
+    return JSON.parse(response.text);
+  } catch (error) {
+    console.error("Option Analysis Error:", error);
+    throw new Error(`Failed to analyze image for ${type}.`);
+  }
+};
+
 
 // Helper to parse the response structure
 const extractImageFromResponse = (response: any): GeneratedImage => {

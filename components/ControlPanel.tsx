@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
+import { analyzeImageForOption } from '../services/geminiService';
 import { 
   Palette, 
   PenTool, 
@@ -13,7 +14,8 @@ import {
   X,
   Pencil,
   UploadCloud,
-  Loader2
+  Loader2,
+  Image as ImageIcon
 } from 'lucide-react';
 
 interface ControlPanelProps {
@@ -87,6 +89,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [newItemName, setNewItemName] = useState('');
   const [newItemDescription, setNewItemDescription] = useState('');
   const [newItemValue, setNewItemValue] = useState(''); // Used for colors or aspect ratio value
+  
+  const [isAnalysingOption, setIsAnalysingOption] = useState(false);
+  const optionFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (key: keyof GenerationConfig, value: string) => {
     setConfig(prev => ({ ...prev, [key]: value }));
@@ -149,6 +154,33 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   }, []);
 
   // --- Handlers for Adding/Editing Custom Options ---
+
+  const handleOptionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !modalType) return;
+    
+    if (modalType !== 'style' && modalType !== 'color') return;
+
+    setIsAnalysingOption(true);
+    try {
+      // Pass custom key if we had access to user here, but for now relying on env var or service handling
+      // Note: In a real app we'd pass the user's custom key down to ControlPanel
+      const result = await analyzeImageForOption(file, modalType);
+      
+      setNewItemName(result.name);
+      if (modalType === 'style' && result.description) {
+        setNewItemDescription(result.description);
+      } else if (modalType === 'color' && result.colors) {
+        setNewItemValue(result.colors.join(', '));
+      }
+    } catch (err) {
+      console.error("Failed to analyze option image:", err);
+      // Could show a toast here if we had one accessible
+    } finally {
+      setIsAnalysingOption(false);
+      if (optionFileInputRef.current) optionFileInputRef.current.value = '';
+    }
+  };
 
   const handleSaveItem = () => {
     if (!newItemName) return;
@@ -522,6 +554,40 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         }
       >
         <div className="space-y-4">
+          
+          {/* Image Upload for Style/Color Auto-fill */}
+          {!editingId && (modalType === 'style' || modalType === 'color') && (
+            <div className="mb-4 p-3 bg-gray-50 dark:bg-[#0d1117] rounded-lg border border-dashed border-gray-300 dark:border-[#30363d]">
+              <input 
+                 type="file" 
+                 ref={optionFileInputRef} 
+                 className="hidden" 
+                 accept="image/*"
+                 onChange={handleOptionFileChange}
+               />
+               <button 
+                 onClick={() => optionFileInputRef.current?.click()}
+                 disabled={isAnalysingOption}
+                 className="w-full flex items-center justify-center gap-2 text-sm font-medium text-brand-teal hover:text-teal-600 dark:hover:text-teal-400 transition-colors py-2"
+               >
+                 {isAnalysingOption ? (
+                   <>
+                     <Loader2 size={16} className="animate-spin" />
+                     Analyzing Image...
+                   </>
+                 ) : (
+                   <>
+                     <ImageIcon size={16} />
+                     Upload Image to Auto-Fill
+                   </>
+                 )}
+               </button>
+               <p className="text-[10px] text-center text-slate-400">
+                 Upload an example image to automatically extract {modalType === 'style' ? 'style description' : 'colors'}.
+               </p>
+            </div>
+          )}
+
           <div>
             <label className={labelClass}>
               {modalType === 'size' ? 'Label (e.g. Ultrawide)' : 'Name'}
