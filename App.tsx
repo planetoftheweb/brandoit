@@ -3,8 +3,9 @@ import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
+import { CatalogModal } from './components/CatalogModal';
 import { RecentGenerations } from './components/RecentGenerations';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -14,6 +15,7 @@ import {
 import { generateGraphic, refineGraphic, analyzeBrandGuidelines } from './services/geminiService';
 import { authService } from './services/authService';
 import { historyService } from './services/historyService';
+import { seedCatalog } from './services/seeder';
 import { 
   AlertCircle, 
   Sun, 
@@ -30,7 +32,8 @@ import {
   LogIn,
   LogOut,
   User as UserIcon,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  Globe
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -38,8 +41,10 @@ const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   
   // Auth State
+  const [user, setUser] = useState<User | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
@@ -91,6 +96,9 @@ const App: React.FC = () => {
         setAspectRatios(ASPECT_RATIOS);
       }
     });
+
+    // Attempt to seed catalog once on mount (harmless if already seeded)
+    seedCatalog().catch(console.error);
 
     return () => unsubscribe();
   }, []);
@@ -291,18 +299,53 @@ const App: React.FC = () => {
     await authService.updateUserPreferences(user.id, updatedUser.preferences);
   };
 
+  const handleImportFromCatalog = (item: CatalogItem) => {
+    if (item.type === 'style') {
+      const newStyle = item.data as VisualStyle;
+      if (!visualStyles.find(s => s.id === newStyle.id)) {
+        setVisualStyles(prev => [...prev, newStyle]);
+      }
+      setConfig(prev => ({ ...prev, visualStyleId: newStyle.id }));
+    } else if (item.type === 'color') {
+      const newColor = item.data as BrandColor;
+      if (!brandColors.find(c => c.id === newColor.id)) {
+        setBrandColors(prev => [...prev, newColor]);
+      }
+      setConfig(prev => ({ ...prev, colorSchemeId: newColor.id }));
+    } else if (item.type === 'type') {
+      const newType = item.data as GraphicType;
+      if (!graphicTypes.find(t => t.id === newType.id)) {
+        setGraphicTypes(prev => [...prev, newType]);
+      }
+      setConfig(prev => ({ ...prev, graphicTypeId: newType.id }));
+    }
+    setIsCatalogOpen(false);
+  };
+
   return (
     <div className="flex flex-col w-full min-h-screen font-sans transition-colors duration-200">
       
       {/* 1. Dedicated Header Row */}
       <header className="w-full flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <img 
-            src="/brandoit.png" 
-            alt="BranDoIt Logo" 
-            className="w-12 h-12 rounded-full shadow-lg shadow-brand-red/20 object-cover" 
-          />
-          <h1 className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">BranDoIt</h1>
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3">
+            <img 
+              src="/brandoit.png" 
+              alt="BranDoIt Logo" 
+              className="w-12 h-12 rounded-full shadow-lg shadow-brand-red/20 object-cover" 
+            />
+            <h1 className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">BranDoIt</h1>
+          </div>
+          
+          {/* Navigation Links */}
+          <nav className="hidden md:flex items-center gap-4 ml-4">
+            <button 
+              onClick={() => setIsCatalogOpen(true)}
+              className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal transition-colors flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#21262d]"
+            >
+              <Globe size={16} /> Catalog
+            </button>
+          </nav>
         </div>
 
         <div className="flex items-center gap-3">
@@ -482,6 +525,14 @@ const App: React.FC = () => {
           aspectRatios={aspectRatios}
         />
       )}
+
+      {/* Catalog Modal */}
+      <CatalogModal
+        isOpen={isCatalogOpen}
+        onClose={() => setIsCatalogOpen(false)}
+        onImport={handleImportFromCatalog}
+        userId={user?.id}
+      />
 
       {/* Help Modal */}
       {isHelpOpen && (
