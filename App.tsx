@@ -40,7 +40,12 @@ import {
 
 const App: React.FC = () => {
   // Theme State
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return true; // Default to dark
+  });
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [catalogMode, setCatalogMode] = useState<'style' | 'color' | null>(null);
@@ -111,14 +116,6 @@ const App: React.FC = () => {
       document.documentElement.classList.remove('dark');
     }
   }, [isDarkMode]);
-
-  // Initial check for system preference if no user preference (optional)
-  useEffect(() => {
-    // Check if the user has a system preference for dark mode
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setIsDarkMode(true);
-    }
-  }, []);
 
   // Sync preferences to Auth Service when they change AND a user is logged in
   useEffect(() => {
