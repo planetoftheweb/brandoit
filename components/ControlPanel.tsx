@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User } from '../types';
+import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team } from '../types';
 import { analyzeImageForOption } from '../services/geminiService';
-import { catalogService } from '../services/catalogService';
 import { resourceService } from '../services/resourceService';
+import { teamService } from '../services/teamService';
 import { 
   Palette, 
   PenTool, 
@@ -18,7 +18,9 @@ import {
   UploadCloud,
   Loader2,
   Image as ImageIcon,
-  Globe
+  Globe,
+  Lock,
+  Users
 } from 'lucide-react';
 
 interface ControlPanelProps {
@@ -95,10 +97,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [newItemDescription, setNewItemDescription] = useState('');
   const [newItemColors, setNewItemColors] = useState<string[]>([]);
   const [newItemValue, setNewItemValue] = useState(''); // Used for aspect ratio value
-  const [contributeToCatalog, setContributeToCatalog] = useState(false);
+  
+  // Scoping State
+  const [itemScope, setItemScope] = useState<'private' | 'public' | 'team'>('private');
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [userTeams, setUserTeams] = useState<Team[]>([]);
   
   const [isAnalysingOption, setIsAnalysingOption] = useState(false);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load teams when user is present
+  useEffect(() => {
+    if (user) {
+        teamService.getUserTeams(user.id).then(teams => {
+            setUserTeams(teams);
+            if (teams.length > 0) setSelectedTeamId(teams[0].id);
+        });
+    }
+  }, [user]);
 
   const handleChange = (key: keyof GenerationConfig, value: string) => {
     setConfig(prev => ({ ...prev, [key]: value }));
@@ -117,8 +133,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setNewItemDescription('');
     setNewItemColors(['#000000']); // Default color
     setNewItemValue('');
-    // Default to user preference for contribution, defaulting to false if not set
-    setContributeToCatalog(user?.preferences?.settings?.contributeByDefault ?? false);
+    
+    // Default Scope
+    if (user?.preferences?.settings?.contributeByDefault) {
+        setItemScope('public');
+    } else {
+        setItemScope('private');
+    }
   };
 
   const handleEdit = (e: React.MouseEvent, type: 'type' | 'style' | 'color' | 'size', item: any) => {
@@ -130,6 +151,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setNewItemName(item.name || item.label);
     setNewItemDescription(item.description || '');
     
+    // Set scope if available
+    if (item.scope) setItemScope(item.scope);
+    if (item.teamId) setSelectedTeamId(item.teamId);
+
     if (type === 'color') {
       setNewItemColors(item.colors || []);
     } else if (type === 'size') {
@@ -164,11 +189,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     const file = e.dataTransfer.files?.[0];
     
     if (file && file.type.startsWith('image/')) {
-        // Need to simulate an event or directly call the handler
-        // Since handleOptionFileChange expects a ChangeEvent, let's create a simpler handler 
-        // or refactor the logic.
-        
-        // Let's refactor the core logic out of the event handler
         processOptionFile(file);
     }
   };
@@ -213,82 +233,63 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     if (!newItemName) return;
 
     let newItem: any = null;
-    let typeForCatalog: 'style' | 'color' | 'type' | null = null;
     let collectionName = '';
 
     try {
       if (modalType === 'type') {
         const newType = { name: newItemName };
         if (user) {
-           const saved = await resourceService.addCustomItem('graphic_types', newType, user.id);
-           setOptions.setGraphicTypes(prev => [...prev, saved]);
+           const saved = await resourceService.addCustomItem('graphic_types', newType, user.id, itemScope, selectedTeamId);
+           setOptions.setGraphicTypes(prev => [...prev, saved as GraphicType]);
            handleChange('graphicTypeId', saved.id);
-           newItem = saved;
         } else {
-           // Local only fallback (or force login?) - For now kept local in state
+           // Local fallback
            const tempId = `temp-type-${Date.now()}`;
-           const tempItem = { ...newType, id: tempId };
+           const tempItem = { ...newType, id: tempId, scope: 'private' } as any;
            setOptions.setGraphicTypes(prev => [...prev, tempItem]);
            handleChange('graphicTypeId', tempId);
         }
-        typeForCatalog = 'type';
       } 
       else if (modalType === 'style') {
         const newStyle = { name: newItemName, description: newItemDescription || newItemName };
         if (user) {
-           const saved = await resourceService.addCustomItem('visual_styles', newStyle, user.id);
-           setOptions.setVisualStyles(prev => [...prev, saved]);
+           const saved = await resourceService.addCustomItem('visual_styles', newStyle, user.id, itemScope, selectedTeamId);
+           setOptions.setVisualStyles(prev => [...prev, saved as VisualStyle]);
            handleChange('visualStyleId', saved.id);
-           newItem = saved;
         } else {
            const tempId = `temp-style-${Date.now()}`;
-           const tempItem = { ...newStyle, id: tempId };
+           const tempItem = { ...newStyle, id: tempId, scope: 'private' } as any;
            setOptions.setVisualStyles(prev => [...prev, tempItem]);
            handleChange('visualStyleId', tempId);
         }
-        typeForCatalog = 'style';
       }
       else if (modalType === 'color') {
         const colors = newItemColors.length > 0 ? newItemColors : ['#888888'];
         const newColor = { name: newItemName, colors };
         if (user) {
-           const saved = await resourceService.addCustomItem('brand_colors', newColor, user.id);
-           setOptions.setBrandColors(prev => [...prev, saved]);
+           const saved = await resourceService.addCustomItem('brand_colors', newColor, user.id, itemScope, selectedTeamId);
+           setOptions.setBrandColors(prev => [...prev, saved as BrandColor]);
            handleChange('colorSchemeId', saved.id);
-           newItem = saved;
         } else {
            const tempId = `temp-color-${Date.now()}`;
-           const tempItem = { ...newColor, id: tempId };
+           const tempItem = { ...newColor, id: tempId, scope: 'private' } as any;
            setOptions.setBrandColors(prev => [...prev, tempItem]);
            handleChange('colorSchemeId', tempId);
         }
-        typeForCatalog = 'color';
       }
       else if (modalType === 'size') {
         const newVal = newItemValue.trim() || '1:1';
         const newSize = { label: newItemName, value: newVal };
-        // For size, we might treat it differently or same. Let's save it.
         if (user) {
-           // Note: aspect_ratios collection uses value as ID usually, but for custom let's auto-id
-           const saved = await resourceService.addCustomItem('aspect_ratios', newSize, user.id);
-           setOptions.setAspectRatios(prev => [...prev, saved]);
+           const saved = await resourceService.addCustomItem('aspect_ratios', newSize, user.id, itemScope, selectedTeamId);
+           setOptions.setAspectRatios(prev => [...prev, saved as AspectRatioOption]);
            handleChange('aspectRatio', saved.value);
         } else {
-           setOptions.setAspectRatios(prev => [...prev, newSize]);
+           setOptions.setAspectRatios(prev => [...prev, { ...newSize, scope: 'private' } as any]);
            handleChange('aspectRatio', newVal);
         }
       }
 
-      // Handle Contribution 
-      if (contributeToCatalog && newItem && typeForCatalog && user) {
-          try {
-              const authorName = user.username ? `@${user.username}` : user.name;
-              await catalogService.addToCatalog(typeForCatalog, newItem, user.id, authorName);
-              console.log("Contributed to catalog!");
-          } catch (e) {
-              console.error("Failed to contribute:", e);
-          }
-      }
     } catch (e) {
       console.error("Error saving item:", e);
       alert("Failed to save item. Ensure you are logged in.");
@@ -297,14 +298,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     closeModal();
   };
 
-  // --- Handlers for Deleting Options ---
-
   const handleDelete = async (e: React.MouseEvent, type: 'type'|'style'|'color'|'size', idOrValue: string) => {
     e.stopPropagation();
-    
-    // Only delete if it's a custom item (not system) - UI should hide delete button for system items anyway
-    // But we need to check if user owns it. The UI currently just calls this.
-    // Ideally we call resourceService.deleteCustomItem.
     
     // Optimistic UI Update
     if (type === 'type') {
@@ -320,16 +315,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       if (user) resourceService.deleteCustomItem('brand_colors', idOrValue);
     }
     else if (type === 'size') {
-      setOptions.setAspectRatios(prev => prev.filter(x => x.value !== idOrValue && x.value !== idOrValue)); // ID might be doc ID, value is value
-      // This is tricky because for sizes we used value as key in UI but ID in DB.
-      // We need to pass the ID to delete.
-      // Let's assume for now sizes are local-ish or we find the ID.
-      // For this refactor, let's just update local state.
+      setOptions.setAspectRatios(prev => prev.filter(x => x.value !== idOrValue));
+      if (user) resourceService.deleteCustomItem('aspect_ratios', idOrValue); 
+      // Note: Delete by ID not value for consistency, but resourceService expects ID. 
+      // If 'idOrValue' is ID, we are good.
     }
   };
-
-
-  // --- Helper Components for Dropdowns ---
 
   const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => (
     <button
@@ -363,29 +354,46 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const currentColor = options.brandColors.find(c => c.id === config.colorSchemeId);
   const currentRatio = options.aspectRatios.find(r => r.value === config.aspectRatio);
 
-  // Common styles for input fields
   const inputClass = "w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-sm rounded-lg p-3 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600";
   const labelClass = "block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1";
 
-  // Actions Component
+  // Helper to render scope icon
+  const ScopeIcon = ({ scope }: { scope?: string }) => {
+    if (scope === 'public') return <Globe size={12} className="text-brand-teal" />;
+    if (scope === 'team') return <Users size={12} className="text-brand-orange" />;
+    if (scope === 'private') return <Lock size={12} className="text-slate-400" />;
+    return null; // System items or undefined
+  };
+
   const ItemActions = ({ type, item, isSelected }: { type: 'type'|'style'|'color'|'size', item: any, isSelected: boolean }) => (
     <div className="flex items-center gap-1">
+      {/* Scope Badge (Always Visible if not system) */}
+      {!item.isSystem && (
+         <div className="mr-1 opacity-70" title={item.scope}>
+           <ScopeIcon scope={item.scope} />
+         </div>
+      )}
+      
       <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'mr-2' : ''}`}>
-        <button 
-          onClick={(e) => handleEdit(e, type, item)} 
-          className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-          title="Edit"
-        >
-          <Pencil size={12} />
-        </button>
-        {!isSelected && (
-          <button 
-            onClick={(e) => handleDelete(e, type, item.id || item.value)} 
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-            title="Delete"
-          >
-            <Trash2 size={12} />
-          </button>
+        {!item.isSystem && item.authorId === user?.id && (
+          <>
+            <button 
+              onClick={(e) => handleEdit(e, type, item)} 
+              className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+              title="Edit"
+            >
+              <Pencil size={12} />
+            </button>
+            {!isSelected && (
+              <button 
+                onClick={(e) => handleDelete(e, type, item.id || item.value)} 
+                className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                title="Delete"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </>
         )}
       </div>
       {isSelected && <Check size={14} className="text-brand-teal dark:text-brand-teal" />}
@@ -397,10 +405,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] p-4 transition-colors duration-200" ref={containerRef}>
         <div className="max-w-7xl mx-auto flex flex-col gap-4">
           
-          {/* 1. Toolbar Controls (Centered) */}
+          {/* 1. Toolbar Controls */}
           <div className="flex flex-wrap items-center justify-center gap-2 w-full">
             
-            {/* Graphic Type Dropdown */}
+            {/* Graphic Type */}
             <div className="relative">
               <DropdownButton 
                 icon={currentType?.icon || Layout} 
@@ -433,7 +441,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               )}
             </div>
 
-            {/* Visual Style Dropdown */}
+            {/* Visual Style */}
             <div className="relative">
               <DropdownButton 
                 icon={currentStyle?.icon || PenTool} 
@@ -452,7 +460,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         <div key={s.id} className="group relative p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('visualStyleId', s.id)}>
                           <div className="flex justify-between items-start">
                              <div className="flex items-center gap-3">
-                                <Icon size={16} className={`mt-0.5 ${isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'}`} />
+                                <Icon size={16} className={`mt-0.5 ${isSelected ? 'text-brand-teal dark:text-brand-teal' : 'text-slate-500'} ${s.scope === 'team' ? 'text-brand-orange' : ''}`} />
                                 <span className={`text-xs block ${isSelected ? 'text-brand-teal dark:text-brand-teal font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{s.name}</span>
                              </div>
                              <ItemActions type="style" item={s} isSelected={isSelected} />
@@ -469,7 +477,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               )}
             </div>
 
-            {/* Color Palette Dropdown (Restored) */}
+            {/* Color Palette */}
             <div className="relative">
               <DropdownButton 
                 icon={Palette} 
@@ -506,7 +514,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               )}
             </div>
 
-            {/* Aspect Ratio (Dynamic) */}
+            {/* Aspect Ratio */}
             <div className="relative">
               <DropdownButton 
                 icon={currentRatio?.icon || Maximize} 
@@ -569,7 +577,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
              </div>
           </div>
 
-          {/* 2. Prompt Input Area (Row 2, with Button) */}
+          {/* 2. Prompt Input Area */}
           <div className="w-full max-w-5xl mx-auto flex flex-col sm:flex-row gap-3">
              <div className="relative flex-1">
                <div className="absolute top-1/2 -translate-y-1/2 left-3 text-slate-400 dark:text-slate-500 pointer-events-none">
@@ -584,7 +592,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 />
              </div>
              
-             {/* Generate Button (Solid Color, Moved Here) */}
              <button
               onClick={onGenerate}
               disabled={!config.prompt || isGenerating}
@@ -671,8 +678,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             />
           </div>
 
-          {/* Type only needs Name. Others need extra fields. */}
-          
           {modalType === 'style' && (
             <div>
               <label className={labelClass}>Description / Instructions</label>
@@ -685,7 +690,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </div>
           )}
 
-          {/* Color Picker Section - Now in Color Modal */}
           {modalType === 'color' && (
             <div>
                <label className={labelClass}>Palette Colors</label>
@@ -745,20 +749,61 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </div>
           )}
 
-          {/* Contribution Checkbox */}
-          {!editingId && user && modalType !== 'size' && (
-             <div className="flex items-center gap-2 pt-2 border-t border-gray-100 dark:border-[#30363d] mt-4">
-                <input 
-                  type="checkbox" 
-                  id="contribute" 
-                  checked={contributeToCatalog}
-                  onChange={(e) => setContributeToCatalog(e.target.checked)}
-                  className="rounded border-gray-300 text-brand-teal focus:ring-brand-teal w-4 h-4 cursor-pointer"
-                />
-                <label htmlFor="contribute" className="text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none flex items-center gap-1.5">
-                   <Globe size={14} className="text-brand-teal" />
-                   Contribute to Community Catalog
-                </label>
+          {/* --- NEW SCOPE SELECTOR --- */}
+          {user && modalType !== 'size' && (
+             <div className="pt-4 border-t border-gray-100 dark:border-[#30363d] space-y-3">
+                <label className={labelClass}>Visibility & Sharing</label>
+                <div className="grid grid-cols-3 gap-2">
+                   <button
+                     onClick={() => setItemScope('private')}
+                     className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-medium transition-all ${
+                       itemScope === 'private'
+                        ? 'bg-slate-100 dark:bg-[#21262d] border-slate-400 dark:border-slate-500 text-slate-900 dark:text-white ring-1 ring-slate-400'
+                        : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
+                     }`}
+                   >
+                     <Lock size={16} />
+                     Private
+                   </button>
+                   <button
+                     onClick={() => setItemScope('public')}
+                     className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-medium transition-all ${
+                       itemScope === 'public'
+                        ? 'bg-teal-50 dark:bg-teal-900/20 border-brand-teal text-brand-teal ring-1 ring-brand-teal'
+                        : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
+                     }`}
+                   >
+                     <Globe size={16} />
+                     Public
+                   </button>
+                   <button
+                     onClick={() => setItemScope('team')}
+                     disabled={userTeams.length === 0}
+                     className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-medium transition-all ${
+                       itemScope === 'team'
+                        ? 'bg-orange-50 dark:bg-orange-900/20 border-brand-orange text-brand-orange ring-1 ring-brand-orange'
+                        : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22] disabled:opacity-50 disabled:cursor-not-allowed'
+                     }`}
+                   >
+                     <Users size={16} />
+                     Team
+                   </button>
+                </div>
+
+                {/* Team Selection Dropdown */}
+                {itemScope === 'team' && (
+                  <div className="animate-in fade-in slide-in-from-top-2">
+                    <select
+                      value={selectedTeamId}
+                      onChange={(e) => setSelectedTeamId(e.target.value)}
+                      className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-xs focus:ring-1 focus:ring-brand-orange focus:outline-none"
+                    >
+                      {userTeams.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
              </div>
           )}
 
