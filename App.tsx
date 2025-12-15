@@ -66,6 +66,12 @@ const App: React.FC = () => {
     aspectRatio: ''
   });
 
+  const [generatedImage, setGeneratedImage] = useState<GeneratedImage | null>(null);
+  const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   // Load Resources (Structures)
   const loadResources = async (userId?: string) => {
     const resources = await resourceService.getAllResources(userId);
