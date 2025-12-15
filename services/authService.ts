@@ -118,8 +118,23 @@ export const authService = {
     }
   },
 
-  login: async (email: string, password: string): Promise<User> => {
+  login: async (emailOrUsername: string, password: string): Promise<User> => {
     try {
+      let email = emailOrUsername;
+      
+      // If input doesn't look like an email, try to find the email by username
+      if (!emailOrUsername.includes('@')) {
+        const usersRef = collection(db, "users");
+        const q = query(usersRef, where("username", "==", emailOrUsername));
+        const querySnapshot = await getDocs(q);
+        
+        if (querySnapshot.empty) {
+          throw new Error('Username not found.');
+        }
+        
+        email = querySnapshot.docs[0].data().email;
+      }
+
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 

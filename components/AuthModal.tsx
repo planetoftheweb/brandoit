@@ -123,15 +123,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
             )}
 
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Email Address</label>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">
+                {isLogin ? "Email or Username" : "Email Address"}
+              </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                 <input
-                  type="email"
+                  type={isLogin ? "text" : "email"}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-red/50 transition-all"
-                  placeholder="john@example.com"
+                  placeholder={isLogin ? "john@example.com or johndoe" : "john@example.com"}
                   required
                 />
               </div>
