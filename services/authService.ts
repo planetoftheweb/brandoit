@@ -59,13 +59,14 @@ const transformUser = (firebaseUser: FirebaseUser, userData: any): User => {
   return {
     id: firebaseUser.uid,
     name: userData?.name || firebaseUser.displayName || 'User',
+    username: userData?.username, // Map username from Firestore
     email: firebaseUser.email || '',
     preferences: userData?.preferences ? hydratePreferences(userData.preferences) : defaultPreferences
   };
 };
 
 export const authService = {
-  register: async (name: string, email: string, password: string): Promise<User> => {
+  register: async (name: string, email: string, password: string, username?: string): Promise<User> => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
@@ -75,6 +76,7 @@ export const authService = {
       // Create the user document in Firestore - SANITIZED
       const newUserProfile = {
         name,
+        username: username || '', // Save username
         email,
         preferences: sanitizePreferences(defaultPreferences),
         createdAt: new Date().toISOString()
@@ -108,6 +110,7 @@ export const authService = {
       } else {
         userData = {
           name: user.displayName || 'User',
+          username: '', // Default empty if not exists
           email: user.email,
           preferences: sanitizePreferences(defaultPreferences)
         };
@@ -166,6 +169,21 @@ export const authService = {
     } catch (error) {
       console.error("Error updating preferences:", error);
       throw new Error("Failed to save preferences.");
+    }
+  },
+
+  updateUserProfile: async (userId: string, data: { name?: string; username?: string }) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      await updateDoc(userRef, data);
+      
+      // If name changed, update Auth profile too
+      if (data.name && auth.currentUser && auth.currentUser.uid === userId) {
+        await updateProfile(auth.currentUser, { displayName: data.name });
+      }
+    } catch (error) {
+      console.error("Error updating user profile:", error);
+      throw new Error("Failed to update profile.");
     }
   },
   

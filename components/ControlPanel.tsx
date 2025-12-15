@@ -274,7 +274,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     // Handle Contribution (Only for new items, not edits, and only if user is logged in)
     if (!editingId && contributeToCatalog && newItem && typeForCatalog && user) {
         try {
-            await catalogService.addToCatalog(typeForCatalog, newItem, user.id, user.name);
+            const authorName = user.username ? `@${user.username}` : user.name;
+            await catalogService.addToCatalog(typeForCatalog, newItem, user.id, authorName);
             console.log("Contributed to catalog!");
         } catch (e) {
             console.error("Failed to contribute:", e);

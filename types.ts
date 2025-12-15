@@ -67,6 +67,7 @@ export interface UserSettings {
 export interface User {
   id: string;
   name: string;
+  username?: string; // Optional custom username for community contributions
   email: string;
   preferences: UserPreferences;
 }

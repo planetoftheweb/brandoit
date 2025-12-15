@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { CatalogItem } from '../types';
 import { catalogService } from '../services/catalogService';
-import { ThumbsUp, Download, PenTool, Palette, ArrowLeft } from 'lucide-react';
+import { seedCatalog } from '../services/seeder';
+import { ThumbsUp, Download, PenTool, Palette, ArrowLeft, Database, AlertCircle } from 'lucide-react';
 
 interface CatalogPageProps {
   onBack: () => void;
@@ -18,6 +19,8 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
 }) => {
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadCatalog();
@@ -25,11 +28,13 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
 
   const loadCatalog = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await catalogService.getCatalogItems(category);
       setItems(data);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to load catalog", e);
+      setError("Failed to load catalog items. " + (e.message || ""));
     } finally {
       setLoading(false);
     }
@@ -59,6 +64,20 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     }
   };
 
+  const handleManualSeed = async () => {
+    setSeeding(true);
+    setError(null);
+    try {
+      await seedCatalog();
+      await loadCatalog(); // Reload after seeding
+    } catch (e: any) {
+      console.error("Seeding failed", e);
+      setError("Seeding failed: " + (e.message || "Check permissions"));
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-gray-50 dark:bg-[#0d1117]">
       {/* Header */}
@@ -82,6 +101,14 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
         </div>
       </div>
 
+      {/* Error Message */}
+      {error && (
+        <div className="mx-6 mt-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-200">
+          <AlertCircle size={20} />
+          <span>{error}</span>
+        </div>
+      )}
+
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         {loading ? (
@@ -89,9 +116,21 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
             <div className="w-8 h-8 border-4 border-brand-teal border-t-transparent rounded-full animate-spin"></div>
           </div>
         ) : items.length === 0 ? (
-          <div className="text-center py-20 text-slate-500">
-            <p>No {category}s found in the catalog yet.</p>
-            <p className="text-xs mt-2">Be the first to contribute!</p>
+          <div className="text-center py-20 text-slate-500 flex flex-col items-center">
+            <p className="mb-2">No {category}s found in the catalog yet.</p>
+            <p className="text-xs mb-6">Be the first to contribute or populate with defaults.</p>
+            
+            <button 
+              onClick={handleManualSeed} 
+              disabled={seeding}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-200 dark:bg-[#30363d] hover:bg-gray-300 dark:hover:bg-[#3b434d] rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              <Database size={16} />
+              {seeding ? 'Seeding Catalog...' : 'Seed Default Items'}
+            </button>
+            <p className="text-[10px] text-slate-400 mt-2 max-w-xs">
+              Note: You may need to be logged in or check Firestore permissions if this fails.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">

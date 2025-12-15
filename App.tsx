@@ -273,12 +273,14 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSaveSettings = async (newSettings: UserSettings) => {
+  const handleSaveSettings = async (newSettings: UserSettings, profileData?: { name: string; username: string }) => {
     if (!user) return;
     
-    // Update local state for immediate feedback if needed (though preferences sync handles it)
+    // Update local state for immediate feedback
     const updatedUser = {
         ...user,
+        name: profileData?.name || user.name,
+        username: profileData?.username || user.username,
         preferences: {
             ...user.preferences,
             settings: newSettings
@@ -295,7 +297,15 @@ const App: React.FC = () => {
     }
 
     // Save to Firestore
-    await authService.updateUserPreferences(user.id, updatedUser.preferences);
+    try {
+        await Promise.all([
+            authService.updateUserPreferences(user.id, updatedUser.preferences),
+            profileData ? authService.updateUserProfile(user.id, profileData) : Promise.resolve()
+        ]);
+    } catch (e) {
+        console.error("Failed to save settings", e);
+        setError("Failed to save changes.");
+    }
   };
 
   const handleImportFromCatalog = (item: CatalogItem) => {
@@ -539,7 +549,7 @@ const App: React.FC = () => {
         <SettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
-          settings={user.preferences.settings || { contributeByDefault: false }}
+          user={user}
           onSave={handleSaveSettings}
           graphicTypes={graphicTypes}
           aspectRatios={aspectRatios}
