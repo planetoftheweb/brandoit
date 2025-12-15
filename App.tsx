@@ -113,7 +113,7 @@ const App: React.FC = () => {
     }
   }, [brandColors, visualStyles, graphicTypes, aspectRatios, user]);
 
-  const handleLoginSuccess = (loggedInUser: User) => {
+  const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
     // Load user preferences into state
     setBrandColors(loggedInUser.preferences.brandColors);
@@ -128,6 +128,11 @@ const App: React.FC = () => {
       visualStyleId: loggedInUser.preferences.visualStyles.find(s => s.id === prev.visualStyleId) ? prev.visualStyleId : loggedInUser.preferences.visualStyles[0].id,
       graphicTypeId: loggedInUser.preferences.graphicTypes.find(t => t.id === prev.graphicTypeId) ? prev.graphicTypeId : loggedInUser.preferences.graphicTypes[0].id,
     }));
+
+    // Merge local history if any
+    await historyService.mergeLocalToRemote(loggedInUser.id);
+    const updatedHistory = await historyService.getHistory(loggedInUser);
+    setHistory(updatedHistory);
   };
 
   const handleLogout = () => {

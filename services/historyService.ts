@@ -109,5 +109,27 @@ export const historyService = {
       console.error("Failed to fetch remote history:", e);
       return [];
     }
+  },
+
+  mergeLocalToRemote: async (userId: string) => {
+    const localHistory = historyService.getFromLocal();
+    if (localHistory.length === 0) return;
+
+    // Get current remote history to avoid duplicates if possible, or just push.
+    // Since local history is small (5 items), we can just push them all.
+    // However, we should check if we are going over the limit.
+    // The saveToRemote function handles limits, so we can just iterate and save.
+    
+    // We reverse local history to add oldest first, so that the newest local items
+    // end up being the newest in remote (if timestamps are preserved).
+    // Actually, saveToRemote adds a new doc. The timestamp in the item is what matters for sorting.
+    
+    for (const item of localHistory.reverse()) {
+      // Re-use the existing item data
+      await historyService.saveToRemote(userId, item);
+    }
+
+    // Clear local history after successful merge
+    historyService.clearLocal();
   }
 };
