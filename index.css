@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@github/mona-sans";
 
 @theme {
   --font-sans: "Mona Sans", "Inter", sans-serif;
@@ -13,6 +12,14 @@
   --color-dark-card: #161b22;
   --color-dark-border: #30363d;
   --color-dark-hover: #21262d;
+}
+
+@font-face {
+  font-family: 'Mona Sans';
+  src: url('/fonts/Mona-Sans.woff2') format('woff2 supports variations'),
+       url('/fonts/Mona-Sans.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
 }
 
 /* Custom Scrollbar */
