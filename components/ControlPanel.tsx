@@ -145,12 +145,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
-  const handleOptionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !modalType) return;
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const file = e.dataTransfer.files?.[0];
     
-    // Only support image analysis for Style and Color
-    if (modalType !== 'style' && modalType !== 'color') return;
+    if (file && file.type.startsWith('image/')) {
+        // Need to simulate an event or directly call the handler
+        // Since handleOptionFileChange expects a ChangeEvent, let's create a simpler handler 
+        // or refactor the logic.
+        
+        // Let's refactor the core logic out of the event handler
+        processOptionFile(file);
+    }
+  };
+
+  const processOptionFile = async (file: File) => {
+    if (!modalType || (modalType !== 'style' && modalType !== 'color')) return;
 
     setIsAnalysingOption(true);
     try {
@@ -165,6 +181,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     } finally {
       setIsAnalysingOption(false);
       if (optionFileInputRef.current) optionFileInputRef.current.value = '';
+    }
+  };
+
+  const handleOptionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+        processOptionFile(file);
     }
   };
 
@@ -561,7 +584,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           
           {/* Image Upload for Style/Color Auto-fill */}
           {!editingId && (modalType === 'style' || modalType === 'color') && (
-            <div className="mb-4 p-3 bg-gray-50 dark:bg-[#0d1117] rounded-lg border border-dashed border-gray-300 dark:border-[#30363d]">
+            <div 
+              className="mb-4 p-6 bg-gray-50 dark:bg-[#0d1117] rounded-lg border-2 border-dashed border-gray-300 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal transition-colors text-center cursor-pointer relative"
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onClick={() => optionFileInputRef.current?.click()}
+            >
               <input 
                  type="file" 
                  ref={optionFileInputRef} 
@@ -569,26 +597,26 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                  accept="image/*"
                  onChange={handleOptionFileChange}
                />
-               <button 
-                 onClick={() => optionFileInputRef.current?.click()}
-                 disabled={isAnalysingOption}
-                 className="w-full flex items-center justify-center gap-2 text-sm font-medium text-brand-teal hover:text-teal-600 dark:hover:text-teal-400 transition-colors py-2"
-               >
+               <div className="flex flex-col items-center justify-center gap-2 pointer-events-none">
                  {isAnalysingOption ? (
                    <>
-                     <Loader2 size={16} className="animate-spin" />
-                     Analyzing Image...
+                     <Loader2 size={24} className="animate-spin text-brand-teal" />
+                     <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Analyzing Image...</span>
                    </>
                  ) : (
                    <>
-                     <ImageIcon size={16} />
-                     Upload Image to Auto-Fill
+                     <div className="p-3 bg-white dark:bg-[#161b22] rounded-full shadow-sm text-brand-teal mb-1">
+                        <ImageIcon size={20} />
+                     </div>
+                     <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                        Click or Drag & Drop Image
+                     </span>
+                     <p className="text-[10px] text-slate-400">
+                       Auto-extract {modalType === 'style' ? 'style description' : 'colors'}
+                     </p>
                    </>
                  )}
-               </button>
-               <p className="text-[10px] text-center text-slate-400">
-                 Upload an example image to automatically extract {modalType === 'style' ? 'style description' : 'colors'}.
-               </p>
+               </div>
             </div>
           )}
 
