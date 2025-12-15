@@ -3,7 +3,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
-import { CatalogModal } from './components/CatalogModal';
+import { CatalogPage } from './components/CatalogPage';
 import { RecentGenerations } from './components/RecentGenerations';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem } from './types';
 import { 
@@ -469,47 +469,59 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* 2. Toolbar & Controls */}
-      <ControlPanel 
-        config={config} 
-        setConfig={setConfig} 
-        onGenerate={handleGenerate}
-        isGenerating={isGenerating}
-        options={context}
-        setOptions={{ setBrandColors, setVisualStyles, setGraphicTypes, setAspectRatios }}
-        onUploadGuidelines={handleUploadGuidelines}
-        isAnalyzing={isAnalyzing}
-        user={user}
-      />
-
-      {/* 3. Main Content Area */}
-      <main className="flex-1 relative flex flex-col min-w-0 bg-gray-50 dark:bg-[#0d1117] transition-colors duration-200">
-        
-        {/* Error Toast */}
-        {error && (
-          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 bg-red-100 dark:bg-red-900/90 text-red-800 dark:text-red-100 px-4 py-3 rounded-lg shadow-lg border border-red-200 dark:border-red-800 flex items-center gap-2 animate-bounce-in backdrop-blur-sm">
-            <AlertCircle size={20} />
-            <span className="text-sm font-medium">{error}</span>
-            <button onClick={() => setError(null)} className="ml-2 hover:bg-red-200 dark:hover:bg-red-800 p-1 rounded">
-              ✕
-            </button>
-          </div>
-        )}
-
-        {/* Display */}
-        <ImageDisplay 
-          image={generatedImage} 
-          onRefine={handleRefine}
-          isRefining={isGenerating}
+      {/* 2. Content Switching */}
+      {catalogMode ? (
+        <CatalogPage 
+          category={catalogMode}
+          onBack={() => setCatalogMode(null)}
+          onImport={handleImportFromCatalog}
+          userId={user?.id}
         />
+      ) : (
+        <>
+          {/* Toolbar & Controls */}
+          <ControlPanel 
+            config={config} 
+            setConfig={setConfig} 
+            onGenerate={handleGenerate}
+            isGenerating={isGenerating}
+            options={context}
+            setOptions={{ setBrandColors, setVisualStyles, setGraphicTypes, setAspectRatios }}
+            onUploadGuidelines={handleUploadGuidelines}
+            isAnalyzing={isAnalyzing}
+            user={user}
+          />
 
-        {/* History Gallery */}
-        <RecentGenerations 
-          history={history}
-          onSelect={handleRestoreFromHistory}
-          options={context}
-        />
-      </main>
+          {/* Main Content Area */}
+          <main className="flex-1 relative flex flex-col min-w-0 bg-gray-50 dark:bg-[#0d1117] transition-colors duration-200">
+            
+            {/* Error Toast */}
+            {error && (
+              <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 bg-red-100 dark:bg-red-900/90 text-red-800 dark:text-red-100 px-4 py-3 rounded-lg shadow-lg border border-red-200 dark:border-red-800 flex items-center gap-2 animate-bounce-in backdrop-blur-sm">
+                <AlertCircle size={20} />
+                <span className="text-sm font-medium">{error}</span>
+                <button onClick={() => setError(null)} className="ml-2 hover:bg-red-200 dark:hover:bg-red-800 p-1 rounded">
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Display */}
+            <ImageDisplay 
+              image={generatedImage} 
+              onRefine={handleRefine}
+              isRefining={isGenerating}
+            />
+
+            {/* History Gallery */}
+            <RecentGenerations 
+              history={history}
+              onSelect={handleRestoreFromHistory}
+              options={context}
+            />
+          </main>
+        </>
+      )}
 
       {/* Auth Modal */}
       <AuthModal 
@@ -531,14 +543,7 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Catalog Modal */}
-      <CatalogModal
-        isOpen={catalogMode !== null}
-        onClose={() => setCatalogMode(null)}
-        onImport={handleImportFromCatalog}
-        userId={user?.id}
-        category={catalogMode || 'style'}
-      />
+      {/* Catalog Modal Removed */}
 
       {/* Help Modal */}
       {isHelpOpen && (
