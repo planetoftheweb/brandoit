@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
+import { GenerationConfig, VisualStyle, GraphicType, AspectRatioOption } from '../types';
 import { analyzeImageForOption } from '../services/geminiService';
 import { 
-  Palette, 
   PenTool, 
   Layout, 
   Maximize, 
@@ -24,13 +23,11 @@ interface ControlPanelProps {
   onGenerate: () => void;
   isGenerating: boolean;
   options: {
-    brandColors: BrandColor[];
     visualStyles: VisualStyle[];
     graphicTypes: GraphicType[];
     aspectRatios: AspectRatioOption[];
   };
   setOptions: {
-    setBrandColors: React.Dispatch<React.SetStateAction<BrandColor[]>>;
     setVisualStyles: React.Dispatch<React.SetStateAction<VisualStyle[]>>;
     setGraphicTypes: React.Dispatch<React.SetStateAction<GraphicType[]>>;
     setAspectRatios: React.Dispatch<React.SetStateAction<AspectRatioOption[]>>;
@@ -82,13 +79,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Modal & Edit State
-  const [modalType, setModalType] = useState<'type' | 'style' | 'color' | 'size' | null>(null);
+  const [modalType, setModalType] = useState<'type' | 'style' | 'size' | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   
   // New Item Form State
   const [newItemName, setNewItemName] = useState('');
   const [newItemDescription, setNewItemDescription] = useState('');
-  const [newItemValue, setNewItemValue] = useState(''); // Used for colors or aspect ratio value
+  const [newItemColors, setNewItemColors] = useState<string[]>([]);
+  const [newItemValue, setNewItemValue] = useState(''); // Used for aspect ratio value
   
   const [isAnalysingOption, setIsAnalysingOption] = useState(false);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
@@ -102,26 +100,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setActiveDropdown(activeDropdown === name ? null : name);
   };
 
-  const openModal = (type: 'type' | 'style' | 'color' | 'size') => {
+  const openModal = (type: 'type' | 'style' | 'size') => {
     setModalType(type);
     setActiveDropdown(null); // Close dropdown
     setEditingId(null); // Reset edit state
     setNewItemName('');
     setNewItemDescription('');
+    setNewItemColors(['#000000']); // Default color
     setNewItemValue('');
   };
 
-  const handleEdit = (e: React.MouseEvent, type: 'type' | 'style' | 'color' | 'size', item: any) => {
+  const handleEdit = (e: React.MouseEvent, type: 'type' | 'style' | 'size', item: any) => {
     e.stopPropagation();
     setModalType(type);
     setActiveDropdown(null);
-    setEditingId(item.id || item.value); // Use value as ID for size if id doesn't exist
+    setEditingId(item.id || item.value);
 
     setNewItemName(item.name || item.label);
     setNewItemDescription(item.description || '');
     
-    if (type === 'color') {
-      setNewItemValue(item.colors.join(', '));
+    if (type === 'style') {
+      setNewItemColors(item.colors || []);
     } else if (type === 'size') {
       setNewItemValue(item.value);
     }
@@ -143,6 +142,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
+  const handleOptionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !modalType) return;
+    
+    if (modalType !== 'style') return;
+
+    setIsAnalysingOption(true);
+    try {
+      const result = await analyzeImageForOption(file, 'style'); // Re-using style endpoint which we updated to return colors too
+      
+      setNewItemName(result.name);
+      if (result.description) setNewItemDescription(result.description);
+      if (result.colors) setNewItemColors(result.colors);
+
+    } catch (err) {
+      console.error("Failed to analyze option image:", err);
+    } finally {
+      setIsAnalysingOption(false);
+      if (optionFileInputRef.current) optionFileInputRef.current.value = '';
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -154,33 +175,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   }, []);
 
   // --- Handlers for Adding/Editing Custom Options ---
-
-  const handleOptionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !modalType) return;
-    
-    if (modalType !== 'style' && modalType !== 'color') return;
-
-    setIsAnalysingOption(true);
-    try {
-      // Pass custom key if we had access to user here, but for now relying on env var or service handling
-      // Note: In a real app we'd pass the user's custom key down to ControlPanel
-      const result = await analyzeImageForOption(file, modalType);
-      
-      setNewItemName(result.name);
-      if (modalType === 'style' && result.description) {
-        setNewItemDescription(result.description);
-      } else if (modalType === 'color' && result.colors) {
-        setNewItemValue(result.colors.join(', '));
-      }
-    } catch (err) {
-      console.error("Failed to analyze option image:", err);
-      // Could show a toast here if we had one accessible
-    } finally {
-      setIsAnalysingOption(false);
-      if (optionFileInputRef.current) optionFileInputRef.current.value = '';
-    }
-  };
 
   const handleSaveItem = () => {
     if (!newItemName) return;
@@ -198,30 +192,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       }
     } 
     else if (modalType === 'style') {
+      const colors = newItemColors.length > 0 ? newItemColors : ['#888888'];
+
       if (editingId) {
         setOptions.setVisualStyles(prev => prev.map(item => 
-          item.id === editingId ? { ...item, name: newItemName, description: newItemDescription || newItemName } : item
+          item.id === editingId ? { ...item, name: newItemName, description: newItemDescription || newItemName, colors } : item
         ));
       } else {
         const newId = `custom-style-${Date.now()}`;
-        const newStyle: VisualStyle = { id: newId, name: newItemName, description: newItemDescription || newItemName };
+        const newStyle: VisualStyle = { id: newId, name: newItemName, description: newItemDescription || newItemName, colors };
         setOptions.setVisualStyles(prev => [...prev, newStyle]);
         handleChange('visualStyleId', newId);
-      }
-    }
-    else if (modalType === 'color') {
-      const colors = newItemValue.split(',').map(s => s.trim()).filter(Boolean);
-      const colorData = colors.length > 0 ? colors : ['#888888'];
-      
-      if (editingId) {
-        setOptions.setBrandColors(prev => prev.map(item => 
-          item.id === editingId ? { ...item, name: newItemName, colors: colorData } : item
-        ));
-      } else {
-        const newId = `custom-color-${Date.now()}`;
-        const newColor: BrandColor = { id: newId, name: newItemName, colors: colorData };
-        setOptions.setBrandColors(prev => [...prev, newColor]);
-        handleChange('colorSchemeId', newId);
       }
     }
     else if (modalType === 'size') {
@@ -231,7 +212,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
          setOptions.setAspectRatios(prev => prev.map(item => 
             item.value === editingId ? { ...item, label: newItemName, value: newVal } : item
          ));
-         // If we edited the currently selected aspect ratio's value, update config
          if (config.aspectRatio === editingId) {
             handleChange('aspectRatio', newVal);
          }
@@ -247,7 +227,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   // --- Handlers for Deleting Options ---
 
-  const handleDelete = (e: React.MouseEvent, type: 'type'|'style'|'color'|'size', idOrValue: string) => {
+  const handleDelete = (e: React.MouseEvent, type: 'type'|'style'|'size', idOrValue: string) => {
     e.stopPropagation();
     if (type === 'type') {
       const newCtx = options.graphicTypes.filter(x => x.id !== idOrValue);
@@ -258,11 +238,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       const newCtx = options.visualStyles.filter(x => x.id !== idOrValue);
       setOptions.setVisualStyles(newCtx);
       if (config.visualStyleId === idOrValue && newCtx.length > 0) handleChange('visualStyleId', newCtx[0].id);
-    }
-    else if (type === 'color') {
-      const newCtx = options.brandColors.filter(x => x.id !== idOrValue);
-      setOptions.setBrandColors(newCtx);
-      if (config.colorSchemeId === idOrValue && newCtx.length > 0) handleChange('colorSchemeId', newCtx[0].id);
     }
     else if (type === 'size') {
       const newCtx = options.aspectRatios.filter(x => x.value !== idOrValue);
@@ -287,7 +262,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
         <div className="flex flex-col">
           <span className="text-[10px] uppercase font-bold text-slate-500 leading-none mb-0.5">{subLabel}</span>
-          <span className="truncate text-xs font-medium max-w-[90px]">{label}</span>
+          <span className="truncate text-xs font-medium max-w-[100px]">{label}</span>
         </div>
       </div>
       <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ${isActive ? 'rotate-180 text-brand-teal dark:text-brand-teal' : ''}`} />
@@ -296,7 +271,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const currentType = options.graphicTypes.find(t => t.id === config.graphicTypeId);
   const currentStyle = options.visualStyles.find(s => s.id === config.visualStyleId);
-  const currentColor = options.brandColors.find(c => c.id === config.colorSchemeId);
   const currentRatio = options.aspectRatios.find(r => r.value === config.aspectRatio);
 
   // Common styles for input fields
@@ -304,7 +278,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const labelClass = "block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1";
 
   // Actions Component
-  const ItemActions = ({ type, item, isSelected }: { type: 'type'|'style'|'color'|'size', item: any, isSelected: boolean }) => (
+  const ItemActions = ({ type, item, isSelected }: { type: 'type'|'style'|'size', item: any, isSelected: boolean }) => (
     <div className="flex items-center gap-1">
       <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'mr-2' : ''}`}>
         <button 
@@ -369,7 +343,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               )}
             </div>
 
-            {/* Visual Style Dropdown */}
+            {/* Visual Style Dropdown (Now includes colors) */}
             <div className="relative">
               <DropdownButton 
                 icon={currentStyle?.icon || PenTool} 
@@ -394,48 +368,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                              <ItemActions type="style" item={s} isSelected={isSelected} />
                           </div>
                           <span className="text-[10px] text-slate-500 block mt-0.5 pl-7 truncate pr-2">{s.description}</span>
+                          {/* Color Preview Swatches */}
+                          {s.colors && s.colors.length > 0 && (
+                            <div className="flex h-1.5 w-[calc(100%-28px)] ml-7 mt-2 rounded-sm overflow-hidden ring-1 ring-gray-100 dark:ring-[#30363d]/30 opacity-70">
+                              {s.colors.map((hex, i) => (
+                                <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                   <button onClick={() => openModal('style')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                      <Plus size={14} /> Add Custom Style
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Color Palette Dropdown */}
-            <div className="relative">
-              <DropdownButton 
-                icon={Palette} 
-                subLabel="Colors" 
-                label={currentColor?.name || 'Select'} 
-                isActive={activeDropdown === 'color'} 
-                onClick={() => toggleDropdown('color')} 
-              />
-              {activeDropdown === 'color' && (
-                <div className="absolute top-full left-0 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                    {options.brandColors.map(c => {
-                      const isSelected = config.colorSchemeId === c.id;
-                      return (
-                        <div key={c.id} className="group p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" onClick={() => handleChange('colorSchemeId', c.id)}>
-                          <div className="flex justify-between items-center mb-1.5">
-                            <span className={`text-xs ${isSelected ? 'text-brand-red dark:text-brand-orange font-bold' : 'text-slate-700 dark:text-slate-300'}`}>{c.name}</span>
-                            <ItemActions type="color" item={c} isSelected={isSelected} />
-                          </div>
-                          <div className="flex h-2 w-full rounded-sm overflow-hidden ring-1 ring-gray-200 dark:ring-[#30363d]/50">
-                            {c.colors.map((hex, i) => (
-                              <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <button onClick={() => openModal('color')} className="w-full text-left p-3 text-xs font-bold text-brand-red dark:text-brand-orange border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
-                     <Plus size={14} /> Add Custom Palette
                   </button>
                 </div>
               )}
@@ -548,15 +494,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         title={
           editingId ? 'Edit Option' : 
           modalType === 'type' ? 'Add Custom Graphic Type' :
-          modalType === 'style' ? 'Add Custom Visual Style' :
-          modalType === 'color' ? 'Add Custom Palette' :
+          modalType === 'style' ? 'Add Custom Brand Style' :
           modalType === 'size' ? 'Add Custom Size' : ''
         }
       >
         <div className="space-y-4">
           
-          {/* Image Upload for Style/Color Auto-fill */}
-          {!editingId && (modalType === 'style' || modalType === 'color') && (
+          {/* Image Upload for Style Auto-fill */}
+          {!editingId && modalType === 'style' && (
             <div className="mb-4 p-3 bg-gray-50 dark:bg-[#0d1117] rounded-lg border border-dashed border-gray-300 dark:border-[#30363d]">
               <input 
                  type="file" 
@@ -583,7 +528,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                  )}
                </button>
                <p className="text-[10px] text-center text-slate-400">
-                 Upload an example image to automatically extract {modalType === 'style' ? 'style description' : 'colors'}.
+                 Upload an example image to automatically extract style and colors.
                </p>
             </div>
           )}
@@ -604,32 +549,63 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           {/* Type only needs Name. Others need extra fields. */}
           
           {modalType === 'style' && (
-            <div>
-              <label className={labelClass}>Description / Instructions</label>
-              <textarea
-                value={newItemDescription}
-                onChange={(e) => setNewItemDescription(e.target.value)}
-                placeholder="Describe the visual style in detail (e.g. 'Cyberpunk aesthetic with neon lights and dark streets')..."
-                className={`${inputClass} min-h-[100px] resize-none`}
-              />
-            </div>
-          )}
-
-          {modalType === 'color' && (
-            <div>
-              <label className={labelClass}>Colors (Comma separated)</label>
-              <input
-                value={newItemValue}
-                onChange={(e) => setNewItemValue(e.target.value)}
-                placeholder="e.g. #FF0000, #00FF00, #0000FF"
-                className={inputClass}
-              />
-              <div className="mt-2 flex gap-1 h-4">
-                 {newItemValue.split(',').map(c => c.trim()).filter(Boolean).map((c, i) => (
-                   <div key={i} className="flex-1 rounded-sm ring-1 ring-gray-200 dark:ring-white/10" style={{ backgroundColor: c }}></div>
-                 ))}
+            <>
+              <div>
+                <label className={labelClass}>Description / Instructions</label>
+                <textarea
+                  value={newItemDescription}
+                  onChange={(e) => setNewItemDescription(e.target.value)}
+                  placeholder="Describe the visual style in detail..."
+                  className={`${inputClass} min-h-[80px] resize-none`}
+                />
               </div>
-            </div>
+
+              {/* Color Picker Section */}
+              <div>
+                 <label className={labelClass}>Style Colors</label>
+                 <div className="flex flex-wrap gap-2">
+                   {newItemColors.map((color, idx) => (
+                     <div key={idx} className="relative group/color">
+                       <div 
+                         className="w-8 h-8 rounded-full shadow-sm ring-1 ring-black/10 dark:ring-white/10 overflow-hidden cursor-pointer"
+                         style={{ backgroundColor: color }}
+                       >
+                         <input 
+                           type="color" 
+                           value={color}
+                           onChange={(e) => {
+                             const newColors = [...newItemColors];
+                             newColors[idx] = e.target.value;
+                             setNewItemColors(newColors);
+                           }}
+                           className="opacity-0 w-full h-full cursor-pointer"
+                         />
+                       </div>
+                       {newItemColors.length > 1 && (
+                         <button 
+                           onClick={() => {
+                             setNewItemColors(newItemColors.filter((_, i) => i !== idx));
+                           }}
+                           className="absolute -top-1 -right-1 bg-white dark:bg-[#30363d] text-slate-500 rounded-full p-0.5 shadow-md opacity-0 group-hover/color:opacity-100 transition-opacity hover:text-red-500"
+                         >
+                           <X size={10} />
+                         </button>
+                       )}
+                     </div>
+                   ))}
+                   <button 
+                     onClick={() => setNewItemColors([...newItemColors, '#000000'])}
+                     className="w-8 h-8 rounded-full border border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 hover:text-brand-teal hover:border-brand-teal transition-colors"
+                     title="Add Color"
+                   >
+                     <Plus size={14} />
+                   </button>
+                 </div>
+                 <p className="text-[10px] text-slate-400 mt-2">
+                   Click a circle to pick a color. These colors will be strictly enforced.
+                 </p>
+              </div>
+            </>
           )}
 
           {modalType === 'size' && (
@@ -641,7 +617,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 placeholder="e.g. 21:9"
                 className={inputClass}
               />
-              <p className="text-[10px] text-slate-500 mt-1">Note: Not all aspect ratios are supported by the model.</p>
             </div>
           )}
 

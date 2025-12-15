@@ -43,7 +43,7 @@ const App: React.FC = () => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   // Application State for Options (allows adding/removing)
-  const [brandColors, setBrandColors] = useState<BrandColor[]>(BRAND_COLORS);
+  // const [brandColors, setBrandColors] = useState<BrandColor[]>(BRAND_COLORS); // Removed
   const [visualStyles, setVisualStyles] = useState<VisualStyle[]>(VISUAL_STYLES);
   const [graphicTypes, setGraphicTypes] = useState<GraphicType[]>(GRAPHIC_TYPES);
   const [aspectRatios, setAspectRatios] = useState<AspectRatioOption[]>(ASPECT_RATIOS);
@@ -51,7 +51,7 @@ const App: React.FC = () => {
   // Configuration State
   const [config, setConfig] = useState<GenerationConfig>({
     prompt: '',
-    colorSchemeId: BRAND_COLORS[0].id,
+    // colorSchemeId: BRAND_COLORS[0].id, // Removed
     visualStyleId: VISUAL_STYLES[0].id,
     graphicTypeId: GRAPHIC_TYPES[0].id,
     aspectRatio: ASPECT_RATIOS[0].value
@@ -226,15 +226,34 @@ const App: React.FC = () => {
       const result = await analyzeBrandGuidelines(file, customKey);
       
       // Update state with new options, prepending them to the list
-      const newColors: BrandColor[] = result.brandColors.map((c, i) => ({
-        ...c,
-        id: `analyzed-color-${Date.now()}-${i}`
-      }));
+      // Note: We might want to merge brandColors into styles if we had logic for it,
+      // but for now analyzeBrandGuidelines returns them separately.
+      // We'll just create a "New Style" using the analyzed style + colors.
       
-      const newStyles: VisualStyle[] = result.visualStyles.map((s, i) => ({
-        ...s,
-        id: `analyzed-style-${Date.now()}-${i}`
-      }));
+      const newStyles: VisualStyle[] = [];
+      
+      // If we got styles and colors, let's try to combine them intelligently or just create one master style
+      if (result.visualStyles.length > 0) {
+        // Use first palette for the first style, or create combinations?
+        // Simpler: Just map styles and use the first palette found for all (or empty)
+        const palette = result.brandColors.length > 0 ? result.brandColors[0].colors : [];
+        
+        result.visualStyles.forEach((s, i) => {
+          newStyles.push({
+            ...s,
+            id: `analyzed-style-${Date.now()}-${i}`,
+            colors: palette // Assign the detected brand colors to this style
+          });
+        });
+      } else if (result.brandColors.length > 0) {
+         // If we only found colors, create a "Brand Style" with default description
+         newStyles.push({
+           name: result.brandColors[0].name || "Analyzed Brand Style",
+           description: "Clean, professional style matching brand guidelines.",
+           id: `analyzed-style-${Date.now()}`,
+           colors: result.brandColors[0].colors
+         });
+      }
 
       const newTypes: GraphicType[] = result.graphicTypes.map((t, i) => ({
         ...t,
@@ -242,14 +261,12 @@ const App: React.FC = () => {
       }));
 
       // Update lists
-      if (newColors.length) setBrandColors(prev => [...newColors, ...prev]);
       if (newStyles.length) setVisualStyles(prev => [...newStyles, ...prev]);
       if (newTypes.length) setGraphicTypes(prev => [...newTypes, ...prev]);
 
       // Set defaults to the first new item found
       setConfig(prev => ({
         ...prev,
-        colorSchemeId: newColors.length ? newColors[0].id : prev.colorSchemeId,
         visualStyleId: newStyles.length ? newStyles[0].id : prev.visualStyleId,
         graphicTypeId: newTypes.length ? newTypes[0].id : prev.graphicTypeId
       }));
@@ -389,7 +406,7 @@ const App: React.FC = () => {
         onGenerate={handleGenerate}
         isGenerating={isGenerating}
         options={context}
-        setOptions={{ setBrandColors, setVisualStyles, setGraphicTypes, setAspectRatios }}
+        setOptions={{ setVisualStyles, setGraphicTypes, setAspectRatios }}
         onUploadGuidelines={handleUploadGuidelines}
         isAnalyzing={isAnalyzing}
       />

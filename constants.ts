@@ -1,4 +1,4 @@
-import { BrandColor, VisualStyle, GraphicType, AspectRatioOption } from './types';
+import { VisualStyle, GraphicType, AspectRatioOption } from './types';
 import { 
   FileChartColumn, 
   Image, 
@@ -16,53 +16,35 @@ import {
   Smartphone
 } from 'lucide-react';
 
-export const BRAND_COLORS: BrandColor[] = [
-  {
-    id: 'tech-blue',
-    name: 'Tech Enterprise',
-    colors: ['Deep Navy', 'Electric Blue', 'White', 'Slate Gray']
-  },
-  {
-    id: 'warm-earth',
-    name: 'Organic Earth',
-    colors: ['Terracotta', 'Sage Green', 'Beige', 'Charcoal']
-  },
-  {
-    id: 'vibrant-pop',
-    name: 'Vibrant Pop',
-    colors: ['Hot Pink', 'Cyan', 'Yellow', 'Black']
-  },
-  {
-    id: 'monochrome',
-    name: 'Sleek Monochrome',
-    colors: ['Black', 'Dark Gray', 'Light Gray', 'White']
-  }
-];
-
+// Combined Visual Styles + Default Colors
 export const VISUAL_STYLES: VisualStyle[] = [
   {
     id: 'minimalist-vector',
     name: 'Minimalist Vector',
     description: 'Flat design, clean lines, no gradients, plenty of whitespace.',
-    icon: Minimize2
+    icon: Minimize2,
+    colors: ['Deep Navy', 'Electric Blue', 'White', 'Slate Gray'] // Tech Blue default
   },
   {
     id: 'corporate-flat',
     name: 'Corporate Flat',
     description: 'Professional, trustworthy, isometric clean shapes.',
-    icon: Building2
+    icon: Building2,
+    colors: ['Terracotta', 'Sage Green', 'Beige', 'Charcoal'] // Organic Earth default
   },
   {
     id: 'hand-drawn',
     name: 'Hand Drawn Sketch',
     description: 'Rough edges, pencil texture, approachable and human.',
-    icon: PenTool
+    icon: PenTool,
+    colors: ['Black', 'Dark Gray', 'Light Gray', 'White'] // Monochrome default
   },
   {
     id: '3d-render',
     name: 'Soft 3D Render',
     description: 'Smooth lighting, soft shadows, claymorphism style.',
-    icon: Box
+    icon: Box,
+    colors: ['Hot Pink', 'Cyan', 'Yellow', 'Black'] // Vibrant Pop default
   }
 ];
 

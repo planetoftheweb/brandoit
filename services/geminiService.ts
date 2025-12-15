@@ -5,7 +5,6 @@ const NANO_BANANA_MODEL = 'gemini-2.5-flash-image';
 const ANALYSIS_MODEL = 'gemini-2.5-flash';
 
 interface GenerationContext {
-  brandColors: BrandColor[];
   visualStyles: VisualStyle[];
   graphicTypes: GraphicType[];
 }
@@ -21,11 +20,10 @@ const getAiClient = (customKey?: string) => {
  * Constructs the engineered prompt based on selected presets and dynamic context
  */
 const constructFullPrompt = (config: GenerationConfig, context: GenerationContext): string => {
-  const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
   const style = context.visualStyles.find(s => s.id === config.visualStyleId);
   const type = context.graphicTypes.find(t => t.id === config.graphicTypeId);
 
-  const colors = colorScheme ? colorScheme.colors.join(', ') : 'standard colors';
+  const colors = style?.colors ? style.colors.join(', ') : 'standard brand colors';
   const styleDesc = style ? style.description : 'clean style';
   const typeName = type ? type.name : 'image';
 
@@ -72,10 +70,9 @@ export const refineGraphic = async (
   customApiKey?: string
 ): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
-  const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
   const style = context.visualStyles.find(s => s.id === config.visualStyleId);
   
-  const colors = colorScheme ? colorScheme.colors.join(', ') : '';
+  const colors = style?.colors ? style.colors.join(', ') : '';
   const styleDesc = style ? style.description : '';
 
   const fullRefinementPrompt = `
@@ -211,17 +208,19 @@ export const analyzeImageForOption = async (
 
   if (type === 'style') {
     prompt = `
-      Analyze the visual style of this image.
+      Analyze the visual style and color palette of this image.
       Provide a short, catchy Name for this style (e.g. "Neon Cyberpunk", "Minimal Line Art").
-      Provide a concise Description of the visual characteristics (e.g. lighting, texture, line weight, composition) that could be used to generate similar images.
+      Provide a concise Description of the visual characteristics (e.g. lighting, texture, line weight, composition).
+      Extract the 4-5 dominant colors as HEX codes.
     `;
     responseSchema = {
       type: Type.OBJECT,
       properties: {
         name: { type: Type.STRING },
-        description: { type: Type.STRING }
+        description: { type: Type.STRING },
+        colors: { type: Type.ARRAY, items: { type: Type.STRING } }
       },
-      required: ["name", "description"]
+      required: ["name", "description", "colors"]
     };
   } else if (type === 'color') {
     prompt = `
