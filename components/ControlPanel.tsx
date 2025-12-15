@@ -249,7 +249,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   // --- Helper Components for Dropdowns ---
 
-  const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel }: any) => (
+  const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => (
     <button
       onClick={onClick}
       className={`h-full px-3 py-2 border rounded-lg flex items-center gap-2 transition-all min-w-[140px] md:min-w-[160px] justify-between group ${
@@ -258,14 +258,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
       }`}
     >
-      <div className="flex items-center gap-2.5 overflow-hidden text-left">
+      <div className="flex items-center gap-2.5 overflow-hidden text-left w-full">
         <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
-        <div className="flex flex-col">
+        <div className="flex flex-col flex-1 min-w-0">
           <span className="text-[10px] uppercase font-bold text-slate-500 leading-none mb-0.5">{subLabel}</span>
-          <span className="truncate text-xs font-medium max-w-[100px]">{label}</span>
+          <span className="truncate text-xs font-medium">{label}</span>
+          {colors && colors.length > 0 && (
+             <div className="flex h-1 mt-1 rounded-sm overflow-hidden ring-1 ring-black/5 dark:ring-white/10 opacity-80">
+               {colors.map((hex: string, i: number) => (
+                 <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
+               ))}
+             </div>
+          )}
         </div>
       </div>
-      <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ${isActive ? 'rotate-180 text-brand-teal dark:text-brand-teal' : ''}`} />
+      <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ml-2 ${isActive ? 'rotate-180 text-brand-teal dark:text-brand-teal' : ''}`} />
     </button>
   );
 
@@ -351,6 +358,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 label={currentStyle?.name || 'Select'} 
                 isActive={activeDropdown === 'style'} 
                 onClick={() => toggleDropdown('style')} 
+                colors={currentStyle?.colors} // Pass selected colors
               />
                {activeDropdown === 'style' && (
                 <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
