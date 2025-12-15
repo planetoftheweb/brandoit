@@ -96,17 +96,16 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // Seed structures once on mount (harmless if already done)
-    seedStructures().then(() => loadResources(user?.id));
+    if (user?.username === 'planetoftheweb') {
+       // Seed structures only if admin is logged in
+       seedStructures(user).then(() => loadResources(user.id));
+    } else {
+       loadResources(user?.id);
+    }
     
-    // Seed catalog
-    seedCatalog().catch(console.error);
-  }, []); // Run once on mount
-
-  // Reload resources when user changes (to get their custom items)
-  useEffect(() => {
-    loadResources(user?.id);
-  }, [user?.id]);
+    // Seed catalog (legacy community items) - can probably be removed or gated too
+    // seedCatalog().catch(console.error);
+  }, [user]); // Run when user changes
 
   // Effect to toggle body class
   useEffect(() => {

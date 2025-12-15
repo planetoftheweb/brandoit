@@ -1,76 +1,60 @@
 import { db } from "./firebase";
-import { collection, doc, setDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, setDoc } from "firebase/firestore";
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
   GRAPHIC_TYPES, 
   ASPECT_RATIOS 
 } from "../constants";
+import { User } from "../types";
 
-export const seedStructures = async () => {
-  console.log("Seeding database structures...");
+// The username allowed to seed public defaults
+const ADMIN_USERNAME = "planetoftheweb"; 
 
-  // 1. Seed Graphic Types
-  const typesRef = collection(db, "graphic_types");
-  const typesSnapshot = await getDocs(typesRef);
-  if (typesSnapshot.empty) {
-    console.log("Seeding Graphic Types...");
-    for (const item of GRAPHIC_TYPES) {
+export const seedStructures = async (currentUser?: User) => {
+  // Only proceed if the user is the designated admin
+  if (!currentUser || currentUser.username !== ADMIN_USERNAME) {
+    console.log("Skipping system seeding: User is not admin.");
+    return;
+  }
+
+  console.log("Admin authenticated. Seeding global defaults...");
+
+  // Helper to upsert system items
+  const seedCollection = async (collectionName: string, items: any[]) => {
+    const ref = collection(db, collectionName);
+    
+    for (const item of items) {
       // Use the ID as the document ID for system items to prevent dupes
-      await setDoc(doc(typesRef, item.id), {
-        ...item,
-        isSystem: true,
-        icon: undefined // Don't save component symbols
-      });
-    }
-  }
+      const docId = item.id || item.value.replace(/:/g, '_');
+      
+      const { icon, ...data } = item; // Exclude icon component
 
-  // 2. Seed Aspect Ratios
-  const ratiosRef = collection(db, "aspect_ratios");
-  const ratiosSnapshot = await getDocs(ratiosRef);
-  if (ratiosSnapshot.empty) {
-    console.log("Seeding Aspect Ratios...");
-    for (const item of ASPECT_RATIOS) {
-      // Use value as ID (sanitize it first, e.g. "1:1" -> "1_1")
-      const safeId = item.value.replace(/:/g, '_');
-      await setDoc(doc(ratiosRef, safeId), {
-        ...item,
-        isSystem: true,
-        icon: undefined
-      });
+      await setDoc(doc(ref, docId), {
+        ...data,
+        // Set scope to public as requested (visible to all in community/global lists)
+        // or 'system' if we want them to be immutable defaults. 
+        // User requested "come from my account" and "set to public".
+        scope: 'public', 
+        
+        // Attribution to the admin
+        authorId: currentUser.id,
+        authorName: currentUser.username || currentUser.name,
+        
+        isSystem: true, // Keep this flag to identify them as core defaults in UI logic if needed
+        createdAt: Date.now(),
+        votes: 0,
+        voters: []
+      }, { merge: true }); 
     }
-  }
+    console.log(`Seeded ${items.length} items to ${collectionName}`);
+  };
 
-  // 3. Seed Visual Styles
-  const stylesRef = collection(db, "visual_styles");
-  // Check if system styles exist
-  const qStyles = query(stylesRef, where("isSystem", "==", true));
-  const stylesSnap = await getDocs(qStyles);
-  if (stylesSnap.empty) {
-    console.log("Seeding System Visual Styles...");
-    for (const item of VISUAL_STYLES) {
-      await setDoc(doc(stylesRef, item.id), {
-        ...item,
-        isSystem: true,
-        icon: undefined
-      });
-    }
-  }
+  // Seed all collections
+  await seedCollection("graphic_types", GRAPHIC_TYPES);
+  await seedCollection("aspect_ratios", ASPECT_RATIOS);
+  await seedCollection("visual_styles", VISUAL_STYLES);
+  await seedCollection("brand_colors", BRAND_COLORS);
 
-  // 4. Seed Brand Colors
-  const colorsRef = collection(db, "brand_colors");
-  const qColors = query(colorsRef, where("isSystem", "==", true));
-  const colorsSnap = await getDocs(qColors);
-  if (colorsSnap.empty) {
-    console.log("Seeding System Brand Colors...");
-    for (const item of BRAND_COLORS) {
-      await setDoc(doc(colorsRef, item.id), {
-        ...item,
-        isSystem: true,
-        icon: undefined
-      });
-    }
-  }
-
-  console.log("Structure seeding complete.");
+  console.log("Global structure seeding complete.");
 };
