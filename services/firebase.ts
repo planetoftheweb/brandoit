@@ -17,6 +17,17 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
+// Debug: Check if config is loaded (will show in browser console)
+const missingKeys = Object.entries(firebaseConfig)
+  .filter(([key, value]) => !value && key !== 'measurementId')
+  .map(([key]) => key);
+
+if (missingKeys.length > 0) {
+  console.error("Missing Firebase Config Keys:", missingKeys);
+} else {
+  console.log("Firebase Config Loaded successfully");
+}
+
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
