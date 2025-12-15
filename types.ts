@@ -1,26 +1,34 @@
-export interface BrandColor {
+export interface BaseResource {
+  id: string;
   name: string;
+  icon?: any;
+  
+  // Ownership & Visibility
+  authorId: string;
+  authorName: string;
+  scope: 'system' | 'private' | 'public' | 'team';
+  teamId?: string;
+
+  // Social & Forking
+  votes: number;
+  voters: string[];
+  forkedFromId?: string;
+  createdAt: number;
+}
+
+export interface BrandColor extends BaseResource {
   colors: string[]; // Hex codes
-  id: string;
 }
 
-export interface VisualStyle {
-  name: string;
+export interface VisualStyle extends BaseResource {
   description: string;
-  id: string;
-  icon?: any;
 }
 
-export interface GraphicType {
-  name: string;
-  id: string;
-  icon?: any;
-}
+export interface GraphicType extends BaseResource {}
 
-export interface AspectRatioOption {
+export interface AspectRatioOption extends BaseResource {
   label: string;
   value: string; // "1:1", "16:9", etc.
-  icon?: any;
 }
 
 export interface GenerationConfig {
@@ -44,18 +52,15 @@ export interface GenerationHistoryItem extends GeneratedImage {
 }
 
 export interface BrandGuidelinesAnalysis {
-  brandColors: Omit<BrandColor, 'id'>[];
-  visualStyles: Omit<VisualStyle, 'id'>[];
-  graphicTypes: Omit<GraphicType, 'id'>[];
+  brandColors: Omit<BrandColor, 'id' | 'authorId' | 'authorName' | 'scope' | 'votes' | 'voters' | 'createdAt'>[];
+  visualStyles: Omit<VisualStyle, 'id' | 'authorId' | 'authorName' | 'scope' | 'votes' | 'voters' | 'createdAt'>[];
+  graphicTypes: Omit<GraphicType, 'id' | 'authorId' | 'authorName' | 'scope' | 'votes' | 'voters' | 'createdAt'>[];
 }
 
 export interface UserPreferences {
-  brandColors: BrandColor[];
-  visualStyles: VisualStyle[];
-  graphicTypes: GraphicType[];
-  aspectRatios: AspectRatioOption[];
+  // References only, actual data stored in resource collections
   geminiApiKey?: string;
-  settings?: UserSettings; // New settings field
+  settings?: UserSettings; 
 }
 
 export interface UserSettings {
@@ -67,19 +72,20 @@ export interface UserSettings {
 export interface User {
   id: string;
   name: string;
-  username?: string; // Optional custom username for community contributions
+  username?: string; 
   email: string;
-  photoURL?: string; // Profile photo URL
+  photoURL?: string; 
   preferences: UserPreferences;
+  teamIds?: string[]; // IDs of teams the user belongs to
 }
 
-export interface CatalogItem {
+export interface Team {
   id: string;
-  type: 'style' | 'color' | 'type';
-  data: VisualStyle | BrandColor | GraphicType;
-  authorId: string;
-  authorName: string;
-  votes: number;
-  voters: string[]; // List of user IDs who voted
-  timestamp: number;
+  name: string;
+  ownerId: string;
+  members: string[]; // List of user IDs
+  createdAt: number;
 }
+
+// Deprecated: CatalogItem is no longer needed as resources are self-contained
+// export interface CatalogItem { ... }
