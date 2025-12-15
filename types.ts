@@ -37,6 +37,12 @@ export interface GeneratedImage {
   mimeType: string;
 }
 
+export interface GenerationHistoryItem extends GeneratedImage {
+  id: string;
+  timestamp: number;
+  config: GenerationConfig;
+}
+
 export interface BrandGuidelinesAnalysis {
   brandColors: Omit<BrandColor, 'id'>[];
   visualStyles: Omit<VisualStyle, 'id'>[];

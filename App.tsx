@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User } from './types';
+import { RecentGenerations } from './components/RecentGenerations';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -11,6 +12,7 @@ import {
 } from './constants';
 import { generateGraphic, refineGraphic, analyzeBrandGuidelines } from './services/geminiService';
 import { authService } from './services/authService';
+import { historyService } from './services/historyService';
 import { 
   AlertCircle, 
   Sun, 
@@ -56,9 +58,19 @@ const App: React.FC = () => {
   });
 
   const [generatedImage, setGeneratedImage] = useState<GeneratedImage | null>(null);
+  const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Load history on mount or user change
+  useEffect(() => {
+    const loadHistory = async () => {
+      const items = await historyService.getHistory(user);
+      setHistory(items);
+    };
+    loadHistory();
+  }, [user]);
 
   // Check for session on mount
   useEffect(() => {
@@ -145,6 +157,21 @@ const App: React.FC = () => {
       const customKey = user?.preferences.geminiApiKey;
       const result = await generateGraphic(config, context, customKey);
       setGeneratedImage(result);
+
+      // Save to history
+      const historyItem: GenerationHistoryItem = {
+        ...result,
+        id: `gen-${Date.now()}`,
+        timestamp: Date.now(),
+        config: { ...config }
+      };
+      
+      await historyService.saveToHistory(user, historyItem);
+      
+      // Refresh history list
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
     } finally {
@@ -161,11 +188,29 @@ const App: React.FC = () => {
       const customKey = user?.preferences.geminiApiKey;
       const result = await refineGraphic(generatedImage, refinementText, config, context, customKey);
       setGeneratedImage(result);
+      
+      // Save refined version to history too? Or update existing? Let's save as new for now.
+      const historyItem: GenerationHistoryItem = {
+        ...result,
+        id: `gen-${Date.now()}`,
+        timestamp: Date.now(),
+        config: { ...config, prompt: `${config.prompt} (Refined: ${refinementText})` }
+      };
+      await historyService.saveToHistory(user, historyItem);
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+
     } catch (err: any) {
       setError(err.message || 'Failed to refine image.');
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const handleRestoreFromHistory = (item: GenerationHistoryItem) => {
+    setConfig(item.config);
+    setGeneratedImage(item);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleUploadGuidelines = async (file: File) => {
@@ -363,6 +408,13 @@ const App: React.FC = () => {
           image={generatedImage} 
           onRefine={handleRefine}
           isRefining={isGenerating}
+        />
+
+        {/* History Gallery */}
+        <RecentGenerations 
+          history={history}
+          onSelect={handleRestoreFromHistory}
+          options={context}
         />
       </main>
 
