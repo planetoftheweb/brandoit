@@ -9,9 +9,9 @@ import {
   Building2,
   PenTool,
   Box,
-  Square,
-  RectangleHorizontal,
-  RectangleVertical,
+  Frame,
+  Tv,
+  Tablet,
   Monitor,
   Smartphone
 } from 'lucide-react';
@@ -75,9 +75,9 @@ export const GRAPHIC_TYPES: GraphicType[] = [
 ];
 
 export const ASPECT_RATIOS: AspectRatioOption[] = [
-  { label: 'Square (1:1)', value: '1:1', icon: Square },
-  { label: 'Landscape (16:9)', value: '16:9', icon: RectangleHorizontal },
-  { label: 'Portrait (9:16)', value: '9:16', icon: RectangleVertical },
+  { label: 'Square (1:1)', value: '1:1', icon: Frame },
+  { label: 'Landscape (16:9)', value: '16:9', icon: Tv },
+  { label: 'Portrait (9:16)', value: '9:16', icon: Smartphone },
   { label: 'Presentation (4:3)', value: '4:3', icon: Monitor },
-  { label: 'Vertical (3:4)', value: '3:4', icon: Smartphone }
+  { label: 'Vertical (3:4)', value: '3:4', icon: Tablet }
 ];
