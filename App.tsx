@@ -493,23 +493,16 @@ const App: React.FC = () => {
                     <PenTool size={16} />
                   </div>
                   <div>
-                    <strong className="text-slate-900 dark:text-white">Select Style:</strong> Pick a visual style that matches your brand guidelines.
+                    <strong className="text-slate-900 dark:text-white">Select Style:</strong> Pick a visual style that includes your brand's color palette.
                   </div>
                 </li>
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <Palette size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Select Colors:</strong> Enforce your brand's color palette.
-                  </div>
-                </li>
+                {/* Removed separate Color section in Help */}
                 <li className="flex items-start gap-3">
                   <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <Plus size={16} />
                   </div>
                   <div>
-                    <strong className="text-slate-900 dark:text-white">Custom Options:</strong> Add your own custom types, styles, or colors by clicking "Add Custom..." in any dropdown.
+                    <strong className="text-slate-900 dark:text-white">Custom Options:</strong> Add your own custom types or styles (with custom colors) by clicking "Add Custom...".
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
