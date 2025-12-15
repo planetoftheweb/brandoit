@@ -206,7 +206,7 @@ const App: React.FC = () => {
           <img 
             src="/brandoit.png" 
             alt="BranDoIt Logo" 
-            className="w-12 h-12 rounded-full shadow-lg shadow-teal-500/20 object-cover" 
+            className="w-12 h-12 rounded-full shadow-lg shadow-brand-red/20 object-cover" 
           />
           <h1 className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">BranDoIt</h1>
         </div>
@@ -220,7 +220,7 @@ const App: React.FC = () => {
                  onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                  className="flex items-center gap-2 p-1.5 pr-3 bg-gray-100 dark:bg-[#21262d] hover:bg-gray-200 dark:hover:bg-[#30363d] rounded-full transition-colors"
                >
-                 <div className="w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center text-white text-xs font-bold">
+                 <div className="w-8 h-8 rounded-full bg-brand-red flex items-center justify-center text-white text-xs font-bold">
                     {user.name.charAt(0).toUpperCase()}
                  </div>
                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate max-w-[100px] hidden sm:block">{user.name}</span>
@@ -248,13 +248,13 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2 mr-2">
               <button 
                 onClick={() => setIsAuthModalOpen(true)}
-                className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-teal-600 dark:hover:text-teal-400 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-red dark:hover:text-brand-red px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
               >
                 Log In
               </button>
               <button 
                 onClick={() => setIsAuthModalOpen(true)}
-                className="text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 px-4 py-2 rounded-lg shadow-lg shadow-teal-500/20 transition-all active:scale-95 hidden sm:block"
+                className="text-sm font-bold text-white bg-brand-red hover:bg-red-700 px-4 py-2 rounded-lg shadow-lg shadow-brand-red/20 transition-all active:scale-95 hidden sm:block"
               >
                 Sign Up
               </button>
@@ -265,14 +265,14 @@ const App: React.FC = () => {
 
            <button 
              onClick={() => setIsHelpOpen(true)}
-             className="p-2 text-slate-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+             className="p-2 text-slate-500 hover:text-brand-red dark:hover:text-brand-red hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
              title="Help"
            >
              <HelpCircle size={20} />
            </button>
            <button 
              onClick={() => setIsDarkMode(!isDarkMode)}
-             className="p-2 text-slate-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+             className="p-2 text-slate-500 hover:text-brand-red dark:hover:text-brand-red hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
              title="Toggle Theme"
            >
              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
@@ -338,7 +338,7 @@ const App: React.FC = () => {
               </p>
               <ul className="space-y-4">
                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <UserIcon size={16} />
                   </div>
                   <div>
@@ -346,7 +346,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <UploadCloud size={16} />
                   </div>
                   <div>
@@ -354,7 +354,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <Layout size={16} />
                   </div>
                   <div>
@@ -362,7 +362,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <PenTool size={16} />
                   </div>
                   <div>
@@ -370,7 +370,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <Palette size={16} />
                   </div>
                   <div>
@@ -378,7 +378,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <Plus size={16} />
                   </div>
                   <div>
@@ -386,7 +386,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <MessageSquare size={16} />
                   </div>
                   <div>
@@ -394,7 +394,7 @@ const App: React.FC = () => {
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-teal-600 dark:text-teal-400 shrink-0">
+                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <RefreshCw size={16} />
                   </div>
                   <div>
@@ -407,7 +407,7 @@ const App: React.FC = () => {
             <div className="mt-8 flex justify-end border-t border-gray-200 dark:border-[#30363d] pt-4">
               <button 
                 onClick={() => setIsHelpOpen(false)}
-                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors text-sm shadow-lg shadow-teal-500/20"
+                className="px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm shadow-lg shadow-brand-red/20"
               >
                 Got it
               </button>

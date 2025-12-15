@@ -52,7 +52,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       {/* Main Image Viewport */}
       <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center">
         <div className="relative group max-w-full max-h-full">
-          <div className="absolute inset-0 bg-teal-500/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
+          <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-hidden border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
             <img 
               src={image.imageUrl} 
@@ -91,7 +91,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
               className={`px-4 rounded-xl font-medium text-white flex items-center gap-2 transition-all ${
                 !refinementInput || isRefining
                   ? 'bg-gray-200 dark:bg-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                  : 'bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20'
+                  : 'bg-brand-red hover:bg-red-700 text-white shadow-lg shadow-brand-red/20'
               }`}
             >
                {isRefining ? (

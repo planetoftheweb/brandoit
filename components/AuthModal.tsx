@@ -62,7 +62,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
 
         <div className="p-8">
           <div className="text-center mb-8">
-            <div className="w-12 h-12 bg-gradient-to-br from-teal-500 via-orange-400 to-red-500 rounded-xl flex items-center justify-center text-white text-2xl shadow-lg shadow-teal-500/20 mx-auto mb-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-brand-red via-brand-orange to-brand-teal rounded-xl flex items-center justify-center text-white text-2xl shadow-lg shadow-brand-red/20 mx-auto mb-4">
               <Layers size={24} />
             </div>
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
@@ -89,7 +89,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/50 transition-all"
+                    className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-red/50 transition-all"
                     placeholder="John Doe"
                     required={!isLogin}
                   />
@@ -105,7 +105,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/50 transition-all"
+                  className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-red/50 transition-all"
                   placeholder="john@example.com"
                   required
                 />
@@ -120,7 +120,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/50 transition-all"
+                  className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-red/50 transition-all"
                   placeholder="••••••••"
                   required
                 />
@@ -130,7 +130,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 transition-all mt-6 disabled:opacity-70 disabled:cursor-not-allowed active:scale-[0.98]"
+              className="w-full bg-brand-red hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-brand-red/25 flex items-center justify-center gap-2 transition-all mt-6 disabled:opacity-70 disabled:cursor-not-allowed active:scale-[0.98]"
             >
               {isLoading ? (
                 <Loader2 size={20} className="animate-spin" />
@@ -148,7 +148,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
               {isLogin ? "Don't have an account? " : "Already have an account? "}
               <button 
                 onClick={toggleMode}
-                className="text-teal-600 dark:text-teal-400 font-bold hover:underline"
+                className="text-brand-red dark:text-brand-orange font-bold hover:underline"
               >
                 {isLogin ? 'Sign up' : 'Sign in'}
               </button>

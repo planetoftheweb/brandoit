@@ -11,6 +11,7 @@
   "dependencies": {
     "@google/genai": "^1.33.0",
     "lucide-react": "^0.560.0",
+    "mona-sans": "^1.0.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
