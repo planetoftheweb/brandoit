@@ -327,14 +327,17 @@ const App: React.FC = () => {
       {/* 1. Dedicated Header Row */}
       <header className="w-full flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] sticky top-0 z-50">
         <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setCatalogMode(null)}
+            className="flex items-center gap-3 hover:opacity-80 transition-opacity focus:outline-none"
+          >
             <img 
               src="/brandoit.png" 
               alt="BranDoIt Logo" 
               className="w-12 h-12 rounded-full shadow-lg shadow-brand-red/20 object-cover" 
             />
             <h1 className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">BranDoIt</h1>
-          </div>
+          </button>
           
           {/* Navigation Links */}
           <nav className="hidden md:flex items-center gap-2 ml-4">
