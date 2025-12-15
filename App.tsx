@@ -15,7 +15,7 @@ import {
 import { generateGraphic, refineGraphic, analyzeBrandGuidelines } from './services/geminiService';
 import { authService } from './services/authService';
 import { historyService } from './services/historyService';
-import { seedCatalog } from './services/seeder';
+// import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
 import { resourceService } from './services/resourceService'; // Import resource service
 import { 
