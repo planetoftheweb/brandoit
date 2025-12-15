@@ -112,6 +112,14 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
+  // Initial check for system preference if no user preference (optional)
+  useEffect(() => {
+    // Check if the user has a system preference for dark mode
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setIsDarkMode(true);
+    }
+  }, []);
+
   // Sync preferences to Auth Service when they change AND a user is logged in
   useEffect(() => {
     if (user) {
