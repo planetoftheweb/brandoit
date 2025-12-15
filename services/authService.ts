@@ -11,13 +11,17 @@ const defaultPreferences: UserPreferences = {
   aspectRatios: ASPECT_RATIOS
 };
 
+interface StoredUser extends User {
+  password?: string; // In a real app, this would be a hash
+}
+
 export const authService = {
-  getUsers: (): User[] => {
+  getUsers: (): StoredUser[] => {
     const usersJson = localStorage.getItem(USERS_KEY);
     return usersJson ? JSON.parse(usersJson) : [];
   },
 
-  saveUsers: (users: User[]) => {
+  saveUsers: (users: StoredUser[]) => {
     localStorage.setItem(USERS_KEY, JSON.stringify(users));
   },
 
@@ -30,24 +34,22 @@ export const authService = {
       throw new Error("User already exists with this email.");
     }
 
-    const newUser: User = {
+    const newUser: StoredUser = {
       id: `user-${Date.now()}`,
       name,
       email,
+      password, // Storing simply for this mock
       preferences: { ...defaultPreferences }
     };
 
-    // In a real app, we'd hash the password. storing it here separately or just mocking auth success
-    // For this mock, we'll store the user object. We won't strictly check password on 'login' for simplicity
-    // unless we want to store it. Let's store a "credentials" object in a separate key if we wanted to be robust,
-    // but for this demo, we'll assume success if email matches.
-    
-    // Actually, let's just store the user.
     users.push(newUser);
     authService.saveUsers(users);
-    authService.setSession(newUser);
     
-    return newUser;
+    // Return user without password
+    const { password: _, ...userWithoutPassword } = newUser;
+    authService.setSession(userWithoutPassword);
+    
+    return userWithoutPassword;
   },
 
   login: async (email: string, password: string): Promise<User> => {
@@ -56,13 +58,13 @@ export const authService = {
     const users = authService.getUsers();
     const user = users.find(u => u.email === email);
 
-    // Mock password check (accept any password for demo purposes if user exists)
-    if (!user) {
+    if (!user || user.password !== password) {
       throw new Error("Invalid email or password.");
     }
 
-    authService.setSession(user);
-    return user;
+    const { password: _, ...userWithoutPassword } = user;
+    authService.setSession(userWithoutPassword);
+    return userWithoutPassword;
   },
 
   logout: () => {

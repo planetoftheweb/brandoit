@@ -37,6 +37,7 @@ const App: React.FC = () => {
   // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   // Application State for Options (allows adding/removing)
@@ -247,13 +248,19 @@ const App: React.FC = () => {
           ) : (
             <div className="flex items-center gap-2 mr-2">
               <button 
-                onClick={() => setIsAuthModalOpen(true)}
+                onClick={() => {
+                  setAuthModalMode('login');
+                  setIsAuthModalOpen(true);
+                }}
                 className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
               >
                 Log In
               </button>
               <button 
-                onClick={() => setIsAuthModalOpen(true)}
+                onClick={() => {
+                  setAuthModalMode('signup');
+                  setIsAuthModalOpen(true);
+                }}
                 className="text-sm font-bold text-white bg-brand-red hover:bg-red-700 px-4 py-2 rounded-lg shadow-lg shadow-brand-red/20 transition-all active:scale-95 hidden sm:block"
               >
                 Sign Up
@@ -319,6 +326,7 @@ const App: React.FC = () => {
         isOpen={isAuthModalOpen} 
         onClose={() => setIsAuthModalOpen(false)} 
         onLoginSuccess={handleLoginSuccess}
+        initialMode={authModalMode}
       />
 
       {/* Help Modal */}
