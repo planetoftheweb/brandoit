@@ -13,7 +13,7 @@ import {
   updateDoc 
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { User, UserPreferences } from "../types";
+import { User, UserPreferences, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from "../types";
 import { BRAND_COLORS, VISUAL_STYLES, GRAPHIC_TYPES, ASPECT_RATIOS } from "../constants";
 
 const defaultPreferences: UserPreferences = {
@@ -23,32 +23,60 @@ const defaultPreferences: UserPreferences = {
   aspectRatios: ASPECT_RATIOS
 };
 
+// Helper to remove non-serializable fields (like React components/icons) from preferences
+const sanitizePreferences = (prefs: UserPreferences): any => {
+  return {
+    brandColors: prefs.brandColors.map(({ icon, ...rest }: any) => rest),
+    visualStyles: prefs.visualStyles.map(({ icon, ...rest }: any) => rest),
+    graphicTypes: prefs.graphicTypes.map(({ icon, ...rest }: any) => rest),
+    aspectRatios: prefs.aspectRatios.map(({ icon, ...rest }: any) => rest),
+  };
+};
+
+// Helper to merge saved preferences with default icons (re-hydration)
+const hydratePreferences = (savedPrefs: any): UserPreferences => {
+  if (!savedPrefs) return defaultPreferences;
+
+  // Helper to re-attach icons from constants if ID matches, or keep as is
+  const mergeWithIcons = (savedItems: any[], defaultItems: any[]) => {
+    return savedItems.map(item => {
+      // Find matching default item to get its icon back
+      const match = defaultItems.find(d => d.id === item.id || d.value === item.value);
+      return match ? { ...item, icon: match.icon } : item;
+    });
+  };
+
+  return {
+    brandColors: savedPrefs.brandColors || defaultPreferences.brandColors,
+    visualStyles: mergeWithIcons(savedPrefs.visualStyles || [], VISUAL_STYLES),
+    graphicTypes: mergeWithIcons(savedPrefs.graphicTypes || [], GRAPHIC_TYPES),
+    aspectRatios: mergeWithIcons(savedPrefs.aspectRatios || [], ASPECT_RATIOS),
+  };
+};
+
 // Helper to transform Firebase User + Firestore Data into our User type
 const transformUser = (firebaseUser: FirebaseUser, userData: any): User => {
   return {
     id: firebaseUser.uid,
     name: userData?.name || firebaseUser.displayName || 'User',
     email: firebaseUser.email || '',
-    preferences: userData?.preferences || defaultPreferences
+    preferences: userData?.preferences ? hydratePreferences(userData.preferences) : defaultPreferences
   };
 };
 
 export const authService = {
-  // We no longer need getUsers or saveUsers as Firebase handles this
-
   register: async (name: string, email: string, password: string): Promise<User> => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Update the display name in Firebase Auth
       await updateProfile(user, { displayName: name });
 
-      // Create the user document in Firestore
+      // Create the user document in Firestore - SANITIZED
       const newUserProfile = {
         name,
         email,
-        preferences: defaultPreferences,
+        preferences: sanitizePreferences(defaultPreferences),
         createdAt: new Date().toISOString()
       };
 
@@ -57,7 +85,6 @@ export const authService = {
       return transformUser(user, newUserProfile);
     } catch (error: any) {
       console.error("Registration Error:", error);
-      // Transform Firebase errors into user-friendly messages
       if (error.code === 'auth/email-already-in-use') {
         throw new Error('This email is already registered.');
       } else if (error.code === 'auth/weak-password') {
@@ -72,7 +99,6 @@ export const authService = {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Fetch additional user data from Firestore
       const docRef = doc(db, "users", user.uid);
       const docSnap = await getDoc(docRef);
 
@@ -80,11 +106,10 @@ export const authService = {
       if (docSnap.exists()) {
         userData = docSnap.data();
       } else {
-        // If firestore doc doesn't exist (legacy user?), create it
         userData = {
           name: user.displayName || 'User',
           email: user.email,
-          preferences: defaultPreferences
+          preferences: sanitizePreferences(defaultPreferences)
         };
         await setDoc(docRef, userData);
       }
@@ -102,14 +127,12 @@ export const authService = {
   logout: async () => {
     try {
       await signOut(auth);
-      // Clear any local storage legacy items if they exist
       localStorage.removeItem('banana_brand_session');
     } catch (error) {
       console.error("Logout Error:", error);
     }
   },
 
-  // Helper to get current user state strictly from Auth (useful for initial load)
   getCurrentUser: (): Promise<User | null> => {
     return new Promise((resolve) => {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -117,7 +140,7 @@ export const authService = {
           try {
             const docRef = doc(db, "users", user.uid);
             const docSnap = await getDoc(docRef);
-            const userData = docSnap.exists() ? docSnap.data() : { preferences: defaultPreferences };
+            const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
             resolve(transformUser(user, userData));
           } catch (e) {
             console.error("Error fetching user profile:", e);
@@ -126,7 +149,7 @@ export const authService = {
         } else {
           resolve(null);
         }
-        unsubscribe(); // We only need the first value for this one-shot checker
+        unsubscribe(); 
       });
     });
   },
@@ -134,8 +157,11 @@ export const authService = {
   updateUserPreferences: async (userId: string, preferences: UserPreferences) => {
     try {
       const userRef = doc(db, "users", userId);
+      // Sanitize before saving to remove functions/React components
+      const cleanPreferences = sanitizePreferences(preferences);
+      
       await updateDoc(userRef, {
-        preferences: preferences
+        preferences: cleanPreferences
       });
     } catch (error) {
       console.error("Error updating preferences:", error);
@@ -143,13 +169,12 @@ export const authService = {
     }
   },
   
-  // Real-time listener for auth state changes
   onAuthStateChange: (callback: (user: User | null) => void) => {
     return onAuthStateChanged(auth, async (user) => {
       if (user) {
         const docRef = doc(db, "users", user.uid);
         const docSnap = await getDoc(docRef);
-        const userData = docSnap.exists() ? docSnap.data() : { preferences: defaultPreferences };
+        const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
         callback(transformUser(user, userData));
       } else {
         callback(null);
