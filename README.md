@@ -54,11 +54,11 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     ```
 
 3.  **Set up Environment Variables:**
-    Create a `.env.local` file in the root directory and add your keys:
+    Create a `.env` (or `.env.local`) file in the root directory. **Keys must start with `VITE_`**.
 
     ```env
     # Google Gemini AI
-    GEMINI_API_KEY=your_gemini_key
+    VITE_GEMINI_API_KEY=your_gemini_key
 
     # Firebase Configuration
     VITE_FIREBASE_API_KEY=your_firebase_api_key
@@ -68,8 +68,18 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     VITE_FIREBASE_MESSAGING_SENDER_ID=your_messaging_id
     VITE_FIREBASE_APP_ID=your_app_id
     ```
+    *Note: The app includes a built-in "Configuration Error" screen that will alert you if any of these keys are missing.*
 
-4.  **Start the development server:**
+4.  **Configure Firebase Storage CORS:**
+    To allow image uploads from localhost and your production domain, you must apply CORS rules to your Storage bucket.
+    
+    *   Ensure `cors.json` exists in your project root.
+    *   Run this command (requires `gsutil` or Google Cloud CLI):
+        ```bash
+        gsutil cors set cors.json gs://<your-bucket-name>
+        ```
+
+5.  **Start the development server:**
     ```bash
     npm run dev
     ```

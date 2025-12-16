@@ -19,7 +19,7 @@ const firebaseConfig = {
 };
 
 // Debug: Check if config is loaded (will show in browser console)
-const missingKeys = Object.entries(firebaseConfig)
+export const missingKeys = Object.entries(firebaseConfig)
   .filter(([key, value]) => !value && key !== 'measurementId')
   .map(([key]) => key);
 
