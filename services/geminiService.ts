@@ -1,8 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
 
-const NANO_BANANA_MODEL = 'gemini-2.5-flash-image';
-const ANALYSIS_MODEL = 'gemini-2.5-flash';
+const NANO_BANANA_MODEL = 'gemini-2.0-flash-exp';
+const ANALYSIS_MODEL = 'gemini-2.0-flash-exp';
 
 interface GenerationContext {
   brandColors: BrandColor[];
@@ -12,7 +12,7 @@ interface GenerationContext {
 
 // Helper to get the client
 const getAiClient = (customKey?: string) => {
-  const key = customKey || import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  const key = (customKey || import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
   if (!key) throw new Error("No API Key available. Please add one in Settings.");
   return new GoogleGenAI({ apiKey: key });
 }
