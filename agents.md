@@ -24,8 +24,8 @@ This project is designed to be worked on by specialized AI agents.
 **Focus:** Business Logic, API Integrations, Data Management.
 - **Authentication:** `authService.ts` (Firebase Auth & User Profile management).
 - **AI Integration:** `geminiService.ts`.
-    - **CRITICAL RULE:** MUST use `gemini-2.5-flash-image` (Nano Banana) for generation and `gemini-2.5-flash` for analysis. 
-    - **NEVER** switch to Imagen 3 or other models. The "Nano Banana" model handles image generation via `generateContent`.
+    - **CRITICAL RULE:** MUST use `gemini-3-pro-image-preview` for generation.
+    - **NEVER** switch to Imagen 3 or other models. This model handles image generation via `generateContent`.
 - **Data Persistence:** 
     - `resourceService.ts` (Fetches unified System + Custom resources with scoping).
     - `historyService.ts` (Manages Generation History with Local/Remote sync).
@@ -46,7 +46,7 @@ This project is designed to be worked on by specialized AI agents.
 - **Language:** TypeScript
 - **Styling:** Tailwind CSS v4 + PostCSS
 - **Backend / BaaS:** Firebase (Auth, Firestore, Storage)
-- **AI Model:** Google Gemini 2.5 Flash (Nano Banana) - STRICTLY ENFORCED
+- **AI Model:** Google Gemini 3 Pro Image Preview - STRICTLY ENFORCED
 - **Icons:** Lucide React
 - **Fonts:** Mona Sans & Inter (Locally hosted)
 

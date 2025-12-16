@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
 
-const NANO_BANANA_MODEL = 'gemini-2.5-flash-image'; // DO NOT CHANGE: Nano Banana is required
+const NANO_BANANA_MODEL = 'gemini-3-pro-image-preview'; // DO NOT CHANGE: Required Model
 const ANALYSIS_MODEL = 'gemini-2.5-flash'; // DO NOT CHANGE
 
 interface GenerationContext {
