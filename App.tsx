@@ -37,7 +37,8 @@ import {
   LogOut,
   User as UserIcon,
   Settings as SettingsIcon,
-  Globe
+  Globe,
+  Github
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -537,6 +538,16 @@ const App: React.FC = () => {
            >
              <HelpCircle size={20} />
            </button>
+           <a
+             href="https://github.com/planetoftheweb/brandoit"
+             target="_blank"
+             rel="noopener noreferrer"
+             className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+             title="View source code on GitHub"
+             aria-label="View source code on GitHub"
+           >
+             <Github size={20} />
+           </a>
            <button 
              onClick={() => setIsDarkMode(!isDarkMode)}
              className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
