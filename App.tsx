@@ -3,7 +3,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
 import { BrandAnalysisModal } from './components/BrandAnalysisModal';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
 import { RecentGenerations } from './components/RecentGenerations';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem, BrandGuidelinesAnalysis } from './types';
@@ -76,7 +76,7 @@ const App: React.FC = () => {
     return true; // Default to dark
   });
   const [isHelpOpen, setIsHelpOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsMode, setSettingsMode] = useState(false);
   const [catalogMode, setCatalogMode] = useState<'style' | 'color' | null>(null);
   
   // Auth State
@@ -352,7 +352,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSaveSettings = async (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }) => {
+  const handleSaveSettings = async (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }, apiKey?: string) => {
     if (!user) return;
     
     // Update local state for immediate feedback
@@ -363,7 +363,8 @@ const App: React.FC = () => {
         photoURL: profileData?.photoURL || user.photoURL,
         preferences: {
             ...user.preferences,
-            settings: newSettings
+            settings: newSettings,
+            geminiApiKey: apiKey !== undefined ? apiKey : user.preferences.geminiApiKey
         }
     };
     setUser(updatedUser);
@@ -477,43 +478,13 @@ const App: React.FC = () => {
                       <div className="p-3 border-b border-gray-200 dark:border-[#30363d]">
                         <button 
                           onClick={() => {
-                            setIsSettingsOpen(true);
+                            setSettingsMode(true);
                             setIsUserMenuOpen(false);
                           }}
                           className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
                         >
-                          <SettingsIcon size={16} /> Preferences
+                          <SettingsIcon size={16} /> Settings
                         </button>
-                      </div>
-                      <div className="p-3 border-b border-gray-200 dark:border-[#30363d]">
-                        <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">
-                          Custom API Key
-                        </label>
-                        <input
-                          type="password"
-                          placeholder="Enter Gemini API Key..."
-                          value={user.preferences.geminiApiKey || ''}
-                          onChange={(e) => {
-                            const newKey = e.target.value;
-                            // Update local state immediately for UI responsiveness
-                            const updatedUser = { 
-                              ...user, 
-                              preferences: { ...user.preferences, geminiApiKey: newKey } 
-                            };
-                            setUser(updatedUser);
-                          }}
-                          onBlur={(e) => {
-                             // Save to Firestore when user clicks away
-                             authService.updateUserPreferences(user.id, {
-                               ...user.preferences,
-                               geminiApiKey: e.target.value
-                             });
-                          }}
-                          className="w-full text-xs p-2 rounded border border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] text-slate-900 dark:text-white focus:ring-1 focus:ring-brand-teal"
-                        />
-                        <p className="text-[10px] text-slate-400 mt-1">
-                          Using your own key removes rate limits.
-                        </p>
                       </div>
                       <button 
                         onClick={handleLogout}
@@ -568,7 +539,17 @@ const App: React.FC = () => {
       </header>
 
       {/* 2. Content Switching */}
-      {catalogMode ? (
+      {settingsMode ? (
+        user && (
+          <SettingsPage
+            onBack={() => setSettingsMode(false)}
+            user={user}
+            onSave={handleSaveSettings}
+            graphicTypes={graphicTypes}
+            aspectRatios={aspectRatios}
+          />
+        )
+      ) : catalogMode ? (
         <CatalogPage 
           category={catalogMode}
           onBack={() => setCatalogMode(null)}
@@ -656,18 +637,6 @@ const App: React.FC = () => {
         analysisResult={analysisResult}
         onConfirm={handleConfirmAnalysis}
       />
-
-      {/* Settings Modal */}
-      {user && (
-        <SettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-          user={user}
-          onSave={handleSaveSettings}
-          graphicTypes={graphicTypes}
-          aspectRatios={aspectRatios}
-        />
-      )}
 
       {/* Catalog Modal Removed */}
 
