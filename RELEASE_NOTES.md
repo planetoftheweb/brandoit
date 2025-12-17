@@ -13,3 +13,7 @@
 - Core UI: ControlPanel for type/style/colors/aspect, recent generations gallery, large image preview, auth, and settings.
 - BYOK for Gemini, teams/catalog/resource management, and normalized Firestore structure.
 
+## 0.0.1
+- First public version of BranDoIt.
+- Basic Gemini image generation, prompt entry, and initial project scaffold.
+
