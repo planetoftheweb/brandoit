@@ -71,35 +71,21 @@ export const historyService = {
 
   saveToRemote: async (userId: string, item: GenerationHistoryItem) => {
     try {
-      // Upload image to Firebase Storage instead of storing base64 in Firestore
-      // This avoids the 1MB Firestore document limit
-      const imageRef = ref(storage, `users/${userId}/history/${item.id}.${item.mimeType.split('/')[1] || 'png'}`);
-      
-      // Upload base64 data (remove data URL prefix if present)
-      const base64Data = item.base64Data.includes(',') 
-        ? item.base64Data.split(',')[1] 
-        : item.base64Data;
-      
-      await uploadString(imageRef, base64Data, 'base64', {
-        contentType: item.mimeType
-      });
+      const historyRef = collection(db, "users", userId, "history");
 
-      // Get the download URL
+      // Upload image to Firebase Storage to avoid Firestore document size limits
+      const imageRef = ref(storage, `users/${userId}/history/${item.id}.${item.mimeType.split('/')[1] || 'png'}`);
+      const base64Data = item.base64Data.includes(',') ? item.base64Data.split(',')[1] : item.base64Data;
+      await uploadString(imageRef, base64Data, 'base64', { contentType: item.mimeType });
       const imageUrl = await getDownloadURL(imageRef);
 
-      // Save to Firestore with Storage URL instead of base64
-      const historyRef = collection(db, "users", userId, "history");
-      const historyDoc = {
+      await setDoc(doc(historyRef, item.id), {
         id: item.id,
         timestamp: item.timestamp,
         config: item.config,
-        imageUrl: imageUrl, // Storage URL
-        mimeType: item.mimeType,
-        // Don't store base64Data - it's in Storage now
-        // base64Data is kept for backward compatibility with existing items
-      };
-      
-      await setDoc(doc(historyRef, item.id), historyDoc);
+        imageUrl,
+        mimeType: item.mimeType
+      });
 
       // Cleanup old items to enforce limit
       const q = query(historyRef, orderBy("timestamp", "desc"));
@@ -109,22 +95,15 @@ export const historyService = {
         const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
         const deletePromises = itemsToDelete.map(async (d) => {
           const data = d.data();
-          // Delete from Firestore
           await deleteDoc(doc(db, "users", userId, "history", d.id));
-          // Also delete from Storage if it has a storage URL
           if (data.imageUrl && data.imageUrl.includes('firebasestorage.googleapis.com')) {
             try {
-              // Extract the path from the URL or use a pattern
-              // Storage URLs are like: https://firebasestorage.googleapis.com/v0/b/.../o/users%2F...%2Fhistory%2F...
-              // We need to decode and construct the ref
               const urlPath = decodeURIComponent(data.imageUrl.split('/o/')[1]?.split('?')[0] || '');
               if (urlPath) {
-                const storageRef = ref(storage, urlPath);
-                await deleteObject(storageRef);
+                await deleteObject(ref(storage, urlPath));
               }
             } catch (storageError) {
               console.warn("Failed to delete old image from Storage:", storageError);
-              // Continue even if Storage delete fails
             }
           }
         });
@@ -133,7 +112,6 @@ export const historyService = {
 
     } catch (e) {
       console.error("Failed to save to remote history:", e);
-      // Fallback to local if remote fails
       historyService.saveToLocal(item);
     }
   },
@@ -144,18 +122,17 @@ export const historyService = {
       const snapshot = await getDocs(query(collection(db, "users", userId, "history")));
       const target = snapshot.docs.find(d => d.id === historyId);
       const data = target?.data();
-      // Delete Firestore doc
+
       await deleteDoc(historyDocRef);
-      // Delete storage asset if present
+
       if (data && data.imageUrl && data.imageUrl.includes('firebasestorage.googleapis.com')) {
         try {
           const urlPath = decodeURIComponent(data.imageUrl.split('/o/')[1]?.split('?')[0] || '');
           if (urlPath) {
-            const storageRef = ref(storage, urlPath);
-            await deleteObject(storageRef);
+            await deleteObject(ref(storage, urlPath));
           }
-        } catch (e) {
-          console.warn("Failed to delete history image from Storage:", e);
+        } catch (err) {
+          console.warn("Failed to delete history image from Storage:", err);
         }
       }
     } catch (e) {
@@ -181,15 +158,10 @@ export const historyService = {
       
       return snapshot.docs.map(doc => {
         const data = doc.data();
-        // If it has base64Data (old format), use it
-        // Otherwise, use the Storage URL (new format)
-        // For display, we always use imageUrl
         return {
           ...data,
-          id: doc.id, // Use Firestore ID
-          imageUrl: data.imageUrl || '', // Storage URL or old base64 data URL
-          // Keep base64Data if it exists (for backward compatibility)
-          // New items won't have it, which is fine - we use imageUrl
+          id: doc.id,
+          imageUrl: data.imageUrl || ''
         } as GenerationHistoryItem;
       });
     } catch (e) {

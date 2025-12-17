@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GeneratedImage } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Trash2 } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2 } from 'lucide-react';
 
 interface ImageDisplayProps {
   image: GeneratedImage | null;
@@ -18,6 +18,25 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onDelete
 }) => {
   const [refinementInput, setRefinementInput] = useState('');
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [noticeTimer, setNoticeTimer] = useState<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimer) {
+        window.clearTimeout(noticeTimer);
+      }
+    };
+  }, [noticeTimer]);
+
+  const showNotice = (msg: string) => {
+    if (noticeTimer) {
+      window.clearTimeout(noticeTimer);
+    }
+    setCopyNotice(msg);
+    const timer = window.setTimeout(() => setCopyNotice(null), 2000);
+    setNoticeTimer(timer);
+  };
 
   const handleDownload = () => {
     if (!image) return;
@@ -27,6 +46,59 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleCopyImageUrl = async () => {
+    if (!image) return;
+    try {
+      await navigator.clipboard.writeText(image.imageUrl);
+      showNotice('Image URL copied');
+    } catch (err) {
+      console.error('Failed to copy image URL:', err);
+    }
+  };
+
+  const handleCopyImageToClipboard = async () => {
+    if (!image) return;
+    try {
+      const response = await fetch(image.imageUrl, { mode: 'cors' });
+      const blob = await response.blob();
+      if (navigator.clipboard && 'write' in navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+        showNotice('Image copied');
+      } else {
+        await navigator.clipboard.writeText(image.imageUrl);
+        showNotice('Image URL copied');
+      }
+    } catch (err) {
+      console.error('Failed to copy image to clipboard:', err);
+      // Fallback: copy URL and inform user about possible CORS/browser limitation
+      try {
+        await navigator.clipboard.writeText(image.imageUrl);
+        showNotice('Copied image URL (image copy blocked by browser/CORS)');
+      } catch {
+        showNotice('Copy failed (browser/CORS permissions)');
+      }
+    }
+  };
+
+  const handleCopyPrompt = () => {
+    if (onCopy) {
+      onCopy();
+      showNotice('Prompt copied');
+    }
+  };
+
+  const handleDownloadWithNotice = () => {
+    handleDownload();
+    showNotice('Download started');
+  };
+
+  const handleDeleteWithNotice = () => {
+    if (onDelete) {
+      onDelete();
+      showNotice('Image removed');
+    }
   };
 
   const handleRefineSubmit = (e: React.FormEvent) => {
@@ -64,10 +136,10 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
               className="max-w-full max-h-[70vh] object-contain block rounded-lg"
             />
             
-            <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-4 right-4 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
               {onCopy && (
                 <button 
-                  onClick={onCopy}
+                  onClick={handleCopyPrompt}
                   className="group/copy bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 p-3 rounded-xl shadow-lg hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative"
                   title="Copy prompt"
                 >
@@ -78,7 +150,27 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
                 </button>
               )}
               <button 
-                onClick={handleDownload}
+                onClick={handleCopyImageToClipboard}
+                className="group/copyimg bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 p-3 rounded-xl shadow-lg hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative"
+                title="Copy image to clipboard"
+              >
+                <ImageIcon size={18} />
+                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
+                  Copy image
+                </span>
+              </button>
+              <button 
+                onClick={handleCopyImageUrl}
+                className="group/copyimg bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 p-3 rounded-xl shadow-lg hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative"
+                title="Copy image URL"
+              >
+                <Link size={18} />
+                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
+                  Copy image URL
+                </span>
+              </button>
+              <button 
+                onClick={handleDownloadWithNotice}
                 className="group/download bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 p-3 rounded-xl shadow-lg hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative"
                 title="Download Image"
               >
@@ -89,7 +181,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
               </button>
               {onDelete && (
                 <button 
-                  onClick={onDelete}
+                  onClick={handleDeleteWithNotice}
                   className="group/delete bg-white/85 dark:bg-[#2b1c1c]/85 border border-red-200/80 dark:border-red-900/40 text-red-600 dark:text-red-200 p-3 rounded-xl shadow-lg hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative"
                   title="Delete"
                 >
@@ -103,6 +195,14 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
           </div>
         </div>
       </div>
+
+      {copyNotice && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+          <div className="bg-brand-red text-white text-base px-6 py-4 rounded-2xl shadow-2xl border border-brand-red/70 animate-in fade-in duration-150" role="status" aria-live="polite">
+            {copyNotice}
+          </div>
+        </div>
+      )}
 
       {/* Refinement Bar */}
       <div className="w-full flex justify-center pb-8 px-4 pointer-events-none">

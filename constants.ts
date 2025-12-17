@@ -88,7 +88,7 @@ export interface ModelConfig {
   name: string;
   provider: string;
   description: string;
-  defaultModel?: string; // For providers that need a model ID
+  defaultModel?: string;
 }
 
 export const SUPPORTED_MODELS: ModelConfig[] = [
@@ -96,15 +96,14 @@ export const SUPPORTED_MODELS: ModelConfig[] = [
     id: 'gemini',
     name: 'Google Gemini',
     provider: 'google',
-    description: 'Google\'s Gemini models for image generation and analysis',
+    description: "Google's Gemini models for image generation and analysis",
     defaultModel: 'gemini-3-pro-image-preview'
   },
-  // Add more models here as needed
   {
     id: 'openai',
     name: 'OpenAI DALL-E',
     provider: 'openai',
-    description: 'OpenAI\'s DALL-E for image generation',
+    description: "OpenAI's DALL-E for image generation",
     defaultModel: 'dall-e-3'
   }
 ];

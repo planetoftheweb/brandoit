@@ -133,31 +133,6 @@ const App: React.FC = () => {
     }));
   };
 
-  const executeDeleteHistory = async (historyId: string) => {
-    if (user) {
-      await historyService.deleteFromRemote(user.id, historyId);
-      const updatedHistory = await historyService.getHistory(user);
-      setHistory(updatedHistory);
-    } else {
-      historyService.deleteFromLocal(historyId);
-      const updatedHistory = historyService.getFromLocal();
-      setHistory(updatedHistory);
-    }
-  };
-
-  const requestDeleteHistory = (historyId: string) => {
-    const needConfirm = user?.preferences?.settings?.confirmDeleteHistory ?? true;
-    if (needConfirm) {
-      setSkipFutureConfirm(false);
-      setConfirmDeleteModal({ type: 'history', id: historyId });
-    } else {
-      executeDeleteHistory(historyId).catch((err) => {
-        console.error("Failed to delete history item:", err);
-        setError(err.message || "Failed to delete history item.");
-      });
-    }
-  };
-
   useEffect(() => {
     if (user?.username === 'planetoftheweb') {
        // Seed structures only if admin is logged in
@@ -186,7 +161,6 @@ const App: React.FC = () => {
         setUser(restoredUser);
         // Load history for restored user
         const updatedHistory = await historyService.getHistory(restoredUser);
-        console.log('Loaded history on auth state change:', updatedHistory.length, 'items');
         setHistory(updatedHistory);
       } else {
         setUser(null);
@@ -203,16 +177,17 @@ const App: React.FC = () => {
       // Only sync settings/API keys now. Custom items are saved directly via resourceService.
       // This runs when preferences change, not on every user load
       authService.updateUserPreferences(user.id, {
-        geminiApiKey: user.preferences.geminiApiKey, // Legacy support
+        geminiApiKey: user.preferences.geminiApiKey,
         apiKeys: user.preferences.apiKeys,
         selectedModel: user.preferences.selectedModel,
+        systemPrompt: user.preferences.systemPrompt,
         settings: user.preferences.settings
       }).catch(err => {
         // Silently fail if it's just a sync issue (not a critical error)
         console.warn("Failed to sync preferences:", err);
       });
     }
-  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel]); // Only trigger on actual preference changes, not user object changes
+  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt]); // Only trigger on actual preference changes, not user object changes
 
   const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
@@ -236,48 +211,41 @@ const App: React.FC = () => {
   // Grouped context for easier passing
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
 
-  // Helper to get the active API key based on selected model
+  // Helper to get active API key based on selected model (with legacy fallback)
   const getActiveApiKey = (): string | undefined => {
     if (!user) return undefined;
     const selectedModel = user.preferences.selectedModel || 'gemini';
-    // Check new apiKeys structure first
     if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
       return user.preferences.apiKeys[selectedModel];
     }
-    // Fallback to legacy geminiApiKey for backward compatibility
     if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
       return user.preferences.geminiApiKey;
     }
     return undefined;
   };
 
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    setError(null);
-    try {
-      const customKey = getActiveApiKey();
-      const result = await generateGraphic(config, context, customKey);
-      setGeneratedImage(result);
-
-      // Save to history
-      const historyItem: GenerationHistoryItem = {
-        ...result,
-        id: `gen-${Date.now()}`,
-        timestamp: Date.now(),
-        config: { ...config }
-      };
-      
-      await historyService.saveToHistory(user, historyItem);
-      
-      // Refresh history list
+  const executeDeleteHistory = async (historyId: string) => {
+    if (user) {
+      await historyService.deleteFromRemote(user.id, historyId);
       const updatedHistory = await historyService.getHistory(user);
-      console.log('Refreshed history after generation:', updatedHistory.length, 'items');
       setHistory(updatedHistory);
+    } else {
+      historyService.deleteFromLocal(historyId);
+      const updatedHistory = historyService.getFromLocal();
+      setHistory(updatedHistory);
+    }
+  };
 
-    } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
-    } finally {
-      setIsGenerating(false);
+  const requestDeleteHistory = (historyId: string) => {
+    const needConfirm = user?.preferences?.settings?.confirmDeleteHistory ?? true;
+    if (needConfirm) {
+      setSkipFutureConfirm(false);
+      setConfirmDeleteModal({ type: 'history', id: historyId });
+    } else {
+      executeDeleteHistory(historyId).catch((err) => {
+        console.error("Failed to delete history item:", err);
+        setError(err.message || "Failed to delete history item.");
+      });
     }
   };
 
@@ -343,15 +311,7 @@ const App: React.FC = () => {
     if (!generatedImage) return;
     const historyId = (generatedImage as any).id;
     if (historyId) {
-      if (user) {
-        await historyService.deleteFromRemote(user.id, historyId);
-        const updatedHistory = await historyService.getHistory(user);
-        setHistory(updatedHistory);
-      } else {
-        historyService.deleteFromLocal(historyId);
-        const updatedHistory = historyService.getFromLocal();
-        setHistory(updatedHistory);
-      }
+      await executeDeleteHistory(historyId);
     }
     setGeneratedImage(null);
   };
@@ -416,6 +376,35 @@ const App: React.FC = () => {
     setSkipFutureConfirm(false);
   };
 
+  const handleGenerate = async () => {
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const customKey = getActiveApiKey();
+      const result = await generateGraphic(config, context, customKey, user?.preferences.systemPrompt);
+      setGeneratedImage(result);
+
+      // Save to history
+      const historyItem: GenerationHistoryItem = {
+        ...result,
+        id: `gen-${Date.now()}`,
+        timestamp: Date.now(),
+        config: { ...config }
+      };
+      
+      await historyService.saveToHistory(user, historyItem);
+      
+      // Refresh history list
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+
+    } catch (err: any) {
+      setError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const handleRefine = async (refinementText: string) => {
     if (!generatedImage) return;
 
@@ -423,7 +412,7 @@ const App: React.FC = () => {
     setError(null);
     try {
       const customKey = getActiveApiKey();
-      const result = await refineGraphic(generatedImage, refinementText, config, context, customKey);
+      const result = await refineGraphic(generatedImage, refinementText, config, context, customKey, user?.preferences.systemPrompt);
       setGeneratedImage(result);
       
       // Save refined version to history too? Or update existing? Let's save as new for now.
@@ -455,7 +444,7 @@ const App: React.FC = () => {
     setError(null);
     try {
       const customKey = getActiveApiKey();
-      const result = await analyzeBrandGuidelines(file, customKey);
+      const result = await analyzeBrandGuidelines(file, customKey, user?.preferences.systemPrompt);
       setAnalysisResult(result);
       setIsAnalysisModalOpen(true);
     } catch (err: any) {
@@ -532,7 +521,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSaveSettings = async (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }, apiKey?: string) => {
+  const handleSaveSettings = async (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }, apiKey?: string, systemPrompt?: string) => {
     if (!user) return;
     
     // Update local state for immediate feedback
@@ -546,7 +535,7 @@ const App: React.FC = () => {
             settings: newSettings,
             // Keep legacy geminiApiKey for backward compatibility if provided
             geminiApiKey: apiKey !== undefined ? apiKey : user.preferences.geminiApiKey,
-            // apiKeys and selectedModel are already updated by SettingsPage's auto-save
+            systemPrompt: systemPrompt !== undefined ? systemPrompt : user.preferences.systemPrompt
         }
     };
     setUser(updatedUser);
@@ -844,6 +833,52 @@ const App: React.FC = () => {
 
       {/* Catalog Modal Removed */}
 
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-200 flex items-center justify-center">
+                <AlertCircle size={20} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {confirmDeleteModal.type === 'history' ? 'Delete generation?' : 'Delete current preview?'}
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+                  This action will remove the generation{confirmDeleteModal.type === 'current' ? ' and clear the main preview' : ''}.
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={skipFutureConfirm}
+                onChange={(e) => setSkipFutureConfirm(e.target.checked)}
+                className="h-4 w-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
+              />
+              Don’t ask me again for this action
+            </label>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={handleCancelDeleteModal}
+                className="px-4 py-2 rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDeleteModal}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm transition"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Help Modal */}
       {isHelpOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -926,52 +961,6 @@ const App: React.FC = () => {
                 className="px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm shadow-lg shadow-brand-red/20"
               >
                 Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {confirmDeleteModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-200 flex items-center justify-center">
-                <AlertCircle size={20} />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-                  {confirmDeleteModal.type === 'history' ? 'Delete generation?' : 'Delete current preview?'}
-                </h3>
-                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
-                  This action will remove the generation{confirmDeleteModal.type === 'current' ? ' and clear the main preview' : ''}.
-                </p>
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={skipFutureConfirm}
-                onChange={(e) => setSkipFutureConfirm(e.target.checked)}
-                className="h-4 w-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
-              />
-              Don’t ask me again for this action
-            </label>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                onClick={handleCancelDeleteModal}
-                className="px-4 py-2 rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDeleteModal}
-                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm transition"
-              >
-                Delete
               </button>
             </div>
           </div>

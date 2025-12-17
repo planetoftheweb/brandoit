@@ -21,6 +21,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
 *   **⚙️ Full Settings Management:** dedicated page for managing API keys, profile settings, and application preferences.
 *   **🔑 BYOK (Bring Your Own Key):** Securely manage your own Google Gemini API Keys for multiple models.
+*   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore).
 
 ## Tech Stack
 

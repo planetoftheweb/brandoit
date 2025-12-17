@@ -59,11 +59,12 @@ export interface BrandGuidelinesAnalysis {
 
 export interface UserPreferences {
   // References only, actual data stored in resource collections
-  geminiApiKey?: string; // Legacy support - will be migrated to apiKeys
+  geminiApiKey?: string; // Legacy support
   apiKeys?: {
-    [modelId: string]: string; // e.g., { "gemini-3-pro-image-preview": "key123", "openai-gpt-4": "key456" }
+    [modelId: string]: string;
   };
-  selectedModel?: string; // The currently selected model ID
+  selectedModel?: string;
+  systemPrompt?: string;
   settings?: UserSettings; 
 }
 

@@ -9,7 +9,7 @@ import { SUPPORTED_MODELS } from '../constants';
 interface SettingsPageProps {
   onBack: () => void;
   user: User;
-  onSave: (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }, apiKey?: string) => void;
+  onSave: (newSettings: UserSettings, profileData?: { name: string; username: string; photoURL?: string }, apiKey?: string, systemPrompt?: string) => void;
   graphicTypes: GraphicType[];
   aspectRatios: AspectRatioOption[];
 }
@@ -21,24 +21,22 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   graphicTypes,
   aspectRatios
 }) => {
-  const [localSettings, setLocalSettings] = useState<UserSettings>(user.preferences.settings || { contributeByDefault: false });
+  const [localSettings, setLocalSettings] = useState<UserSettings>(user.preferences.settings || { contributeByDefault: false, confirmDeleteHistory: true, confirmDeleteCurrent: true });
   const [name, setName] = useState(user.name);
   const [username, setUsername] = useState(user.username || '');
   const [photoURL, setPhotoURL] = useState<string | undefined>(user.photoURL);
-  // Support both legacy geminiApiKey and new apiKeys structure
   const [apiKeys, setApiKeys] = useState<{ [key: string]: string }>(() => {
     const keys: { [key: string]: string } = {};
-    // Migrate legacy geminiApiKey to new structure
     if (user.preferences.geminiApiKey) {
       keys['gemini'] = user.preferences.geminiApiKey;
     }
-    // Load from new apiKeys structure
     if (user.preferences.apiKeys) {
       Object.assign(keys, user.preferences.apiKeys);
     }
     return keys;
   });
   const [selectedModel, setSelectedModel] = useState<string>(user.preferences.selectedModel || 'gemini');
+  const [systemPrompt, setSystemPrompt] = useState<string>(user.preferences.systemPrompt || '');
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -58,16 +56,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setName(user.name);
     setUsername(user.username || '');
     setPhotoURL(user.photoURL);
-    // Update API keys from user preferences
     const keys: { [key: string]: string } = {};
-    if (user.preferences.geminiApiKey) {
-      keys['gemini'] = user.preferences.geminiApiKey;
-    }
-    if (user.preferences.apiKeys) {
-      Object.assign(keys, user.preferences.apiKeys);
-    }
+    if (user.preferences.geminiApiKey) keys['gemini'] = user.preferences.geminiApiKey;
+    if (user.preferences.apiKeys) Object.assign(keys, user.preferences.apiKeys);
     setApiKeys(keys);
     setSelectedModel(user.preferences.selectedModel || 'gemini');
+    setSystemPrompt(user.preferences.systemPrompt || '');
     loadTeams();
   }, [user]);
 
@@ -86,13 +80,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         ...user.preferences,
         apiKeys: apiKeys,
         selectedModel: selectedModel,
-        // Keep legacy geminiApiKey for backward compatibility (use gemini key if exists)
-        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey
+        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
+        systemPrompt
       });
       
-      // Pass the selected model's API key for backward compatibility
       const selectedApiKey = apiKeys[selectedModel] || '';
-      onSave(localSettings, { name, username, photoURL }, selectedApiKey);
+      onSave(localSettings, { name, username, photoURL }, selectedApiKey, systemPrompt);
       
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -108,13 +101,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   };
 
   const handleApiKeyBlur = async (modelId: string) => {
-    // Auto-save on blur
     try {
       await authService.updateUserPreferences(user.id, {
         ...user.preferences,
         apiKeys: apiKeys,
         selectedModel: selectedModel,
-        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey
+        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
+        systemPrompt
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
@@ -209,7 +202,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   value={selectedModel}
                   onChange={(e) => {
                     setSelectedModel(e.target.value);
-                    // Auto-save model selection
                     authService.updateUserPreferences(user.id, {
                       ...user.preferences,
                       selectedModel: e.target.value,
@@ -256,6 +248,22 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 ))}
                 <p className="text-xs text-slate-500 mt-2">
                   API keys are stored securely and only used for your requests. You can configure multiple models and switch between them.
+                </p>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-[#30363d]">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  System Prompt (applied to generations)
+                </label>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  rows={3}
+                  className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                  placeholder="Optional instruction sent with every generation/refinement (e.g., brand voice, safety constraints)."
+                />
+                <p className="text-xs text-slate-500">
+                  This text is prepended as a system instruction to generation, refinement, and brand analysis requests.
                 </p>
               </div>
             </div>

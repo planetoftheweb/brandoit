@@ -1,6 +1,6 @@
 import React from 'react';
-import { GenerationHistoryItem, GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download } from 'lucide-react';
+import { GenerationHistoryItem, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon } from 'lucide-react';
 import { describeImagePrompt } from '../services/geminiService';
 
 interface RecentGenerationsProps {
@@ -22,15 +22,21 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   options
 }) => {
   const [copyLoadingId, setCopyLoadingId] = React.useState<string | null>(null);
-  // Debug: Log history to console
+  const [toastMessage, setToastMessage] = React.useState<string | null>(null);
+  const toastTimerRef = React.useRef<number | null>(null);
+
   React.useEffect(() => {
-    console.log('RecentGenerations: history array length:', history.length);
     if (history.length > 0) {
-      console.log('RecentGenerations: first item:', history[0]);
+      console.log('RecentGenerations: history length', history.length);
     }
+
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
   }, [history]);
 
-  // Hide section entirely when no history
   if (history.length === 0) return null;
 
   const getLabel = (id: string, list: any[]) => {
@@ -79,6 +85,36 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return { base64, mime };
   };
 
+  const copyImageToClipboard = async (url: string) => {
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      const blob = await res.blob();
+      if (navigator.clipboard && 'write' in navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+        showToast('Image copied');
+      } else {
+        await navigator.clipboard.writeText(url);
+        showToast('Image URL copied');
+      }
+    } catch (err) {
+      console.error('Copy image to clipboard failed', err);
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('Copied image URL (image copy blocked by browser/CORS)');
+      } catch {
+        showToast('Copy failed (browser/CORS permissions)');
+      }
+    }
+  };
+
+  const showToast = (msg: string) => {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToastMessage(msg);
+    toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 1800);
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 md:px-6 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 border-t border-gray-200 dark:border-[#30363d] mt-8">
       <div className="flex items-center justify-between mb-4">
@@ -97,8 +133,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             key={item.id} 
             className="group relative bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-visible shadow-sm hover:shadow-lg hover:border-brand-teal dark:hover:border-brand-teal transition-all"
           >
-            {/* Top-right actions */}
-            <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+            <div className="absolute top-2 right-2 z-10 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -108,6 +143,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   document.body.appendChild(link);
                   link.click();
                   document.body.removeChild(link);
+                  showToast('Download started');
                 }}
                 className="group/download relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                 aria-label="Download"
@@ -118,11 +154,37 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </span>
               </button>
               <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyImageToClipboard(item.imageUrl);
+                }}
+                className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                aria-label="Copy image to clipboard"
+              >
+                <ImageIcon size={16} />
+                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
+                  Copy image
+                </span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(item.imageUrl).catch(err => console.error('Copy image URL failed', err));
+                  showToast('Image URL copied');
+                }}
+                className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                aria-label="Copy image URL"
+              >
+                <Link size={16} />
+                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
+                  Copy image URL
+                </span>
+              </button>
+              <button
                 onClick={async (e) => {
                   e.stopPropagation();
                   try {
                     setCopyLoadingId(item.id);
-                    // Try to get a richer prompt from the image
                     let imageDescription = '';
                     try {
                       const { base64, mime } = await fetchImageAsBase64(item.imageUrl);
@@ -136,10 +198,11 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       ? `${structured}\n\nImage-Based Prompt: ${imageDescription}`
                       : structured;
                     await navigator.clipboard.writeText(finalText);
+                    showToast('Prompt copied');
                   } catch (err) {
-                    // Fallback to structured prompt
                     const structured = buildFullPrompt(item);
                     await navigator.clipboard.writeText(structured);
+                    showToast('Prompt copied');
                   } finally {
                     setCopyLoadingId(null);
                   }
@@ -160,6 +223,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete(item.id);
+                  showToast('Generation removed');
                 }}
                 className="group/delete relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                 aria-label="Delete"
@@ -171,7 +235,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </button>
             </div>
 
-            {/* Thumbnail */}
             <div className="aspect-square w-full relative bg-gray-100 dark:bg-[#0d1117] overflow-hidden rounded-xl">
               <img 
                 src={item.imageUrl} 
@@ -179,7 +242,10 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
               />
               <button
-                onClick={() => onSelect(item)}
+                onClick={() => {
+                  onSelect(item);
+                  showToast('Restored');
+                }}
                 className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"
                 aria-label="Restore generation"
               >
@@ -189,7 +255,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </button>
             </div>
 
-            {/* Info */}
             <div className="p-3 pt-4">
               <p className="text-xs font-medium text-slate-900 dark:text-white line-clamp-2 mb-2 h-8 leading-relaxed">
                 {item.config.prompt}
@@ -211,6 +276,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           </div>
         ))}
       </div>
+
+      {toastMessage && (
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center">
+          <div className="bg-brand-red text-white text-sm px-4 py-3 rounded-lg shadow-2xl border border-brand-red/70 animate-in fade-in duration-150" role="status" aria-live="polite">
+            {toastMessage}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

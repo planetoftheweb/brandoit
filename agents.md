@@ -24,7 +24,7 @@ This project is designed to be worked on by specialized AI agents.
 **Focus:** Business Logic, API Integrations, Data Management.
 - **Authentication:** `authService.ts` (Firebase Auth & User Profile management).
 - **AI Integration:** `geminiService.ts`.
-    - **Image Generation:** MUST use `gemini-3-pro-image-preview`.
+    - **Image Generation:** MUST use `gemini-3-pro-image-preview` for Gemini and `gpt-5` for OpenAI.
     - **Text/Analysis:** Use `gemini-2.5-flash` for brand analysis and prompt expansion.
     - **Multi-Model Support:** Architecture supports different API keys for different models via User Preferences.
 - **Data Persistence:** 
@@ -34,6 +34,7 @@ This project is designed to be worked on by specialized AI agents.
     - `catalogService.ts` (Reads public resources for the community view).
 - **File Management:** `imageService.ts` (Firebase Storage uploads).
 - **Database Structure:** `structureSeeder.ts` (Admin-only seeding of default assets).
+- **Security Check:** Always verify Firestore Security Rules when modifying collection access patterns. Ensure `users/{userId}` allows read/write for the authenticated owner.
 
 ### 3. DevOps Agent
 **Focus:** Build, Deployment, Configuration.
@@ -71,3 +72,4 @@ The project uses a **Normalized Database Structure** in Firestore to allow effic
 3.  **Security:** Respect Firestore Security Rules. User operations must be scoped to their `auth.uid`.
 4.  **Types:** Update `types.ts` immediately when data structures change.
 5.  **Rules Sharing:** When providing Firestore/Storage security rules, do **not** create files—respond with copyable code blocks only.
+6.  **Testing Permissions:** When changing data fetch logic, verify corresponding Firestore Rules. Use the "Configuration Error" or console logs to identify `Missing Permissions` errors early.
