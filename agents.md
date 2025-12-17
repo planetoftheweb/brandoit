@@ -20,6 +20,7 @@ This project is designed to be worked on by specialized AI agents.
 - Handles user interactions and visual feedback (loading states, toasts, modals).
 - **Configuration Safety:** Implements a "Configuration Error" screen in `App.tsx` to block app usage if critical `.env` variables are missing.
 - **Toolbar Consistency:** Model selector and toolbar dropdowns use the same fancy button/dropdown styling (teal labels, hover overlays, responsive text hiding) for a consistent UX.
+- **Model Labels & Overlays:** Support customizable per-model labels (e.g., GPT Image, Nano Banana) applied across toolbar, previews, and history tags, with full prompt/model/timestamp overlays on large previews.
 
 ### 2. Service Agent
 **Focus:** Business Logic, API Integrations, Data Management.

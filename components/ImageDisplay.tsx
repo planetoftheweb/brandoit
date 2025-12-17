@@ -173,7 +173,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
             />
           {/* Info overlay on hover */}
           <div className="absolute left-4 bottom-4 opacity-0 group-hover:opacity-100 transition-opacity">
-            <div className="bg-black/75 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-2 flex-wrap max-w-[360px]">
+            <div className="bg-black/75 text-white px-3.5 py-2.5 rounded-lg text-base flex items-start gap-2 flex-wrap max-w-[520px]">
               {(() => {
                 const cfg = image.config;
                 const val = getLabel(cfg?.graphicTypeId, options.graphicTypes);
@@ -225,6 +225,11 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
                   </span>
                 );
               })()}
+              {image.config?.prompt && (
+                <span className="inline-flex px-3 py-1.5 rounded text-sm font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100 max-w-full break-words whitespace-normal">
+                  {image.config.prompt}
+                </span>
+              )}
             </div>
           </div>
             

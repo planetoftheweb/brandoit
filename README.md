@@ -20,8 +20,8 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **✨ Prompt Expansion:** One-click prompt enhancement using AI to generate detailed visual descriptions from simple text.
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
 *   **⚙️ Full Settings Management:** dedicated page for managing API keys, profile settings, and application preferences.
-*   **🔑 BYOK (Bring Your Own Key):** Securely manage your own Google Gemini API Keys for multiple models.
-*   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore).
+*   **🔑 BYOK (Bring Your Own Key):** Multi-model keys for Google Gemini and OpenAI GPT-Image 1.5 with per-model labels you can customize in settings.
+*   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore). Overlays show model, prompt, tags, and timestamps.
 
 ## Tech Stack
 
@@ -31,7 +31,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   **Authentication:** Email/Password & Profile Management
     *   **Firestore:** Real-time NoSQL Database (Normalized Structure)
     *   **Storage:** Profile photos & Asset storage
-*   **AI:** Google Gemini API (`gemini-2.0-flash`)
+*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-2.5-flash`) and OpenAI GPT-Image 1.5
 *   **Icons:** Lucide React
 *   **Font:** Mona Sans & Inter
 
