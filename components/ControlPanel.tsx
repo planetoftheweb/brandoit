@@ -519,7 +519,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
         <div className="flex flex-col flex-1 min-w-0">
           <span className="text-[11px] uppercase font-bold text-brand-teal leading-none mb-0.5 hidden sm:block">{subLabel}</span>
-          <span className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{label}</span>
+          <span className="truncate text-base font-semibold text-brand-teal">{label}</span>
           {colors && colors.length > 0 && (
              <div className="flex h-1 mt-1 rounded-sm overflow-hidden ring-1 ring-black/5 dark:ring-white/10 opacity-80">
                {colors.map((hex: string, i: number) => (
@@ -537,6 +537,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const currentStyle = options.visualStyles.find(s => s.id === config.visualStyleId);
   const currentColor = options.brandColors.find(c => c.id === config.colorSchemeId);
   const currentRatio = options.aspectRatios.find(r => r.value === config.aspectRatio);
+  const modelLabelMap: Record<string, string> = {
+    gemini: 'Nano Banana',
+    openai: 'GPT Image'
+  };
+  const modelLabel =
+    user?.preferences.modelLabels?.[selectedModel] ||
+    modelLabelMap[selectedModel] ||
+    SUPPORTED_MODELS.find(m => m.id === selectedModel)?.name ||
+    'Model';
 
   const inputClass = "w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg p-3.5 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600";
   const labelClass = "block text-xs md:text-sm font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1";
@@ -716,7 +725,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               <DropdownButton 
                 icon={Sparkles} 
                 subLabel="Model" 
-                label={SUPPORTED_MODELS.find(m => m.id === selectedModel)?.name || 'Select'} 
+                label={modelLabel} 
                 isActive={activeDropdown === 'model'} 
                 onClick={() => toggleDropdown('model')} 
               />
@@ -733,7 +742,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     >
                       <Sparkles size={14} className="text-brand-teal" />
                       <div className="flex flex-col">
-                        <span className="font-medium">{model.name}</span>
+                        <span className="font-medium">{user?.preferences.modelLabels?.[model.id] || modelLabelMap[model.id] || model.name}</span>
                         <span className="text-xs text-slate-500 dark:text-slate-400">{model.description}</span>
                       </div>
                     </button>

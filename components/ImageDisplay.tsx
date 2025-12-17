@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { GeneratedImage } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2 } from 'lucide-react';
+import { GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, Sparkles } from 'lucide-react';
 
 interface ImageDisplayProps {
   image: GeneratedImage | null;
@@ -8,6 +8,12 @@ interface ImageDisplayProps {
   isRefining: boolean;
   onCopy?: () => void;
   onDelete?: () => void;
+  options: {
+    brandColors: BrandColor[];
+    visualStyles: VisualStyle[];
+    graphicTypes: GraphicType[];
+    aspectRatios: AspectRatioOption[];
+  };
 }
 
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
@@ -15,7 +21,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onRefine,
   isRefining,
   onCopy,
-  onDelete
+  onDelete,
+  options
 }) => {
   const [refinementInput, setRefinementInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
@@ -36,6 +43,33 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     setCopyNotice(msg);
     const timer = window.setTimeout(() => setCopyNotice(null), 2000);
     setNoticeTimer(timer);
+  };
+
+  const modelLabelMap: Record<string, string> = {
+    gemini: 'Nano Banana',
+    openai: 'GPT Image'
+  };
+
+  const getLabel = (id: string | undefined, list: any[]) => {
+    if (!id) return '';
+    const item = list.find(i => i.id === id || i.value === id);
+    return item?.name || item?.label || id;
+  };
+
+  const getColors = (id: string | undefined) => {
+    if (!id) return [];
+    const palette = options.brandColors.find(c => c.id === id);
+    return palette?.colors || [];
+  };
+
+  const formatTimestamp = (ts?: number) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mi = d.getMinutes().toString().padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${mi}`;
   };
 
   const handleDownload = () => {
@@ -135,6 +169,35 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
               alt="Generated Output" 
               className="max-w-full max-h-[70vh] object-contain block rounded-lg"
             />
+          {/* Info overlay on hover */}
+          <div className="absolute left-4 bottom-4 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="bg-black/75 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-2 flex-wrap max-w-[320px]">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
+                {getLabel(image.graphicTypeId, options.graphicTypes)}
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
+                {getLabel(image.visualStyleId, options.visualStyles)}
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-brand-teal/15 text-brand-teal border border-brand-teal/50">
+                {modelLabelMap[image.modelId || 'gemini'] || 'Model'}
+              </span>
+              {image.timestamp && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
+                  {formatTimestamp(image.timestamp)}
+                </span>
+              )}
+              {getColors(image.colorSchemeId).length > 0 && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800 gap-1">
+                  Colors
+                  <span className="flex h-2 w-10 rounded-sm overflow-hidden ring-1 ring-black/10">
+                    {getColors(image.colorSchemeId).map((hex, idx) => (
+                      <span key={idx} className="flex-1 h-full" style={{ backgroundColor: hex }} />
+                    ))}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
             
             <div className="absolute top-4 right-4 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
               {onCopy && (

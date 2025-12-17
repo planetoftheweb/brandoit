@@ -37,6 +37,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   });
   const [selectedModel, setSelectedModel] = useState<string>(user.preferences.selectedModel || 'gemini');
   const [systemPrompt, setSystemPrompt] = useState<string>(user.preferences.systemPrompt || '');
+  const [modelLabels, setModelLabels] = useState<{ [key: string]: string }>(() => ({
+    ...(user.preferences.modelLabels || {})
+  }));
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -62,6 +65,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setApiKeys(keys);
     setSelectedModel(user.preferences.selectedModel || 'gemini');
     setSystemPrompt(user.preferences.systemPrompt || '');
+    setModelLabels(user.preferences.modelLabels || {});
     loadTeams();
   }, [user]);
 
@@ -76,12 +80,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     
     try {
       // Save API keys and selected model to Firestore
-      await authService.updateUserPreferences(user.id, {
+    await authService.updateUserPreferences(user.id, {
         ...user.preferences,
         apiKeys: apiKeys,
         selectedModel: selectedModel,
         geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
-        systemPrompt
+        systemPrompt,
+        modelLabels
       });
       
       const selectedApiKey = apiKeys[selectedModel] || '';
@@ -107,12 +112,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         apiKeys: apiKeys,
         selectedModel: selectedModel,
         geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
-        systemPrompt
+        systemPrompt,
+        modelLabels,
+        settings: localSettings
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
       console.error("Failed to save API key:", err);
+    }
+  };
+
+  const handleModelLabelChange = (modelId: string, value: string) => {
+    setModelLabels(prev => ({ ...prev, [modelId]: value }));
+  };
+
+  const handleModelLabelBlur = async () => {
+    try {
+      await authService.updateUserPreferences(user.id, {
+        ...user.preferences,
+        apiKeys,
+        selectedModel,
+        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
+        systemPrompt,
+        modelLabels,
+        settings: localSettings
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to save model labels:", err);
     }
   };
 
@@ -226,8 +255,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
               {/* API Keys for each model */}
               <div className="space-y-4">
-                {SUPPORTED_MODELS.map(model => (
-                  <div key={model.id}>
+                {SUPPORTED_MODELS.map((model, idx) => (
+                  <div
+                    key={model.id}
+                    className={`rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50/60 dark:bg-[#0f141c] p-3 space-y-2 ${idx > 0 ? 'mt-2' : ''}`}
+                  >
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                       {model.name} API Key
                     </label>
@@ -236,7 +268,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       value={apiKeys[model.id] || ''}
                       onChange={(e) => handleApiKeyChange(model.id, e.target.value)}
                       onBlur={() => handleApiKeyBlur(model.id)}
-                      className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                      className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
                       placeholder={`Enter your ${model.name} API Key...`}
                     />
                     {model.description && (
@@ -244,6 +276,22 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         {model.description}
                       </p>
                     )}
+                    <div className="pt-2 border-t border-gray-200 dark:border-[#30363d]">
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Toolbar Label
+                      </label>
+                      <input
+                        type="text"
+                        value={modelLabels[model.id] || ''}
+                        onChange={(e) => handleModelLabelChange(model.id, e.target.value)}
+                        onBlur={handleModelLabelBlur}
+                        className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                        placeholder={model.id === 'openai' ? 'GPT Image' : model.id === 'gemini' ? 'Nano Banana' : model.name}
+                      />
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Controls the text shown in the toolbar model dropdown.
+                      </p>
+                    </div>
                   </div>
                 ))}
                 <p className="text-xs text-slate-500 mt-2">

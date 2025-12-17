@@ -43,6 +43,8 @@ export interface GeneratedImage {
   imageUrl: string;
   base64Data: string;
   mimeType: string;
+  modelId?: string;
+  timestamp?: number;
 }
 
 export interface GenerationHistoryItem extends GeneratedImage {
@@ -66,6 +68,9 @@ export interface UserPreferences {
   };
   selectedModel?: string;
   systemPrompt?: string;
+  modelLabels?: {
+    [modelId: string]: string;
+  };
   settings?: UserSettings; 
 }
 

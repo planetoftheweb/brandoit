@@ -391,7 +391,8 @@ const App: React.FC = () => {
       } else {
         result = await generateGraphic(config, context, customKey, user?.preferences.systemPrompt);
       }
-      setGeneratedImage(result);
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now() };
+      setGeneratedImage(stamped);
 
       // Save to history
       const historyItem: GenerationHistoryItem = {
@@ -432,7 +433,8 @@ const App: React.FC = () => {
       } else {
         result = await refineGraphic(generatedImage, refinementText, config, context, customKey, user?.preferences.systemPrompt);
       }
-      setGeneratedImage(result);
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now() };
+      setGeneratedImage(stamped);
       
       // Save refined version to history too? Or update existing? Let's save as new for now.
       const historyItem: GenerationHistoryItem = {
@@ -456,6 +458,16 @@ const App: React.FC = () => {
   const handleRestoreFromHistory = (item: GenerationHistoryItem) => {
     setConfig(item.config);
     setGeneratedImage(item);
+    if (user && item.modelId) {
+      const updatedUser = {
+        ...user,
+        preferences: {
+          ...user.preferences,
+          selectedModel: item.modelId
+        }
+      };
+      setUser(updatedUser);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -835,6 +847,7 @@ const App: React.FC = () => {
               isRefining={isGenerating}
               onCopy={handleCopyCurrent}
               onDelete={requestDeleteCurrent}
+              options={context}
             />
 
             {/* History Gallery */}

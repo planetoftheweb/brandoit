@@ -116,8 +116,17 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   };
 
   const getModelLabel = (modelId?: string) => {
-    if (modelId === 'openai') return 'gpt-image';
-    return 'nano-banana';
+    if (modelId === 'openai') return 'GPT Image';
+    return 'Nano Banana';
+  };
+
+  const formatTimestamp = (ts: number) => {
+    const d = new Date(ts);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mi = d.getMinutes().toString().padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${mi}`;
   };
 
   return (
@@ -266,19 +275,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </p>
               
               <div className="flex flex-wrap gap-1.5">
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-[#30363d] text-slate-600 dark:text-slate-300">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
                   {getLabel(item.config.graphicTypeId, options.graphicTypes)}
                 </span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-[#30363d] text-slate-600 dark:text-slate-300">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
                   {getLabel(item.config.visualStyleId, options.visualStyles)}
                 </span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-brand-red/10 text-brand-red border border-brand-red/30">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
                   {getModelLabel(item.modelId)}
                 </span>
-              </div>
-              
-              <div className="mt-2 text-[10px] text-slate-400">
-                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
+                  {formatTimestamp(item.timestamp)}
+                </span>
               </div>
             </div>
           </div>
