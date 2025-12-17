@@ -67,9 +67,11 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     const d = new Date(ts);
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
-    const hh = d.getHours().toString().padStart(2, '0');
-    const mi = d.getMinutes().toString().padStart(2, '0');
-    return `${mm}-${dd} ${hh}:${mi}`;
+    const rawH = d.getHours();
+    const hh = String(rawH % 12 === 0 ? 12 : rawH % 12).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const ampm = rawH >= 12 ? 'PM' : 'AM';
+    return `${mm}-${dd} ${hh}:${mi} ${ampm}`;
   };
 
   const handleDownload = () => {
@@ -171,31 +173,58 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
             />
           {/* Info overlay on hover */}
           <div className="absolute left-4 bottom-4 opacity-0 group-hover:opacity-100 transition-opacity">
-            <div className="bg-black/75 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-2 flex-wrap max-w-[320px]">
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
-                {getLabel(image.graphicTypeId, options.graphicTypes)}
-              </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
-                {getLabel(image.visualStyleId, options.visualStyles)}
-              </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-brand-teal/15 text-brand-teal border border-brand-teal/50">
+            <div className="bg-black/75 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-2 flex-wrap max-w-[360px]">
+              {(() => {
+                const cfg = image.config;
+                const val = getLabel(cfg?.graphicTypeId, options.graphicTypes);
+                return val ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {val}
+                  </span>
+                ) : null;
+              })()}
+              {(() => {
+                const cfg = image.config;
+                const val = getLabel(cfg?.visualStyleId, options.visualStyles);
+                return val ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {val}
+                  </span>
+                ) : null;
+              })()}
+              {(() => {
+                const cfg = image.config;
+                const val = cfg?.aspectRatio;
+                const label = val ? getLabel(val, options.aspectRatios) : '';
+                return label ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {label}
+                  </span>
+                ) : null;
+              })()}
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/15 text-brand-teal border border-brand-teal/50">
                 {modelLabelMap[image.modelId || 'gemini'] || 'Model'}
               </span>
               {image.timestamp && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                   {formatTimestamp(image.timestamp)}
                 </span>
               )}
-              {getColors(image.colorSchemeId).length > 0 && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-200/90 text-slate-800 gap-1">
+              {(() => {
+                const cfg = image.config;
+                const colors = getColors(cfg?.colorSchemeId);
+                if (!colors.length) return null;
+                return (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100 gap-1">
                   Colors
-                  <span className="flex h-2 w-10 rounded-sm overflow-hidden ring-1 ring-black/10">
-                    {getColors(image.colorSchemeId).map((hex, idx) => (
-                      <span key={idx} className="flex-1 h-full" style={{ backgroundColor: hex }} />
-                    ))}
+                    <span className="flex h-2 w-12 rounded-sm overflow-hidden ring-1 ring-black/20">
+                      {colors.map((hex, idx) => (
+                        <span key={idx} className="flex-1 h-full" style={{ backgroundColor: hex }} />
+                      ))}
+                    </span>
                   </span>
-                </span>
-              )}
+                );
+              })()}
             </div>
           </div>
             

@@ -124,9 +124,11 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     const d = new Date(ts);
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
-    const hh = d.getHours().toString().padStart(2, '0');
-    const mi = d.getMinutes().toString().padStart(2, '0');
-    return `${mm}-${dd} ${hh}:${mi}`;
+    const rawH = d.getHours();
+    const hh = String(rawH % 12 === 0 ? 12 : rawH % 12).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const ampm = rawH >= 12 ? 'PM' : 'AM';
+    return `${mm}-${dd} ${hh}:${mi} ${ampm}`;
   };
 
   return (
@@ -275,16 +277,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </p>
               
               <div className="flex flex-wrap gap-1.5">
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                   {getLabel(item.config.graphicTypeId, options.graphicTypes)}
                 </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                   {getLabel(item.config.visualStyleId, options.visualStyles)}
                 </span>
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
                   {getModelLabel(item.modelId)}
                 </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 dark:bg-[#30363d] text-slate-700 dark:text-slate-200">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                   {formatTimestamp(item.timestamp)}
                 </span>
               </div>

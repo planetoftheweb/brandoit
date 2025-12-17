@@ -45,6 +45,7 @@ export interface GeneratedImage {
   mimeType: string;
   modelId?: string;
   timestamp?: number;
+  config?: GenerationConfig;
 }
 
 export interface GenerationHistoryItem extends GeneratedImage {

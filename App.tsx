@@ -391,7 +391,7 @@ const App: React.FC = () => {
       } else {
         result = await generateGraphic(config, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now() };
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...config } };
       setGeneratedImage(stamped);
 
       // Save to history
@@ -433,7 +433,7 @@ const App: React.FC = () => {
       } else {
         result = await refineGraphic(generatedImage, refinementText, config, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now() };
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...config } };
       setGeneratedImage(stamped);
       
       // Save refined version to history too? Or update existing? Let's save as new for now.
