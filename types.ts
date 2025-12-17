@@ -59,7 +59,11 @@ export interface BrandGuidelinesAnalysis {
 
 export interface UserPreferences {
   // References only, actual data stored in resource collections
-  geminiApiKey?: string;
+  geminiApiKey?: string; // Legacy support - will be migrated to apiKeys
+  apiKeys?: {
+    [modelId: string]: string; // e.g., { "gemini-3-pro-image-preview": "key123", "openai-gpt-4": "key456" }
+  };
+  selectedModel?: string; // The currently selected model ID
   settings?: UserSettings; 
 }
 
@@ -67,6 +71,8 @@ export interface UserSettings {
   contributeByDefault: boolean;
   defaultGraphicTypeId?: string;
   defaultAspectRatio?: string;
+  confirmDeleteHistory?: boolean;
+  confirmDeleteCurrent?: boolean;
 }
 
 export interface User {

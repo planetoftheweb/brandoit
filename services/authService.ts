@@ -24,17 +24,32 @@ const defaultPreferences: UserPreferences = {
   brandColors: BRAND_COLORS,
   visualStyles: VISUAL_STYLES,
   graphicTypes: GRAPHIC_TYPES,
-  aspectRatios: ASPECT_RATIOS
+  aspectRatios: ASPECT_RATIOS,
+  apiKeys: {},
+  selectedModel: 'gemini',
+  settings: { contributeByDefault: false, confirmDeleteHistory: true, confirmDeleteCurrent: true }
 };
 
 // Helper to remove non-serializable fields (like React components/icons) from preferences
 const sanitizePreferences = (prefs: UserPreferences): any => {
-  return {
-    // Only save settings and API key. 
-    // Arrays (brandColors, etc.) are now managed via resourceService (normalized collections)
-    geminiApiKey: prefs.geminiApiKey,
-    settings: prefs.settings,
-  };
+  const clean: any = {};
+  // Only save settings and API keys. Arrays are managed via resourceService.
+  if (prefs.geminiApiKey) clean.geminiApiKey = prefs.geminiApiKey; // Legacy support
+  if (prefs.apiKeys) clean.apiKeys = prefs.apiKeys;
+  if (prefs.selectedModel) clean.selectedModel = prefs.selectedModel;
+
+  if (prefs.settings) {
+    const s = prefs.settings;
+    const settingsClean: any = {};
+    if (s.contributeByDefault !== undefined) settingsClean.contributeByDefault = s.contributeByDefault;
+    if (s.defaultGraphicTypeId) settingsClean.defaultGraphicTypeId = s.defaultGraphicTypeId;
+    if (s.defaultAspectRatio) settingsClean.defaultAspectRatio = s.defaultAspectRatio;
+    if (s.confirmDeleteHistory !== undefined) settingsClean.confirmDeleteHistory = s.confirmDeleteHistory;
+    if (s.confirmDeleteCurrent !== undefined) settingsClean.confirmDeleteCurrent = s.confirmDeleteCurrent;
+    if (Object.keys(settingsClean).length > 0) clean.settings = settingsClean;
+  }
+
+  return clean;
 };
 
 // Helper to merge saved preferences with default icons (re-hydration)
@@ -48,8 +63,16 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     visualStyles: [],
     graphicTypes: [],
     aspectRatios: [],
-    geminiApiKey: savedPrefs.geminiApiKey,
-    settings: savedPrefs.settings || defaultPreferences.settings,
+    geminiApiKey: savedPrefs.geminiApiKey, // Legacy support
+    apiKeys: savedPrefs.apiKeys || {},
+    selectedModel: savedPrefs.selectedModel || 'gemini',
+    settings: {
+      contributeByDefault: savedPrefs.settings?.contributeByDefault ?? defaultPreferences.settings?.contributeByDefault ?? false,
+      defaultGraphicTypeId: savedPrefs.settings?.defaultGraphicTypeId,
+      defaultAspectRatio: savedPrefs.settings?.defaultAspectRatio,
+      confirmDeleteHistory: savedPrefs.settings?.confirmDeleteHistory ?? true,
+      confirmDeleteCurrent: savedPrefs.settings?.confirmDeleteCurrent ?? true
+    },
   };
 };
 

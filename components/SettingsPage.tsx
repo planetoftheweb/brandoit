@@ -4,6 +4,7 @@ import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Lo
 import { uploadProfileImage } from '../services/imageService';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
+import { SUPPORTED_MODELS } from '../constants';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -24,7 +25,20 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [name, setName] = useState(user.name);
   const [username, setUsername] = useState(user.username || '');
   const [photoURL, setPhotoURL] = useState<string | undefined>(user.photoURL);
-  const [apiKey, setApiKey] = useState(user.preferences.geminiApiKey || '');
+  // Support both legacy geminiApiKey and new apiKeys structure
+  const [apiKeys, setApiKeys] = useState<{ [key: string]: string }>(() => {
+    const keys: { [key: string]: string } = {};
+    // Migrate legacy geminiApiKey to new structure
+    if (user.preferences.geminiApiKey) {
+      keys['gemini'] = user.preferences.geminiApiKey;
+    }
+    // Load from new apiKeys structure
+    if (user.preferences.apiKeys) {
+      Object.assign(keys, user.preferences.apiKeys);
+    }
+    return keys;
+  });
+  const [selectedModel, setSelectedModel] = useState<string>(user.preferences.selectedModel || 'gemini');
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -40,11 +54,20 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
 
   useEffect(() => {
-    setLocalSettings(user.preferences.settings || { contributeByDefault: false });
+    setLocalSettings(user.preferences.settings || { contributeByDefault: false, confirmDeleteHistory: true, confirmDeleteCurrent: true });
     setName(user.name);
     setUsername(user.username || '');
     setPhotoURL(user.photoURL);
-    setApiKey(user.preferences.geminiApiKey || '');
+    // Update API keys from user preferences
+    const keys: { [key: string]: string } = {};
+    if (user.preferences.geminiApiKey) {
+      keys['gemini'] = user.preferences.geminiApiKey;
+    }
+    if (user.preferences.apiKeys) {
+      Object.assign(keys, user.preferences.apiKeys);
+    }
+    setApiKeys(keys);
+    setSelectedModel(user.preferences.selectedModel || 'gemini');
     loadTeams();
   }, [user]);
 
@@ -58,13 +81,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setSaveSuccess(false);
     
     try {
-      // Save API key to Firestore
+      // Save API keys and selected model to Firestore
       await authService.updateUserPreferences(user.id, {
         ...user.preferences,
-        geminiApiKey: apiKey
+        apiKeys: apiKeys,
+        selectedModel: selectedModel,
+        // Keep legacy geminiApiKey for backward compatibility (use gemini key if exists)
+        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey
       });
       
-      onSave(localSettings, { name, username, photoURL }, apiKey);
+      // Pass the selected model's API key for backward compatibility
+      const selectedApiKey = apiKeys[selectedModel] || '';
+      onSave(localSettings, { name, username, photoURL }, selectedApiKey);
       
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -72,6 +100,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       console.error("Failed to save settings:", err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleApiKeyChange = (modelId: string, value: string) => {
+    setApiKeys(prev => ({ ...prev, [modelId]: value }));
+  };
+
+  const handleApiKeyBlur = async (modelId: string) => {
+    // Auto-save on blur
+    try {
+      await authService.updateUserPreferences(user.id, {
+        ...user.preferences,
+        apiKeys: apiKeys,
+        selectedModel: selectedModel,
+        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to save API key:", err);
     }
   };
 
@@ -152,33 +200,62 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 <Key size={14} /> API Configuration
               </h4>
               
+              {/* Model Selection */}
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                  Google Gemini API Key
+                  Active Model
                 </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  onBlur={() => {
-                    // Auto-save on blur
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    setSelectedModel(e.target.value);
+                    // Auto-save model selection
                     authService.updateUserPreferences(user.id, {
                       ...user.preferences,
-                      geminiApiKey: apiKey
+                      selectedModel: e.target.value,
+                      apiKeys: apiKeys
                     }).then(() => {
-                      // Update parent component's user state
-                      onSave(localSettings, undefined, apiKey);
                       setSaveSuccess(true);
                       setTimeout(() => setSaveSuccess(false), 2000);
                     }).catch(err => {
-                      console.error("Failed to save API key:", err);
+                      console.error("Failed to save model selection:", err);
                     });
                   }}
                   className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
-                  placeholder="Enter your Google Gemini API Key..."
-                />
+                >
+                  {SUPPORTED_MODELS.map(model => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  Select which AI model to use for generation.
+                </p>
+              </div>
+
+              {/* API Keys for each model */}
+              <div className="space-y-4">
+                {SUPPORTED_MODELS.map(model => (
+                  <div key={model.id}>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      {model.name} API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={apiKeys[model.id] || ''}
+                      onChange={(e) => handleApiKeyChange(model.id, e.target.value)}
+                      onBlur={() => handleApiKeyBlur(model.id)}
+                      className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                      placeholder={`Enter your ${model.name} API Key...`}
+                    />
+                    {model.description && (
+                      <p className="text-xs text-slate-500 mt-1">
+                        {model.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
                 <p className="text-xs text-slate-500 mt-2">
-                  Your API key is required to generate graphics. It's stored securely and only used for your requests.
+                  API keys are stored securely and only used for your requests. You can configure multiple models and switch between them.
                 </p>
               </div>
             </div>
@@ -310,6 +387,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                     <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="pt-2 space-y-3 border-t border-gray-200 dark:border-[#30363d]">
+                <h4 className="text-xs font-bold text-slate-500 uppercase">Confirmations</h4>
+
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={localSettings.confirmDeleteHistory ?? true}
+                    onChange={(e) => setLocalSettings(prev => ({ ...prev, confirmDeleteHistory: e.target.checked }))}
+                    className="mt-1 w-4 h-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-900 dark:text-white">Confirm before deleting recent generations</span>
+                    <p className="text-xs text-slate-500 mt-1">Show a prompt before removing items from history.</p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={localSettings.confirmDeleteCurrent ?? true}
+                    onChange={(e) => setLocalSettings(prev => ({ ...prev, confirmDeleteCurrent: e.target.checked }))}
+                    className="mt-1 w-4 h-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-900 dark:text-white">Confirm before deleting current preview</span>
+                    <p className="text-xs text-slate-500 mt-1">Show a prompt before clearing the main preview image.</p>
+                  </div>
+                </label>
               </div>
             </div>
           </div>

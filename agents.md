@@ -24,8 +24,9 @@ This project is designed to be worked on by specialized AI agents.
 **Focus:** Business Logic, API Integrations, Data Management.
 - **Authentication:** `authService.ts` (Firebase Auth & User Profile management).
 - **AI Integration:** `geminiService.ts`.
-    - **CRITICAL RULE:** MUST use `gemini-3-pro-image-preview` for generation.
-    - **NEVER** switch to Imagen 3 or other models. This model handles image generation via `generateContent`.
+    - **Image Generation:** MUST use `gemini-3-pro-image-preview`.
+    - **Text/Analysis:** Use `gemini-2.5-flash` for brand analysis and prompt expansion.
+    - **Multi-Model Support:** Architecture supports different API keys for different models via User Preferences.
 - **Data Persistence:** 
     - `resourceService.ts` (Fetches unified System + Custom resources with scoping).
     - `historyService.ts` (Manages Generation History with Local/Remote sync).
@@ -69,3 +70,4 @@ The project uses a **Normalized Database Structure** in Firestore to allow effic
 2.  **Sanitization:** Always sanitize data before sending to Firestore (remove symbols/functions).
 3.  **Security:** Respect Firestore Security Rules. User operations must be scoped to their `auth.uid`.
 4.  **Types:** Update `types.ts` immediately when data structures change.
+5.  **Rules Sharing:** When providing Firestore/Storage security rules, do **not** create files—respond with copyable code blocks only.

@@ -6,14 +6,14 @@ import { BrandAnalysisModal } from './components/BrandAnalysisModal';
 import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
 import { RecentGenerations } from './components/RecentGenerations';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, CatalogItem, BrandGuidelinesAnalysis } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, BrandGuidelinesAnalysis } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
   GRAPHIC_TYPES, 
   ASPECT_RATIOS 
 } from './constants';
-import { generateGraphic, refineGraphic, analyzeBrandGuidelines } from './services/geminiService';
+import { generateGraphic, refineGraphic, analyzeBrandGuidelines, describeImagePrompt } from './services/geminiService';
 import { authService } from './services/authService';
 import { historyService } from './services/historyService';
 // import { seedCatalog } from './services/seeder'; // Removed
@@ -111,6 +111,10 @@ const App: React.FC = () => {
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<BrandGuidelinesAnalysis | null>(null);
 
+  // Delete confirmation state
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState<{ type: 'history' | 'current'; id?: string } | null>(null);
+  const [skipFutureConfirm, setSkipFutureConfirm] = useState(false);
+
   // Load Resources (Structures)
   const loadResources = async (userId?: string) => {
     const resources = await resourceService.getAllResources(userId);
@@ -127,6 +131,31 @@ const App: React.FC = () => {
         graphicTypeId: prev.graphicTypeId || resources.graphicTypes[0]?.id || '',
         aspectRatio: prev.aspectRatio || resources.aspectRatios[0]?.value || ''
     }));
+  };
+
+  const executeDeleteHistory = async (historyId: string) => {
+    if (user) {
+      await historyService.deleteFromRemote(user.id, historyId);
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+    } else {
+      historyService.deleteFromLocal(historyId);
+      const updatedHistory = historyService.getFromLocal();
+      setHistory(updatedHistory);
+    }
+  };
+
+  const requestDeleteHistory = (historyId: string) => {
+    const needConfirm = user?.preferences?.settings?.confirmDeleteHistory ?? true;
+    if (needConfirm) {
+      setSkipFutureConfirm(false);
+      setConfirmDeleteModal({ type: 'history', id: historyId });
+    } else {
+      executeDeleteHistory(historyId).catch((err) => {
+        console.error("Failed to delete history item:", err);
+        setError(err.message || "Failed to delete history item.");
+      });
+    }
   };
 
   useEffect(() => {
@@ -157,6 +186,7 @@ const App: React.FC = () => {
         setUser(restoredUser);
         // Load history for restored user
         const updatedHistory = await historyService.getHistory(restoredUser);
+        console.log('Loaded history on auth state change:', updatedHistory.length, 'items');
         setHistory(updatedHistory);
       } else {
         setUser(null);
@@ -170,21 +200,19 @@ const App: React.FC = () => {
   // Sync preferences to Auth Service when they change AND a user is logged in
   useEffect(() => {
     if (user) {
-      // Only sync settings/API key now. Custom items are saved directly via resourceService.
+      // Only sync settings/API keys now. Custom items are saved directly via resourceService.
       // This runs when preferences change, not on every user load
       authService.updateUserPreferences(user.id, {
-        brandColors: [], // Ignored by new authService logic
-        visualStyles: [],
-        graphicTypes: [],
-        aspectRatios: [],
-        geminiApiKey: user.preferences.geminiApiKey,
+        geminiApiKey: user.preferences.geminiApiKey, // Legacy support
+        apiKeys: user.preferences.apiKeys,
+        selectedModel: user.preferences.selectedModel,
         settings: user.preferences.settings
       }).catch(err => {
         // Silently fail if it's just a sync issue (not a critical error)
         console.warn("Failed to sync preferences:", err);
       });
     }
-  }, [user?.preferences.settings, user?.preferences.geminiApiKey]); // Only trigger on actual preference changes, not user object changes
+  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel]); // Only trigger on actual preference changes, not user object changes
 
   const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
@@ -208,11 +236,26 @@ const App: React.FC = () => {
   // Grouped context for easier passing
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
 
+  // Helper to get the active API key based on selected model
+  const getActiveApiKey = (): string | undefined => {
+    if (!user) return undefined;
+    const selectedModel = user.preferences.selectedModel || 'gemini';
+    // Check new apiKeys structure first
+    if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
+      return user.preferences.apiKeys[selectedModel];
+    }
+    // Fallback to legacy geminiApiKey for backward compatibility
+    if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
+      return user.preferences.geminiApiKey;
+    }
+    return undefined;
+  };
+
   const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const customKey = user?.preferences.geminiApiKey;
+      const customKey = getActiveApiKey();
       const result = await generateGraphic(config, context, customKey);
       setGeneratedImage(result);
 
@@ -228,6 +271,7 @@ const App: React.FC = () => {
       
       // Refresh history list
       const updatedHistory = await historyService.getHistory(user);
+      console.log('Refreshed history after generation:', updatedHistory.length, 'items');
       setHistory(updatedHistory);
 
     } catch (err: any) {
@@ -237,13 +281,148 @@ const App: React.FC = () => {
     }
   };
 
+  const buildStructuredPrompt = (currentConfig: GenerationConfig): string => {
+    const typeLabel = context.graphicTypes.find(g => g.id === currentConfig.graphicTypeId)?.name || currentConfig.graphicTypeId;
+    const styleObj = context.visualStyles.find(s => s.id === currentConfig.visualStyleId);
+    const styleLabel = styleObj?.name || currentConfig.visualStyleId;
+    const styleDesc = styleObj?.description ? ` (${styleObj.description})` : '';
+    const colorsObj = context.brandColors.find(c => c.id === currentConfig.colorSchemeId);
+    const colorsLabel = colorsObj ? `${colorsObj.name}: ${colorsObj.colors.join(', ')}` : '';
+    const aspectLabel = context.aspectRatios.find(a => a.value === currentConfig.aspectRatio)?.label || currentConfig.aspectRatio;
+
+    const expanded = [
+      `Generate a ${typeLabel}`,
+      aspectLabel ? `at ${aspectLabel} aspect ratio` : '',
+      styleLabel ? `in the ${styleLabel}${styleDesc}` : '',
+      colorsLabel ? `using palette ${colorsLabel}` : '',
+      `Subject/Content: ${currentConfig.prompt}`
+    ].filter(Boolean).join('. ');
+
+    return [
+      `Original Prompt: ${currentConfig.prompt}`,
+      `Structured Prompt: ${expanded}`,
+      `Type: ${typeLabel}`,
+      styleLabel ? `Style: ${styleLabel}${styleDesc}` : '',
+      colorsLabel ? `Colors: ${colorsLabel}` : '',
+      aspectLabel ? `Size: ${aspectLabel}` : ''
+    ].filter(Boolean).join('\n');
+  };
+
+  const fetchImageAsBase64 = async (url: string): Promise<{ base64: string; mime: string }> => {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const mime = blob.type || 'image/png';
+    const buffer = await blob.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    return { base64, mime };
+  };
+
+  const handleCopyCurrent = async () => {
+    if (!generatedImage) return;
+    try {
+      let imageDescription = '';
+      try {
+        const { base64, mime } = await fetchImageAsBase64(generatedImage.imageUrl);
+        imageDescription = await describeImagePrompt(base64, mime, getActiveApiKey());
+      } catch (err) {
+        console.warn('Image describe fallback (main image):', err);
+      }
+
+      const structured = buildStructuredPrompt(config);
+      const finalText = imageDescription
+        ? `${structured}\n\nImage-Based Prompt: ${imageDescription}`
+        : structured;
+      await navigator.clipboard.writeText(finalText);
+    } catch (err) {
+      console.error("Failed to copy prompt:", err);
+      setError("Failed to copy prompt.");
+    }
+  };
+
+  const executeDeleteCurrent = async () => {
+    if (!generatedImage) return;
+    const historyId = (generatedImage as any).id;
+    if (historyId) {
+      if (user) {
+        await historyService.deleteFromRemote(user.id, historyId);
+        const updatedHistory = await historyService.getHistory(user);
+        setHistory(updatedHistory);
+      } else {
+        historyService.deleteFromLocal(historyId);
+        const updatedHistory = historyService.getFromLocal();
+        setHistory(updatedHistory);
+      }
+    }
+    setGeneratedImage(null);
+  };
+
+  const requestDeleteCurrent = () => {
+    if (!generatedImage) return;
+    const needConfirm = user?.preferences?.settings?.confirmDeleteCurrent ?? true;
+    if (needConfirm) {
+      setSkipFutureConfirm(false);
+      setConfirmDeleteModal({ type: 'current', id: (generatedImage as any).id });
+    } else {
+      executeDeleteCurrent().catch((err) => {
+        console.error("Failed to delete current image:", err);
+        setError(err.message || "Failed to delete image.");
+      });
+    }
+  };
+
+  const applySkipFuture = async (type: 'history' | 'current') => {
+    if (!skipFutureConfirm || !user) return;
+    const newSettings = {
+      ...user.preferences.settings,
+      confirmDeleteHistory: type === 'history' ? false : user.preferences.settings?.confirmDeleteHistory ?? true,
+      confirmDeleteCurrent: type === 'current' ? false : user.preferences.settings?.confirmDeleteCurrent ?? true,
+    };
+    const updatedUser = {
+      ...user,
+      preferences: {
+        ...user.preferences,
+        settings: newSettings,
+      }
+    };
+    setUser(updatedUser);
+    try {
+      await authService.updateUserPreferences(user.id, { ...user.preferences, settings: newSettings });
+    } catch (err) {
+      console.error("Failed to update preferences for confirmations:", err);
+    }
+  };
+
+  const handleConfirmDeleteModal = async () => {
+    if (!confirmDeleteModal) return;
+    const { type, id } = confirmDeleteModal;
+    try {
+      if (type === 'history' && id) {
+        await executeDeleteHistory(id);
+        await applySkipFuture('history');
+      } else if (type === 'current') {
+        await executeDeleteCurrent();
+        await applySkipFuture('current');
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to delete item.");
+    } finally {
+      setConfirmDeleteModal(null);
+      setSkipFutureConfirm(false);
+    }
+  };
+
+  const handleCancelDeleteModal = () => {
+    setConfirmDeleteModal(null);
+    setSkipFutureConfirm(false);
+  };
+
   const handleRefine = async (refinementText: string) => {
     if (!generatedImage) return;
 
     setIsGenerating(true);
     setError(null);
     try {
-      const customKey = user?.preferences.geminiApiKey;
+      const customKey = getActiveApiKey();
       const result = await refineGraphic(generatedImage, refinementText, config, context, customKey);
       setGeneratedImage(result);
       
@@ -275,7 +454,7 @@ const App: React.FC = () => {
     setIsAnalyzing(true);
     setError(null);
     try {
-      const customKey = user?.preferences.geminiApiKey;
+      const customKey = getActiveApiKey();
       const result = await analyzeBrandGuidelines(file, customKey);
       setAnalysisResult(result);
       setIsAnalysisModalOpen(true);
@@ -365,7 +544,9 @@ const App: React.FC = () => {
         preferences: {
             ...user.preferences,
             settings: newSettings,
-            geminiApiKey: apiKey !== undefined ? apiKey : user.preferences.geminiApiKey
+            // Keep legacy geminiApiKey for backward compatibility if provided
+            geminiApiKey: apiKey !== undefined ? apiKey : user.preferences.geminiApiKey,
+            // apiKeys and selectedModel are already updated by SettingsPage's auto-save
         }
     };
     setUser(updatedUser);
@@ -390,7 +571,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleImportFromCatalog = (item: CatalogItem) => {
+  const handleImportFromCatalog = (item: any) => {
     if (item.type === 'style') {
       const newStyle = item.data as VisualStyle;
       if (!visualStyles.find(s => s.id === newStyle.id)) {
@@ -595,7 +776,7 @@ const App: React.FC = () => {
           <main className="flex-1 relative flex flex-col min-w-0 bg-gray-50 dark:bg-[#0d1117] transition-colors duration-200">
             
             {/* API Key Requirement Banner */}
-            {(!user || !user.preferences.geminiApiKey) && (
+            {(!user || !getActiveApiKey()) && (
               <div className="w-full bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-800/50 px-6 py-4 text-center">
                 <p className="text-sm md:text-base text-blue-800 dark:text-blue-200 flex flex-col md:flex-row items-center justify-center gap-2 md:gap-3">
                   <span className="p-1.5 bg-blue-100 dark:bg-blue-800/50 rounded-full shrink-0">
@@ -607,7 +788,7 @@ const App: React.FC = () => {
                     </span>
                   ) : (
                     <span>
-                      To generate graphics, you must add your <strong>Google Gemini API Key</strong> in <button onClick={() => setIsSettingsOpen(true)} className="underline hover:text-blue-600 dark:hover:text-blue-100 font-bold decoration-2 underline-offset-2">Preferences</button>.
+                      To generate graphics, you must add your <strong>Google Gemini API Key</strong> in <button onClick={() => setSettingsMode(true)} className="underline hover:text-blue-600 dark:hover:text-blue-100 font-bold decoration-2 underline-offset-2">Preferences</button>.
                     </span>
                   )}
                 </p>
@@ -630,12 +811,15 @@ const App: React.FC = () => {
               image={generatedImage} 
               onRefine={handleRefine}
               isRefining={isGenerating}
+              onCopy={handleCopyCurrent}
+              onDelete={requestDeleteCurrent}
             />
 
             {/* History Gallery */}
             <RecentGenerations 
               history={history}
               onSelect={handleRestoreFromHistory}
+              onDelete={requestDeleteHistory}
               options={context}
             />
           </main>
@@ -742,6 +926,52 @@ const App: React.FC = () => {
                 className="px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm shadow-lg shadow-brand-red/20"
               >
                 Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-200 flex items-center justify-center">
+                <AlertCircle size={20} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {confirmDeleteModal.type === 'history' ? 'Delete generation?' : 'Delete current preview?'}
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+                  This action will remove the generation{confirmDeleteModal.type === 'current' ? ' and clear the main preview' : ''}.
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={skipFutureConfirm}
+                onChange={(e) => setSkipFutureConfirm(e.target.checked)}
+                className="h-4 w-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
+              />
+              Don’t ask me again for this action
+            </label>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={handleCancelDeleteModal}
+                className="px-4 py-2 rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDeleteModal}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm transition"
+              >
+                Delete
               </button>
             </div>
           </div>

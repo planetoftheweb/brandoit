@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team } from '../types';
-import { analyzeImageForOption } from '../services/geminiService';
+import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
 import { 
@@ -22,7 +22,9 @@ import {
   Lock,
   Users,
   Search,
-  Settings
+  Settings,
+  Send,
+  Wand2
 } from 'lucide-react';
 
 interface ControlPanelProps {
@@ -110,6 +112,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const [isAnalysingOption, setIsAnalysingOption] = useState(false);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
+  const [isExpandingPrompt, setIsExpandingPrompt] = useState(false);
+
+  const handleExpandPrompt = async () => {
+    if (!config.prompt || isExpandingPrompt) return;
+    setIsExpandingPrompt(true);
+    try {
+      const customKey = user?.preferences?.apiKeys?.[user?.preferences?.selectedModel || 'gemini'] || user?.preferences?.geminiApiKey;
+      const expanded = await expandPrompt(config.prompt, config, { ...options, aspectRatios: options.aspectRatios as any }, customKey);
+      setConfig(prev => ({ ...prev, prompt: expanded }));
+    } catch (err) {
+      console.error("Failed to expand prompt:", err);
+    } finally {
+      setIsExpandingPrompt(false);
+    }
+  };
 
   // Load teams when user is present
   useEffect(() => {
@@ -335,7 +352,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
     setIsAnalysingOption(true);
     try {
-      const result = await analyzeImageForOption(file, modalType, user?.preferences?.geminiApiKey); 
+      // Get active API key based on selected model
+      const getActiveApiKey = (): string | undefined => {
+        if (!user) return undefined;
+        const selectedModel = user.preferences.selectedModel || 'gemini';
+        if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
+          return user.preferences.apiKeys[selectedModel];
+        }
+        if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
+          return user.preferences.geminiApiKey;
+        }
+        return undefined;
+      };
+      const result = await analyzeImageForOption(file, modalType, getActiveApiKey()); 
       
       setNewItemName(result.name);
       if (modalType === 'style' && result.description) setNewItemDescription(result.description);
@@ -717,22 +746,44 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 />
              </div>
              
-             <button
-              onClick={onGenerate}
-              disabled={!config.prompt || isGenerating}
-              className={`flex-none flex items-center justify-center gap-2 px-8 py-3 rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 sm:w-auto w-full ${
-                !config.prompt || isGenerating
-                  ? 'bg-gray-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                  : 'bg-brand-red hover:bg-red-700 text-white shadow-brand-red/20'
-              }`}
-            >
-              {isGenerating ? (
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <Sparkles size={16} className="text-white" />
-              )}
-              <span>Generate</span>
-            </button>
+             <div className="flex gap-2 sm:w-auto w-full">
+               <button
+                 type="button"
+                 onClick={handleExpandPrompt}
+                 disabled={!config.prompt || isExpandingPrompt}
+                 className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold border transition-all relative group ${
+                   !config.prompt || isExpandingPrompt
+                     ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                     : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                 }`}
+                 aria-label="Expand prompt with creative, visual detail"
+               >
+                 {isExpandingPrompt ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                 <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                   Expand prompt
+                 </span>
+               </button>
+               
+               <button
+                 onClick={onGenerate}
+                 disabled={!config.prompt || isGenerating}
+                 className={`flex-none inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 sm:w-auto w-full relative group ${
+                   !config.prompt || isGenerating
+                     ? 'bg-gray-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                     : 'bg-brand-red hover:bg-red-700 text-white shadow-brand-red/20'
+                 }`}
+                 aria-label="Generate image"
+               >
+                 {isGenerating ? (
+                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                 ) : (
+                   <Send size={16} className="text-white" />
+                 )}
+                 <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                   Generate
+                 </span>
+               </button>
+             </div>
           </div>
 
         </div>

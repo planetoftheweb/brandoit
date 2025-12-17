@@ -81,3 +81,30 @@ export const ASPECT_RATIOS: AspectRatioOption[] = [
   { label: 'Presentation (4:3)', value: '4:3', icon: Monitor },
   { label: 'Vertical (3:4)', value: '3:4', icon: Tablet }
 ];
+
+// Supported AI Models Configuration
+export interface ModelConfig {
+  id: string;
+  name: string;
+  provider: string;
+  description: string;
+  defaultModel?: string; // For providers that need a model ID
+}
+
+export const SUPPORTED_MODELS: ModelConfig[] = [
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    provider: 'google',
+    description: 'Google\'s Gemini models for image generation and analysis',
+    defaultModel: 'gemini-3-pro-image-preview'
+  },
+  // Add more models here as needed
+  {
+    id: 'openai',
+    name: 'OpenAI DALL-E',
+    provider: 'openai',
+    description: 'OpenAI\'s DALL-E for image generation',
+    defaultModel: 'dall-e-3'
+  }
+];

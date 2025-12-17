@@ -1,6 +1,6 @@
 # BranDoIt Studio
 
-![BranDoIt Studio](./brandoit.png)
+![BranDoIt Studio](./screenshot.png)
 
 An AI-powered brand design studio that helps you generate cohesive visual assets using Google's Gemini API.
 
@@ -17,8 +17,10 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **🌍 Community Catalog:** Browse public items shared by other users.
 *   **💾 Cloud History:** Automatically saves your generation history to the cloud (Firestore).
 *   **🖼️ Smart Analysis:** Upload brand guidelines (PDF/Image) to extract colors and styles with an interactive review modal.
+*   **✨ Prompt Expansion:** One-click prompt enhancement using AI to generate detailed visual descriptions from simple text.
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
-*   **🔑 BYOK (Bring Your Own Key):** Option to use your own Gemini API Key for higher rate limits.
+*   **⚙️ Full Settings Management:** dedicated page for managing API keys, profile settings, and application preferences.
+*   **🔑 BYOK (Bring Your Own Key):** Securely manage your own Google Gemini API Keys for multiple models.
 
 ## Tech Stack
 

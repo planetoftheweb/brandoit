@@ -272,6 +272,90 @@ export const analyzeImageForOption = async (
   }
 };
 
+// Describe an image to produce a rich recreation prompt
+export const describeImagePrompt = async (
+  base64Data: string,
+  mimeType: string,
+  customApiKey?: string
+): Promise<string> => {
+  const ai = getAiClient(customApiKey);
+
+  const prompt = `
+    Provide a concise but richly detailed generation prompt (2-4 sentences) that fully describes this image with no need to reference another image. Include:
+    - Subject and key objects
+    - Composition and camera/view (angle, framing, depth of field)
+    - Lighting (type, direction, mood), color palette highlights
+    - Style cues (art style, texture, rendering approach)
+    - Any notable text, logos, or graphic elements (if present)
+    Respond with a single paragraph optimized for image generation (self-contained).
+  `;
+
+  const response = await ai.models.generateContent({
+    model: ANALYSIS_MODEL,
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType
+          }
+        },
+        { text: prompt }
+      ]
+    }
+  });
+
+  if (!response.text) throw new Error("No description generated");
+  return response.text.trim();
+};
+
+// Expand a short prompt into a richer, visual-focused description (text-only, no reference image)
+export const expandPrompt = async (
+  prompt: string,
+  config: GenerationConfig,
+  context: { brandColors: BrandColor[]; visualStyles: VisualStyle[]; graphicTypes: GraphicType[]; aspectRatios: GraphicType[] },
+  customApiKey?: string
+): Promise<string> => {
+  const ai = getAiClient(customApiKey);
+
+  const typeLabel = context.graphicTypes.find(g => g.id === config.graphicTypeId)?.name || config.graphicTypeId;
+  const style = context.visualStyles.find(s => s.id === config.visualStyleId);
+  const styleLabel = style?.name || config.visualStyleId;
+  const styleDesc = style?.description || '';
+  const palette = context.brandColors.find(c => c.id === config.colorSchemeId);
+  const colors = palette ? `${palette.name}: ${palette.colors.join(', ')}` : '';
+  const aspect = (context as any).aspectRatios?.find((a: any) => a.value === config.aspectRatio)?.label || config.aspectRatio;
+
+  const systemPrompt = `
+    You expand short text prompts into rich, creative, and visual image prompts.
+    Include and amplify:
+    - Topic and clear subject focus
+    - Environment: background + foreground details
+    - Emotion and mood
+    - Technical details: camera/view, depth of field, lighting, texture
+    - Nouns with size/age/state (large, tiny, old, weathered, pristine)
+    - Prepositions to relate objects (on top of, beneath, around, beside)
+    - Adjectives/materials (matte, glossy, metallic, wooden, fabric)
+    - Colors hinting at the palette: ${colors || 'use a cohesive palette'}
+    - Adverbs for action (soaring, gliding, drifting)
+    - Art style references: ${styleLabel}${styleDesc ? ` (${styleDesc})` : ''}
+    Keep it 2-4 sentences, vivid, and optimized for image generation. Do not mention any reference image.
+    Current choices: Type=${typeLabel}, Style=${styleLabel}, Palette=${colors || 'cohesive palette'}, Aspect=${aspect}.
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: ANALYSIS_MODEL,
+    contents: {
+      parts: [
+        { text: systemPrompt },
+        { text: `Original prompt: ${prompt}` }
+      ]
+    }
+  });
+
+  if (!response.text) throw new Error("No expanded prompt generated");
+  return response.text.trim();
+};
 
 // Helper to parse the response structure
 const extractImageFromResponse = (response: any): GeneratedImage => {
