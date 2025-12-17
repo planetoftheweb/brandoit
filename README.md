@@ -117,3 +117,7 @@ Ensure you add all the Environment Variables listed above in your Render service
 ## License
 
 MIT
+
+## Release Notes
+
+See `RELEASE_NOTES.md` for detailed changes per version.
