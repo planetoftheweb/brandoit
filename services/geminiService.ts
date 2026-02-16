@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
+import { getSafeAspectRatioForModel } from "./aspectRatioService";
 
 const NANO_BANANA_MODEL = 'gemini-3-pro-image-preview'; // DO NOT CHANGE: Required Model
 const ANALYSIS_MODEL = 'gemini-2.5-flash'; // DO NOT CHANGE
@@ -44,6 +45,7 @@ const constructFullPrompt = (config: GenerationConfig, context: GenerationContex
 export const generateGraphic = async (config: GenerationConfig, context: GenerationContext, customApiKey?: string): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
   const fullPrompt = constructFullPrompt(config, context);
+  const safeAspectRatio = getSafeAspectRatioForModel('gemini', config.aspectRatio, []);
 
   try {
     const response = await ai.models.generateContent({
@@ -53,7 +55,7 @@ export const generateGraphic = async (config: GenerationConfig, context: Generat
       },
       config: {
         imageConfig: {
-          aspectRatio: config.aspectRatio,
+          aspectRatio: safeAspectRatio,
         }
       },
     });
@@ -75,6 +77,7 @@ export const refineGraphic = async (
   const ai = getAiClient(customApiKey);
   const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
   const style = context.visualStyles.find(s => s.id === config.visualStyleId);
+  const safeAspectRatio = getSafeAspectRatioForModel('gemini', config.aspectRatio, []);
   
   const colors = colorScheme ? colorScheme.colors.join(', ') : '';
   const styleDesc = style ? style.description : '';
@@ -103,7 +106,7 @@ export const refineGraphic = async (
       },
       config: {
         imageConfig: {
-          aspectRatio: config.aspectRatio,
+          aspectRatio: safeAspectRatio,
         }
       },
     });

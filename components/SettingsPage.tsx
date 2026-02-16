@@ -5,6 +5,7 @@ import { uploadProfileImage } from '../services/imageService';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
 import { SUPPORTED_MODELS } from '../constants';
+import { getAspectRatiosForModel, getSafeAspectRatioForModel } from '../services/aspectRatioService';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -68,6 +69,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setModelLabels(user.preferences.modelLabels || {});
     loadTeams();
   }, [user]);
+
+  useEffect(() => {
+    setLocalSettings(prev => {
+      if (!prev.defaultAspectRatio) return prev;
+      const safeDefault = getSafeAspectRatioForModel(selectedModel, prev.defaultAspectRatio, aspectRatios);
+      if (safeDefault === prev.defaultAspectRatio) return prev;
+      return { ...prev, defaultAspectRatio: safeDefault };
+    });
+  }, [selectedModel, aspectRatios]);
+
+  const modelAspectRatios = getAspectRatiosForModel(selectedModel, aspectRatios);
 
   const loadTeams = async () => {
     const userTeams = await teamService.getUserTeams(user.id);
@@ -439,10 +451,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
                 >
                   <option value="">Use App Default (1:1)</option>
-                  {aspectRatios.map(r => (
+                  {modelAspectRatios.map(r => (
                     <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  {selectedModel === 'gemini'
+                    ? 'Nano Banana only allows fixed aspect ratios.'
+                    : 'GPT Image supports all listed sizes, including custom ratios.'}
+                </p>
               </div>
 
               <div className="pt-2 space-y-3 border-t border-gray-200 dark:border-[#30363d]">
@@ -602,4 +619,3 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     </div>
   );
 };
-

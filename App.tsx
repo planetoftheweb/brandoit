@@ -15,6 +15,7 @@ import {
 } from './constants';
 import { generateGraphic, refineGraphic, analyzeBrandGuidelines, describeImagePrompt } from './services/geminiService';
 import { generateOpenAIImage } from './services/openaiService';
+import { getAspectRatiosForModel, getSafeAspectRatioForModel } from './services/aspectRatioService';
 import { authService } from './services/authService';
 import { historyService } from './services/historyService';
 // import { seedCatalog } from './services/seeder'; // Removed
@@ -211,11 +212,19 @@ const App: React.FC = () => {
 
   // Grouped context for easier passing
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
+  const selectedModel = user?.preferences.selectedModel || 'gemini';
+
+  useEffect(() => {
+    setConfig(prev => {
+      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, prev.aspectRatio, aspectRatios);
+      if (safeAspectRatio === prev.aspectRatio) return prev;
+      return { ...prev, aspectRatio: safeAspectRatio };
+    });
+  }, [selectedModel, aspectRatios]);
 
   // Helper to get active API key based on selected model (with legacy fallback)
   const getActiveApiKey = (): string | undefined => {
     if (!user) return undefined;
-    const selectedModel = user.preferences.selectedModel || 'gemini';
     if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
       return user.preferences.apiKeys[selectedModel];
     }
@@ -257,7 +266,8 @@ const App: React.FC = () => {
     const styleDesc = styleObj?.description ? ` (${styleObj.description})` : '';
     const colorsObj = context.brandColors.find(c => c.id === currentConfig.colorSchemeId);
     const colorsLabel = colorsObj ? `${colorsObj.name}: ${colorsObj.colors.join(', ')}` : '';
-    const aspectLabel = context.aspectRatios.find(a => a.value === currentConfig.aspectRatio)?.label || currentConfig.aspectRatio;
+    const modelAspectRatios = getAspectRatiosForModel(selectedModel, context.aspectRatios);
+    const aspectLabel = modelAspectRatios.find(a => a.value === currentConfig.aspectRatio)?.label || currentConfig.aspectRatio;
 
     const expanded = [
       `Generate a ${typeLabel}`,
@@ -382,16 +392,20 @@ const App: React.FC = () => {
     setError(null);
     try {
       const customKey = getActiveApiKey();
-      const selectedModel = user?.preferences.selectedModel || 'gemini';
-      const structuredPrompt = buildStructuredPrompt(config);
+      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
+      const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
+      if (safeAspectRatio !== config.aspectRatio) {
+        setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
+      }
+      const structuredPrompt = buildStructuredPrompt(safeConfig);
       let result;
       if (selectedModel === 'openai') {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
-        result = await generateOpenAIImage(structuredPrompt, config, customKey, user?.preferences.systemPrompt);
+        result = await generateOpenAIImage(structuredPrompt, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
-        result = await generateGraphic(config, context, customKey, user?.preferences.systemPrompt);
+        result = await generateGraphic(safeConfig, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...config } };
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...safeConfig } };
       setGeneratedImage(stamped);
 
       // Save to history
@@ -399,7 +413,7 @@ const App: React.FC = () => {
         ...result,
         id: `gen-${Date.now()}`,
         timestamp: Date.now(),
-        config: { ...config },
+        config: { ...safeConfig },
         modelId: selectedModel
       };
       
@@ -423,17 +437,21 @@ const App: React.FC = () => {
     setError(null);
     try {
       const customKey = getActiveApiKey();
-      const selectedModel = user?.preferences.selectedModel || 'gemini';
-      const structuredPrompt = buildStructuredPrompt(config);
+      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
+      const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
+      if (safeAspectRatio !== config.aspectRatio) {
+        setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
+      }
+      const structuredPrompt = buildStructuredPrompt(safeConfig);
       let result;
       if (selectedModel === 'openai') {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
         const refinementRequest = `${structuredPrompt}\nRefinement: ${refinementText}`;
-        result = await generateOpenAIImage(refinementRequest, config, customKey, user?.preferences.systemPrompt);
+        result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
-        result = await refineGraphic(generatedImage, refinementText, config, context, customKey, user?.preferences.systemPrompt);
+        result = await refineGraphic(generatedImage, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...config } };
+      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...safeConfig } };
       setGeneratedImage(stamped);
       
       // Save refined version to history too? Or update existing? Let's save as new for now.
@@ -441,7 +459,7 @@ const App: React.FC = () => {
         ...result,
         id: `gen-${Date.now()}`,
         timestamp: Date.now(),
-        config: { ...config, prompt: `${config.prompt} (Refined: ${refinementText})` },
+        config: { ...safeConfig, prompt: `${safeConfig.prompt} (Refined: ${refinementText})` },
         modelId: selectedModel
       };
       await historyService.saveToHistory(user, historyItem);
@@ -791,7 +809,7 @@ const App: React.FC = () => {
             onUploadGuidelines={handleUploadGuidelines}
             isAnalyzing={isAnalyzing}
             user={user}
-            selectedModel={user?.preferences.selectedModel || 'gemini'}
+            selectedModel={selectedModel}
             onModelChange={(modelId) => {
               if (!user) return;
               const updatedUser = {

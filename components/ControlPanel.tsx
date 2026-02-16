@@ -4,6 +4,7 @@ import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
 import { SUPPORTED_MODELS } from '../constants';
+import { getAspectRatiosForModel } from '../services/aspectRatioService';
 import { 
   Palette, 
   PenTool, 
@@ -536,7 +537,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const currentType = options.graphicTypes.find(t => t.id === config.graphicTypeId);
   const currentStyle = options.visualStyles.find(s => s.id === config.visualStyleId);
   const currentColor = options.brandColors.find(c => c.id === config.colorSchemeId);
-  const currentRatio = options.aspectRatios.find(r => r.value === config.aspectRatio);
+  const modelAspectRatios = getAspectRatiosForModel(selectedModel, options.aspectRatios);
+  const currentRatio =
+    modelAspectRatios.find(r => r.value === config.aspectRatio) ||
+    options.aspectRatios.find(r => r.value === config.aspectRatio);
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana',
     openai: 'GPT Image'
@@ -708,15 +712,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <div className="absolute top-full left-0 mt-2 w-56 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   {user && <SearchInput />}
                   <GroupedList 
-                    items={options.aspectRatios} 
+                    items={modelAspectRatios} 
                     type="size" 
                     configKey="aspectRatio" 
                   />
-                  {user && (
+                  {selectedModel === 'gemini' ? (
+                    <div className="w-full text-left p-3 text-[11px] text-slate-500 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117]">
+                      Nano Banana supports a fixed list of aspect ratios.
+                    </div>
+                  ) : user ? (
                     <button onClick={() => openModal('size')} className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors">
                        <Plus size={14} /> Add Custom Size
                     </button>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>

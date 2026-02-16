@@ -1,8 +1,7 @@
-import { db, storage } from "./firebase";
+import { db } from "./firebase";
 import { 
   collection, 
   addDoc, 
-  setDoc,
   query, 
   orderBy, 
   limit, 
@@ -10,7 +9,6 @@ import {
   deleteDoc,
   doc
 } from "firebase/firestore";
-import { ref, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
 import { User, GenerationHistoryItem } from "../types";
 
 const LOCAL_STORAGE_KEY = 'brandoit_history';
@@ -72,82 +70,28 @@ export const historyService = {
   saveToRemote: async (userId: string, item: GenerationHistoryItem) => {
     try {
       const historyRef = collection(db, "users", userId, "history");
-
-      // Upload image to Firebase Storage to avoid Firestore document size limits
-      const imageRef = ref(storage, `users/${userId}/history/${item.id}.${item.mimeType.split('/')[1] || 'png'}`);
-      const base64Data = item.base64Data.includes(',') ? item.base64Data.split(',')[1] : item.base64Data;
-      await uploadString(imageRef, base64Data, 'base64', { contentType: item.mimeType });
-      const imageUrl = await getDownloadURL(imageRef);
-
-      await setDoc(doc(historyRef, item.id), {
-        id: item.id,
-        timestamp: item.timestamp,
-        config: item.config,
-        imageUrl,
-        mimeType: item.mimeType,
-        modelId: item.modelId
-      });
+      
+      // Add new document
+      // We store the full item including base64. 
+      // NOTE: Firestore documents have a 1MB limit. 
+      // If base64 images are large, this might fail or be slow.
+      // Ideally we would upload to Storage, but for MVP/prototype we try Firestore.
+      await addDoc(historyRef, item);
 
       // Cleanup old items to enforce limit
+      // This is a bit expensive (reads + deletes), but keeps the DB clean
       const q = query(historyRef, orderBy("timestamp", "desc"));
       const snapshot = await getDocs(q);
       
       if (snapshot.size > REMOTE_LIMIT) {
         const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
-        const deletePromises = itemsToDelete.map(async (d) => {
-          const data = d.data();
-          await deleteDoc(doc(db, "users", userId, "history", d.id));
-          if (data.imageUrl && data.imageUrl.includes('firebasestorage.googleapis.com')) {
-            try {
-              const urlPath = decodeURIComponent(data.imageUrl.split('/o/')[1]?.split('?')[0] || '');
-              if (urlPath) {
-                await deleteObject(ref(storage, urlPath));
-              }
-            } catch (storageError) {
-              console.warn("Failed to delete old image from Storage:", storageError);
-            }
-          }
-        });
+        const deletePromises = itemsToDelete.map(d => deleteDoc(doc(db, "users", userId, "history", d.id)));
         await Promise.all(deletePromises);
       }
 
     } catch (e) {
       console.error("Failed to save to remote history:", e);
-      historyService.saveToLocal(item);
-    }
-  },
-
-  deleteFromRemote: async (userId: string, historyId: string) => {
-    try {
-      const historyDocRef = doc(db, "users", userId, "history", historyId);
-      const snapshot = await getDocs(query(collection(db, "users", userId, "history")));
-      const target = snapshot.docs.find(d => d.id === historyId);
-      const data = target?.data();
-
-      await deleteDoc(historyDocRef);
-
-      if (data && data.imageUrl && data.imageUrl.includes('firebasestorage.googleapis.com')) {
-        try {
-          const urlPath = decodeURIComponent(data.imageUrl.split('/o/')[1]?.split('?')[0] || '');
-          if (urlPath) {
-            await deleteObject(ref(storage, urlPath));
-          }
-        } catch (err) {
-          console.warn("Failed to delete history image from Storage:", err);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to delete remote history item:", e);
-      throw e;
-    }
-  },
-
-  deleteFromLocal: (historyId: string) => {
-    const history = historyService.getFromLocal().filter(h => h.id !== historyId);
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(history.slice(0, LOCAL_LIMIT)));
-    } catch (e) {
-      console.error("Failed to update local history after delete:", e);
+      // Fallback to local if remote fails? Or just log it.
     }
   },
 
@@ -157,15 +101,10 @@ export const historyService = {
       const q = query(historyRef, orderBy("timestamp", "desc"), limit(REMOTE_LIMIT));
       const snapshot = await getDocs(q);
       
-      return snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          ...data,
-          id: doc.id,
-          imageUrl: data.imageUrl || '',
-          modelId: data.modelId
-        } as GenerationHistoryItem;
-      });
+      return snapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id // Use Firestore ID
+      } as GenerationHistoryItem));
     } catch (e) {
       console.error("Failed to fetch remote history:", e);
       return [];

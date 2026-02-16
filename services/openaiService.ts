@@ -6,10 +6,16 @@ const MODEL_ID = 'gpt-image-1.5';
 const aspectToSize = (aspect: string): string => {
   switch (aspect) {
     case '16:9':
+    case '21:9':
     case '4:3':
+    case '3:2':
+    case '5:4':
+    case '6:5':
       return '1536x1024'; // landscape-ish
     case '9:16':
+    case '2:3':
     case '3:4':
+    case '4:5':
       return '1024x1536'; // portrait-ish
     case '1:1':
       return '1024x1024';
@@ -91,4 +97,3 @@ export const generateOpenAIImage = async (
     mimeType
   };
 };
-

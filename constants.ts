@@ -74,36 +74,29 @@ export const GRAPHIC_TYPES: GraphicType[] = [
   { id: 'marketing-banner', name: 'Marketing Banner', icon: Megaphone }
 ];
 
-export const ASPECT_RATIOS: AspectRatioOption[] = [
-  { label: 'Square (1:1)', value: '1:1', icon: Frame },
-  { label: 'Landscape (16:9)', value: '16:9', icon: Tv },
-  { label: 'Portrait (9:16)', value: '9:16', icon: Smartphone },
-  { label: 'Presentation (4:3)', value: '4:3', icon: Monitor },
-  { label: 'Vertical (3:4)', value: '3:4', icon: Tablet }
-];
-
-// Supported AI Models Configuration
-export interface ModelConfig {
-  id: string;
-  name: string;
-  provider: string;
-  description: string;
-  defaultModel?: string;
-}
-
-export const SUPPORTED_MODELS: ModelConfig[] = [
+export const SUPPORTED_MODELS = [
   {
     id: 'gemini',
-    name: 'Google Gemini',
-    provider: 'google',
-    description: "Google's Gemini models for image generation and analysis",
-    defaultModel: 'gemini-3-pro-image-preview'
+    name: 'Nano Banana',
+    description: 'Gemini 3 Pro Image Preview'
   },
   {
     id: 'openai',
-    name: 'OpenAI GPT-Image 1.5',
-    provider: 'openai',
-    description: "OpenAI's GPT-Image 1.5 for image generation",
-    defaultModel: 'gpt-image-1.5'
+    name: 'GPT Image',
+    description: 'OpenAI gpt-image model'
   }
+];
+
+export const ASPECT_RATIOS: AspectRatioOption[] = [
+  { label: 'Square (1:1)', value: '1:1', icon: Frame },
+  { label: 'Tall Portrait (2:3)', value: '2:3', icon: Smartphone },
+  { label: 'Classic Photo (3:2)', value: '3:2', icon: Monitor },
+  { label: 'Vertical (3:4)', value: '3:4', icon: Tablet },
+  { label: 'Presentation (4:3)', value: '4:3', icon: Monitor },
+  { label: 'Tall Print (4:5)', value: '4:5', icon: Smartphone },
+  { label: 'Slide Friendly (5:4)', value: '5:4', icon: Monitor },
+  { label: 'Slides (6:5)', value: '6:5', icon: Monitor },
+  { label: 'Portrait (9:16)', value: '9:16', icon: Smartphone },
+  { label: 'Landscape (16:9)', value: '16:9', icon: Tv },
+  { label: 'Ultrawide (21:9)', value: '21:9', icon: Tv }
 ];
