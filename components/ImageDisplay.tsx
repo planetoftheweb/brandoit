@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
 import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, Sparkles } from 'lucide-react';
+import { createBlobUrlFromImage } from '../services/imageSourceService';
 
 interface ImageDisplayProps {
   image: GeneratedImage | null;
@@ -27,6 +28,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [refinementInput, setRefinementInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [noticeTimer, setNoticeTimer] = useState<number | null>(null);
+  const [renderImageSrc, setRenderImageSrc] = useState<string>('');
+  const [fallbackBlobUrl, setFallbackBlobUrl] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -35,6 +38,22 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       }
     };
   }, [noticeTimer]);
+
+  useEffect(() => {
+    setRenderImageSrc(image?.imageUrl || '');
+    if (fallbackBlobUrl) {
+      URL.revokeObjectURL(fallbackBlobUrl);
+      setFallbackBlobUrl(null);
+    }
+  }, [image?.imageUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (fallbackBlobUrl) {
+        URL.revokeObjectURL(fallbackBlobUrl);
+      }
+    };
+  }, [fallbackBlobUrl]);
 
   const showNotice = (msg: string) => {
     if (noticeTimer) {
@@ -77,7 +96,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const handleDownload = () => {
     if (!image) return;
     const link = document.createElement('a');
-    link.href = image.imageUrl;
+    link.href = renderImageSrc || image.imageUrl;
     link.download = `brandoit-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
@@ -97,7 +116,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const handleCopyImageToClipboard = async () => {
     if (!image) return;
     try {
-      const response = await fetch(image.imageUrl, { mode: 'cors' });
+      const sourceUrl = renderImageSrc || image.imageUrl;
+      const response = await fetch(sourceUrl, { mode: 'cors' });
       const blob = await response.blob();
       if (navigator.clipboard && 'write' in navigator.clipboard && typeof ClipboardItem !== 'undefined') {
         await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
@@ -145,6 +165,18 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     }
   };
 
+  const handleImageError = () => {
+    if (!image) return;
+    if (renderImageSrc.startsWith('blob:')) return;
+    const blobUrl = createBlobUrlFromImage(image);
+    if (!blobUrl) return;
+    if (fallbackBlobUrl) {
+      URL.revokeObjectURL(fallbackBlobUrl);
+    }
+    setFallbackBlobUrl(blobUrl);
+    setRenderImageSrc(blobUrl);
+  };
+
   if (!image) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center h-full min-h-[60vh] text-slate-900 dark:text-white">
@@ -167,9 +199,10 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
           <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-visible border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
             <img 
-              src={image.imageUrl} 
+              src={renderImageSrc || image.imageUrl} 
               alt="Generated Output" 
               className="max-w-full max-h-[70vh] object-contain block rounded-lg"
+              onError={handleImageError}
             />
           {/* Info overlay on hover */}
           <div className="absolute left-4 bottom-4 opacity-0 group-hover:opacity-100 transition-opacity">

@@ -2,6 +2,7 @@ import React from 'react';
 import { GenerationHistoryItem, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
 import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon } from 'lucide-react';
 import { describeImagePrompt } from '../services/geminiService';
+import { createBlobUrlFromImage } from '../services/imageSourceService';
 
 interface RecentGenerationsProps {
   history: GenerationHistoryItem[];
@@ -23,7 +24,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
 }) => {
   const [copyLoadingId, setCopyLoadingId] = React.useState<string | null>(null);
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
+  const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
   const toastTimerRef = React.useRef<number | null>(null);
+  const blobUrlsRef = React.useRef<Record<string, string>>({});
 
   React.useEffect(() => {
     if (history.length > 0) {
@@ -35,6 +38,32 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         window.clearTimeout(toastTimerRef.current);
       }
     };
+  }, [history]);
+
+  React.useEffect(() => {
+    return () => {
+      Object.values(blobUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+      blobUrlsRef.current = {};
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const activeIds = new Set(history.map((item) => item.id));
+    const staleIds = Object.keys(blobUrlsRef.current).filter((id) => !activeIds.has(id));
+    if (staleIds.length === 0) return;
+
+    staleIds.forEach((id) => {
+      URL.revokeObjectURL(blobUrlsRef.current[id]);
+      delete blobUrlsRef.current[id];
+    });
+
+    setImageSrcById((prev) => {
+      const next = { ...prev };
+      staleIds.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
   }, [history]);
 
   if (history.length === 0) return null;
@@ -131,6 +160,26 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return `${mm}-${dd} ${hh}:${mi} ${ampm}`;
   };
 
+  const getDisplayImageUrl = (item: GenerationHistoryItem): string => {
+    return imageSrcById[item.id] || item.imageUrl;
+  };
+
+  const handleImageLoadError = (item: GenerationHistoryItem) => {
+    const currentSource = imageSrcById[item.id] || item.imageUrl;
+    if (currentSource?.startsWith('blob:')) return;
+
+    const blobUrl = createBlobUrlFromImage(item);
+    if (!blobUrl) return;
+
+    const previousBlobUrl = blobUrlsRef.current[item.id];
+    if (previousBlobUrl) {
+      URL.revokeObjectURL(previousBlobUrl);
+    }
+
+    blobUrlsRef.current[item.id] = blobUrl;
+    setImageSrcById((prev) => ({ ...prev, [item.id]: blobUrl }));
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 md:px-6 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 border-t border-gray-200 dark:border-[#30363d] mt-8">
       <div className="flex items-center justify-between mb-4">
@@ -154,7 +203,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   const link = document.createElement('a');
-                  link.href = item.imageUrl;
+                  link.href = getDisplayImageUrl(item);
                   link.download = `brandoit-${item.id || Date.now()}.png`;
                   document.body.appendChild(link);
                   link.click();
@@ -172,7 +221,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  copyImageToClipboard(item.imageUrl);
+                  copyImageToClipboard(getDisplayImageUrl(item));
                 }}
                 className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                 aria-label="Copy image to clipboard"
@@ -185,7 +234,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigator.clipboard.writeText(item.imageUrl).catch(err => console.error('Copy image URL failed', err));
+                  navigator.clipboard.writeText(getDisplayImageUrl(item)).catch(err => console.error('Copy image URL failed', err));
                   showToast('Image URL copied');
                 }}
                 className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
@@ -203,7 +252,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     setCopyLoadingId(item.id);
                     let imageDescription = '';
                     try {
-                      const { base64, mime } = await fetchImageAsBase64(item.imageUrl);
+                      const { base64, mime } = await fetchImageAsBase64(getDisplayImageUrl(item));
                       imageDescription = await describeImagePrompt(base64, mime);
                     } catch (imgErr) {
                       console.warn('Image describe fallback:', imgErr);
@@ -253,9 +302,10 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
 
             <div className="aspect-square w-full relative bg-gray-100 dark:bg-[#0d1117] overflow-hidden rounded-xl">
               <img 
-                src={item.imageUrl} 
+                src={getDisplayImageUrl(item)} 
                 alt={item.config.prompt} 
                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                onError={() => handleImageLoadError(item)}
               />
               <button
                 onClick={() => {
