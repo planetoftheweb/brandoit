@@ -6,7 +6,7 @@ import { BrandAnalysisModal } from './components/BrandAnalysisModal';
 import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
 import { RecentGenerations } from './components/RecentGenerations';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, GenerationHistoryItem, UserSettings, BrandGuidelinesAnalysis } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -16,9 +16,10 @@ import {
 } from './constants';
 import { generateGraphic, refineGraphic, analyzeBrandGuidelines, describeImagePrompt } from './services/geminiService';
 import { generateOpenAIImage } from './services/openaiService';
+import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel } from './services/aspectRatioService';
 import { authService } from './services/authService';
-import { historyService } from './services/historyService';
+import { historyService, createGeneration, addRefinementVersion, getCurrentVersion } from './services/historyService';
 // import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
 import { resourceService } from './services/resourceService'; // Import resource service
@@ -172,8 +173,8 @@ const App: React.FC = () => {
   });
   const [hasHydratedToolbarState, setHasHydratedToolbarState] = useState(false);
 
-  const [generatedImage, setGeneratedImage] = useState<GeneratedImage | null>(null);
-  const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
+  const [currentGeneration, setCurrentGeneration] = useState<Generation | null>(null);
+  const [history, setHistory] = useState<Generation[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -376,11 +377,15 @@ const App: React.FC = () => {
     user?.id
   ]);
 
-  // Helper to get active API key based on selected model (with legacy fallback)
   const getActiveApiKey = (): string | undefined => {
     if (!user) return undefined;
     if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
       return user.preferences.apiKeys[selectedModel];
+    }
+    // gemini-svg shares the gemini key
+    if (selectedModel === 'gemini-svg') {
+      if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
+      if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
     }
     if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
       return user.preferences.geminiApiKey;
@@ -388,13 +393,13 @@ const App: React.FC = () => {
     return undefined;
   };
 
-  const executeDeleteHistory = async (historyId: string) => {
+  const executeDeleteHistory = async (generationId: string) => {
     if (user) {
-      await historyService.deleteFromRemote(user.id, historyId);
+      await historyService.deleteFromRemote(user.id, generationId);
       const updatedHistory = await historyService.getHistory(user);
       setHistory(updatedHistory);
     } else {
-      historyService.deleteFromLocal(historyId);
+      historyService.deleteFromLocal(generationId);
       const updatedHistory = historyService.getFromLocal();
       setHistory(updatedHistory);
     }
@@ -451,17 +456,18 @@ const App: React.FC = () => {
   };
 
   const handleCopyCurrent = async () => {
-    if (!generatedImage) return;
+    if (!currentGeneration) return;
+    const version = getCurrentVersion(currentGeneration);
     try {
       let imageDescription = '';
       try {
-        const { base64, mime } = await fetchImageAsBase64(generatedImage.imageUrl);
+        const { base64, mime } = await fetchImageAsBase64(version.imageUrl);
         imageDescription = await describeImagePrompt(base64, mime, getActiveApiKey());
       } catch (err) {
         console.warn('Image describe fallback (main image):', err);
       }
 
-      const structured = buildStructuredPrompt(config);
+      const structured = buildStructuredPrompt(currentGeneration.config);
       const finalText = imageDescription
         ? `${structured}\n\nImage-Based Prompt: ${imageDescription}`
         : structured;
@@ -473,20 +479,17 @@ const App: React.FC = () => {
   };
 
   const executeDeleteCurrent = async () => {
-    if (!generatedImage) return;
-    const historyId = (generatedImage as any).id;
-    if (historyId) {
-      await executeDeleteHistory(historyId);
-    }
-    setGeneratedImage(null);
+    if (!currentGeneration) return;
+    await executeDeleteHistory(currentGeneration.id);
+    setCurrentGeneration(null);
   };
 
   const requestDeleteCurrent = () => {
-    if (!generatedImage) return;
+    if (!currentGeneration) return;
     const needConfirm = user?.preferences?.settings?.confirmDeleteCurrent ?? true;
     if (needConfirm) {
       setSkipFutureConfirm(false);
-      setConfirmDeleteModal({ type: 'current', id: (generatedImage as any).id });
+      setConfirmDeleteModal({ type: 'current', id: currentGeneration.id });
     } else {
       executeDeleteCurrent().catch((err) => {
         console.error("Failed to delete current image:", err);
@@ -553,27 +556,19 @@ const App: React.FC = () => {
       }
       const structuredPrompt = buildStructuredPrompt(safeConfig);
       let result;
-      if (selectedModel === 'openai') {
+      if (selectedModel === 'gemini-svg') {
+        result = await generateSvg(safeConfig, context, customKey, user?.preferences.systemPrompt);
+      } else if (selectedModel === 'openai') {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
         result = await generateOpenAIImage(structuredPrompt, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
         result = await generateGraphic(safeConfig, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...safeConfig } };
-      setGeneratedImage(stamped);
 
-      // Save to history
-      const historyItem: GenerationHistoryItem = {
-        ...result,
-        id: `gen-${Date.now()}`,
-        timestamp: Date.now(),
-        config: { ...safeConfig },
-        modelId: selectedModel
-      };
-      
-      await historyService.saveToHistory(user, historyItem);
-      
-      // Refresh history list
+      const generation = await createGeneration(result, { ...safeConfig }, selectedModel);
+      setCurrentGeneration(generation);
+
+      await historyService.saveGeneration(user, generation);
       const updatedHistory = await historyService.getHistory(user);
       setHistory(updatedHistory);
 
@@ -585,38 +580,42 @@ const App: React.FC = () => {
   };
 
   const handleRefine = async (refinementText: string) => {
-    if (!generatedImage) return;
+    if (!currentGeneration) return;
 
     setIsGenerating(true);
     setError(null);
     try {
       const customKey = getActiveApiKey();
+      const currentVersion = getCurrentVersion(currentGeneration);
       const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
       const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
       if (safeAspectRatio !== config.aspectRatio) {
         setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
       }
       const structuredPrompt = buildStructuredPrompt(safeConfig);
+
+      const currentImage: GeneratedImage = {
+        imageUrl: currentVersion.imageUrl,
+        base64Data: currentVersion.imageData,
+        mimeType: currentVersion.mimeType,
+      };
+
       let result;
-      if (selectedModel === 'openai') {
+      if (selectedModel === 'gemini-svg') {
+        const svgCode = currentVersion.svgCode || '';
+        result = await refineSvg(svgCode, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
+      } else if (selectedModel === 'openai') {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
         const refinementRequest = `${structuredPrompt}\nRefinement: ${refinementText}`;
         result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
-        result = await refineGraphic(generatedImage, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
+        result = await refineGraphic(currentImage, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
       }
-      const stamped = { ...result, modelId: selectedModel, timestamp: Date.now(), config: { ...safeConfig } };
-      setGeneratedImage(stamped);
-      
-      // Save refined version to history too? Or update existing? Let's save as new for now.
-      const historyItem: GenerationHistoryItem = {
-        ...result,
-        id: `gen-${Date.now()}`,
-        timestamp: Date.now(),
-        config: { ...safeConfig, prompt: `${safeConfig.prompt} (Refined: ${refinementText})` },
-        modelId: selectedModel
-      };
-      await historyService.saveToHistory(user, historyItem);
+
+      const updatedGeneration = await addRefinementVersion(currentGeneration, result, refinementText);
+      setCurrentGeneration(updatedGeneration);
+
+      await historyService.updateGeneration(user, updatedGeneration);
       const updatedHistory = await historyService.getHistory(user);
       setHistory(updatedHistory);
 
@@ -627,20 +626,25 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRestoreFromHistory = (item: GenerationHistoryItem) => {
-    setConfig(item.config);
-    setGeneratedImage(item);
-    if (user && item.modelId) {
+  const handleRestoreFromHistory = (gen: Generation) => {
+    setConfig(gen.config);
+    setCurrentGeneration(gen);
+    if (user && gen.modelId) {
       const updatedUser = {
         ...user,
         preferences: {
           ...user.preferences,
-          selectedModel: item.modelId
+          selectedModel: gen.modelId
         }
       };
       setUser(updatedUser);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleVersionChange = (index: number) => {
+    if (!currentGeneration) return;
+    setCurrentGeneration({ ...currentGeneration, currentVersionIndex: index });
   };
 
   const handleUploadGuidelines = async (file: File) => {
@@ -1062,11 +1066,12 @@ const App: React.FC = () => {
 
             {/* Display */}
             <ImageDisplay 
-              image={generatedImage} 
+              generation={currentGeneration}
               onRefine={handleRefine}
               isRefining={isGenerating}
               onCopy={handleCopyCurrent}
               onDelete={requestDeleteCurrent}
+              onVersionChange={handleVersionChange}
               options={context}
             />
 

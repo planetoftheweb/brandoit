@@ -1,13 +1,16 @@
 import React from 'react';
-import { GenerationHistoryItem, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon } from 'lucide-react';
+import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode } from 'lucide-react';
+import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
+import { getLatestVersion } from '../services/historyService';
+import { buildExportFilename } from '../services/versionUtils';
 
 interface RecentGenerationsProps {
-  history: GenerationHistoryItem[];
-  onSelect: (item: GenerationHistoryItem) => void;
-  onDelete: (historyId: string) => void;
+  history: Generation[];
+  onSelect: (gen: Generation) => void;
+  onDelete: (generationId: string) => void;
   options: {
     brandColors: BrandColor[];
     visualStyles: VisualStyle[];
@@ -29,14 +32,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const blobUrlsRef = React.useRef<Record<string, string>>({});
 
   React.useEffect(() => {
-    if (history.length > 0) {
-      console.log('RecentGenerations: history length', history.length);
-    }
-
     return () => {
-      if (toastTimerRef.current) {
-        window.clearTimeout(toastTimerRef.current);
-      }
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, [history]);
 
@@ -48,7 +45,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   }, []);
 
   React.useEffect(() => {
-    const activeIds = new Set(history.map((item) => item.id));
+    const activeIds = new Set(history.map((gen) => gen.id));
     const staleIds = Object.keys(blobUrlsRef.current).filter((id) => !activeIds.has(id));
     if (staleIds.length === 0) return;
 
@@ -59,9 +56,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
 
     setImageSrcById((prev) => {
       const next = { ...prev };
-      staleIds.forEach((id) => {
-        delete next[id];
-      });
+      staleIds.forEach((id) => delete next[id]);
       return next;
     });
   }, [history]);
@@ -79,24 +74,25 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return `${palette.name}: ${palette.colors.join(', ')}`;
   };
 
-  const buildFullPrompt = (item: GenerationHistoryItem) => {
-    const typeLabel = getLabel(item.config.graphicTypeId, options.graphicTypes);
-    const styleLabel = getLabel(item.config.visualStyleId, options.visualStyles);
-    const styleDesc = options.visualStyles.find(s => s.id === item.config.visualStyleId)?.description || '';
-    const colorsLabel = getColors(item.config.colorSchemeId);
-    const colorsHex = options.brandColors.find(c => c.id === item.config.colorSchemeId)?.colors?.join(', ') || '';
-    const aspectLabel = getLabel(item.config.aspectRatio, options.aspectRatios);
+  const buildFullPrompt = (gen: Generation) => {
+    const cfg = gen.config;
+    const typeLabel = getLabel(cfg.graphicTypeId, options.graphicTypes);
+    const styleLabel = getLabel(cfg.visualStyleId, options.visualStyles);
+    const styleDesc = options.visualStyles.find(s => s.id === cfg.visualStyleId)?.description || '';
+    const colorsLabel = getColors(cfg.colorSchemeId);
+    const colorsHex = options.brandColors.find(c => c.id === cfg.colorSchemeId)?.colors?.join(', ') || '';
+    const aspectLabel = getLabel(cfg.aspectRatio, options.aspectRatios);
     const expanded = [
       `Generate a ${typeLabel}`,
       aspectLabel ? `at ${aspectLabel} aspect ratio` : '',
       styleLabel ? `in the ${styleLabel} style${styleDesc ? ` (${styleDesc})` : ''}` : '',
       colorsLabel ? `using palette ${colorsLabel}` : '',
       colorsHex ? `Use these exact hex colors: ${colorsHex}` : '',
-      `Subject/Content: ${item.config.prompt}`
+      `Subject/Content: ${cfg.prompt}`
     ].filter(Boolean).join('. ');
 
     return [
-      `Original Prompt: ${item.config.prompt}`,
+      `Original Prompt: ${cfg.prompt}`,
       `Structured Prompt: ${expanded}`,
       `Type: ${typeLabel}`,
       `Style: ${styleLabel}${styleDesc ? ` (${styleDesc})` : ''}`,
@@ -125,8 +121,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         await navigator.clipboard.writeText(url);
         showToast('Image URL copied');
       }
-    } catch (err) {
-      console.error('Copy image to clipboard failed', err);
+    } catch {
       try {
         await navigator.clipboard.writeText(url);
         showToast('Copied image URL (image copy blocked by browser/CORS)');
@@ -137,15 +132,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   };
 
   const showToast = (msg: string) => {
-    if (toastTimerRef.current) {
-      window.clearTimeout(toastTimerRef.current);
-    }
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
     toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 1800);
   };
 
   const getModelLabel = (modelId?: string) => {
     if (modelId === 'openai') return 'GPT Image';
+    if (modelId === 'gemini-svg') return 'Gemini SVG';
     return 'Nano Banana';
   };
 
@@ -160,24 +154,25 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return `${mm}-${dd} ${hh}:${mi} ${ampm}`;
   };
 
-  const getDisplayImageUrl = (item: GenerationHistoryItem): string => {
-    return imageSrcById[item.id] || item.imageUrl;
+  const getDisplayImageUrl = (gen: Generation): string => {
+    const latestVersion = getLatestVersion(gen);
+    return imageSrcById[gen.id] || latestVersion.imageUrl;
   };
 
-  const handleImageLoadError = (item: GenerationHistoryItem) => {
-    const currentSource = imageSrcById[item.id] || item.imageUrl;
+  const handleImageLoadError = (gen: Generation) => {
+    const currentSource = imageSrcById[gen.id];
     if (currentSource?.startsWith('blob:')) return;
 
-    const blobUrl = createBlobUrlFromImage(item);
+    const latestVersion = getLatestVersion(gen);
+    const fakeImage = { imageUrl: latestVersion.imageUrl, base64Data: latestVersion.imageData, mimeType: latestVersion.mimeType };
+    const blobUrl = createBlobUrlFromImage(fakeImage);
     if (!blobUrl) return;
 
-    const previousBlobUrl = blobUrlsRef.current[item.id];
-    if (previousBlobUrl) {
-      URL.revokeObjectURL(previousBlobUrl);
-    }
+    const previousBlobUrl = blobUrlsRef.current[gen.id];
+    if (previousBlobUrl) URL.revokeObjectURL(previousBlobUrl);
 
-    blobUrlsRef.current[item.id] = blobUrl;
-    setImageSrcById((prev) => ({ ...prev, [item.id]: blobUrl }));
+    blobUrlsRef.current[gen.id] = blobUrl;
+    setImageSrcById((prev) => ({ ...prev, [gen.id]: blobUrl }));
   };
 
   return (
@@ -193,156 +188,189 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-        {history.map((item) => (
-          <div 
-            key={item.id} 
-            className="group relative bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-visible shadow-sm hover:shadow-lg hover:border-brand-teal dark:hover:border-brand-teal transition-all"
-          >
-            <div className="absolute top-2 right-2 z-10 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const link = document.createElement('a');
-                  link.href = getDisplayImageUrl(item);
-                  link.download = `brandoit-${item.id || Date.now()}.png`;
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                  showToast('Download started');
-                }}
-                className="group/download relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
-                aria-label="Download"
-              >
-                <Download size={16} />
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/download:opacity-100 transition-opacity">
-                  Download
-                </span>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyImageToClipboard(getDisplayImageUrl(item));
-                }}
-                className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
-                aria-label="Copy image to clipboard"
-              >
-                <ImageIcon size={16} />
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
-                  Copy image
-                </span>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigator.clipboard.writeText(getDisplayImageUrl(item)).catch(err => console.error('Copy image URL failed', err));
-                  showToast('Image URL copied');
-                }}
-                className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
-                aria-label="Copy image URL"
-              >
-                <Link size={16} />
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
-                  Copy image URL
-                </span>
-              </button>
-              <button
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  try {
-                    setCopyLoadingId(item.id);
-                    let imageDescription = '';
-                    try {
-                      const { base64, mime } = await fetchImageAsBase64(getDisplayImageUrl(item));
-                      imageDescription = await describeImagePrompt(base64, mime);
-                    } catch (imgErr) {
-                      console.warn('Image describe fallback:', imgErr);
+        {history.map((gen) => {
+          const latestVersion = getLatestVersion(gen);
+          const versionCount = gen.versions.length;
+
+          return (
+            <div 
+              key={gen.id} 
+              className="group relative bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-visible shadow-sm hover:shadow-lg hover:border-brand-teal dark:hover:border-brand-teal transition-all"
+            >
+              {/* Mark badge */}
+              {versionCount > 1 && (
+                <div className="absolute top-2 left-2 z-10">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/90 text-white shadow-sm">
+                    {latestVersion.label}
+                  </span>
+                </div>
+              )}
+
+              <div className="absolute top-2 right-2 z-10 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (latestVersion.mimeType === 'image/svg+xml' && latestVersion.svgCode) {
+                      const blob = new Blob([latestVersion.svgCode], { type: 'image/svg+xml' });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = buildExportFilename(gen.config.prompt, latestVersion.number, 'svg');
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                    } else {
+                      const link = document.createElement('a');
+                      link.href = getDisplayImageUrl(gen);
+                      link.download = buildExportFilename(gen.config.prompt, latestVersion.number, 'webp');
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
                     }
+                    showToast('Download started');
+                  }}
+                  className="group/download relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  aria-label="Download"
+                >
+                  {latestVersion.mimeType === 'image/svg+xml' ? <FileCode size={16} /> : <Download size={16} />}
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/download:opacity-100 transition-opacity">
+                    {latestVersion.mimeType === 'image/svg+xml' ? 'Download SVG' : 'Download'}
+                  </span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyImageToClipboard(getDisplayImageUrl(gen));
+                  }}
+                  className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  aria-label="Copy image to clipboard"
+                >
+                  <ImageIcon size={16} />
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyimg:opacity-100 transition-opacity">
+                    Copy image
+                  </span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(getDisplayImageUrl(gen)).catch(err => console.error('Copy image URL failed', err));
+                    showToast('Image URL copied');
+                  }}
+                  className="group/copyurl relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  aria-label="Copy image URL"
+                >
+                  <Link size={16} />
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copyurl:opacity-100 transition-opacity">
+                    Copy image URL
+                  </span>
+                </button>
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      setCopyLoadingId(gen.id);
+                      let imageDescription = '';
+                      try {
+                        const { base64, mime } = await fetchImageAsBase64(getDisplayImageUrl(gen));
+                        imageDescription = await describeImagePrompt(base64, mime);
+                      } catch (imgErr) {
+                        console.warn('Image describe fallback:', imgErr);
+                      }
 
-                    const structured = buildFullPrompt(item);
-                    const finalText = imageDescription
-                      ? `${structured}\n\nImage-Based Prompt: ${imageDescription}`
-                      : structured;
-                    await navigator.clipboard.writeText(finalText);
-                    showToast('Prompt copied');
-                  } catch (err) {
-                    const structured = buildFullPrompt(item);
-                    await navigator.clipboard.writeText(structured);
-                    showToast('Prompt copied');
-                  } finally {
-                    setCopyLoadingId(null);
-                  }
-                }}
-                className="group/copy relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
-                aria-label="Copy full prompt"
-              >
-                {copyLoadingId === item.id ? (
-                  <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                      const structured = buildFullPrompt(gen);
+                      const finalText = imageDescription
+                        ? `${structured}\n\nImage-Based Prompt: ${imageDescription}`
+                        : structured;
+                      await navigator.clipboard.writeText(finalText);
+                      showToast('Prompt copied');
+                    } catch {
+                      const structured = buildFullPrompt(gen);
+                      await navigator.clipboard.writeText(structured);
+                      showToast('Prompt copied');
+                    } finally {
+                      setCopyLoadingId(null);
+                    }
+                  }}
+                  className="group/copy relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  aria-label="Copy full prompt"
+                >
+                  {copyLoadingId === gen.id ? (
+                    <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                  ) : (
+                    <Copy size={16} />
+                  )}
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copy:opacity-100 transition-opacity">
+                    Copy prompt
+                  </span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(gen.id);
+                    showToast('Generation removed');
+                  }}
+                  className="group/delete relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  aria-label="Delete"
+                >
+                  <Trash2 size={16} />
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/delete:opacity-100 transition-opacity">
+                    Delete
+                  </span>
+                </button>
+              </div>
+
+              <div className="aspect-square w-full relative bg-gray-100 dark:bg-[#0d1117] overflow-hidden rounded-xl">
+                {latestVersion.mimeType === 'image/svg+xml' && latestVersion.svgCode ? (
+                  <div
+                    className="w-full h-full flex items-center justify-center p-2 [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto transition-transform duration-500 group-hover:scale-105"
+                    dangerouslySetInnerHTML={{ __html: sanitizeSvg(latestVersion.svgCode) }}
+                  />
                 ) : (
-                  <Copy size={16} />
+                  <img 
+                    src={getDisplayImageUrl(gen)} 
+                    alt={gen.config.prompt} 
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    onError={() => handleImageLoadError(gen)}
+                  />
                 )}
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/copy:opacity-100 transition-opacity">
-                  Copy prompt
-                </span>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(item.id);
-                  showToast('Generation removed');
-                }}
-                className="group/delete relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
-                aria-label="Delete"
-              >
-                <Trash2 size={16} />
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/delete:opacity-100 transition-opacity">
-                  Delete
-                </span>
-              </button>
-            </div>
+                <button
+                  onClick={() => {
+                    onSelect(gen);
+                    showToast('Restored');
+                  }}
+                  className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"
+                  aria-label="Restore generation"
+                >
+                  <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
+                    <ArrowUpRight size={14} /> Restore
+                  </span>
+                </button>
+              </div>
 
-            <div className="aspect-square w-full relative bg-gray-100 dark:bg-[#0d1117] overflow-hidden rounded-xl">
-              <img 
-                src={getDisplayImageUrl(item)} 
-                alt={item.config.prompt} 
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                onError={() => handleImageLoadError(item)}
-              />
-              <button
-                onClick={() => {
-                  onSelect(item);
-                  showToast('Restored');
-                }}
-                className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"
-                aria-label="Restore generation"
-              >
-                <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
-                  <ArrowUpRight size={14} /> Restore
-                </span>
-              </button>
-            </div>
-
-            <div className="p-3 pt-4">
-              <p className="text-xs font-medium text-slate-900 dark:text-white line-clamp-2 mb-2 h-8 leading-relaxed">
-                {item.config.prompt}
-              </p>
-              
-              <div className="flex flex-wrap gap-1.5">
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                  {getLabel(item.config.graphicTypeId, options.graphicTypes)}
-                </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                  {getLabel(item.config.visualStyleId, options.visualStyles)}
-                </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
-                  {getModelLabel(item.modelId)}
-                </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                  {formatTimestamp(item.timestamp)}
-                </span>
+              <div className="p-3 pt-4">
+                <p className="text-xs font-medium text-slate-900 dark:text-white line-clamp-2 mb-2 h-8 leading-relaxed">
+                  {gen.config.prompt}
+                </p>
+                
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {getLabel(gen.config.graphicTypeId, options.graphicTypes)}
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {getLabel(gen.config.visualStyleId, options.visualStyles)}
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
+                    {getModelLabel(gen.modelId)}
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                    {formatTimestamp(gen.createdAt)}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {toastMessage && (

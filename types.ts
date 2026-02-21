@@ -20,8 +20,11 @@ export interface BrandColor extends BaseResource {
   colors: string[]; // Hex codes
 }
 
+export type StyleFormat = 'raster' | 'vector';
+
 export interface VisualStyle extends BaseResource {
   description: string;
+  supportedFormats?: StyleFormat[];
 }
 
 export interface GraphicType extends BaseResource {}
@@ -31,12 +34,15 @@ export interface AspectRatioOption extends BaseResource {
   value: string; // "1:1", "16:9", etc.
 }
 
+export type SvgMode = 'static' | 'animated' | 'interactive';
+
 export interface GenerationConfig {
   prompt: string;
   colorSchemeId: string;
   visualStyleId: string;
   graphicTypeId: string;
   aspectRatio: string;
+  svgMode?: SvgMode;
 }
 
 export interface GeneratedImage {
@@ -48,11 +54,40 @@ export interface GeneratedImage {
   config?: GenerationConfig;
 }
 
+/** @deprecated Use Generation + GenerationVersion instead */
 export interface GenerationHistoryItem extends GeneratedImage {
   id: string;
   timestamp: number;
   config: GenerationConfig;
   modelId?: string;
+}
+
+export type VersionType = 'generation' | 'refinement';
+
+export interface GenerationVersion {
+  id: string;
+  number: number;
+  label: string;
+  timestamp: number;
+  type: VersionType;
+
+  imageData: string;
+  imageUrl: string;
+  mimeType: string;
+
+  svgCode?: string;
+
+  refinementPrompt?: string;
+  parentVersionId?: string;
+}
+
+export interface Generation {
+  id: string;
+  createdAt: number;
+  config: GenerationConfig;
+  modelId: string;
+  versions: GenerationVersion[];
+  currentVersionIndex: number;
 }
 
 export interface BrandGuidelinesAnalysis {

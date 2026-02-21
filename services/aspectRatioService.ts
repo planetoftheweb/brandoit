@@ -127,7 +127,7 @@ export const getAspectRatiosForModel = (
     return buildFilteredRatios(OPENAI_ALLOWED_ASPECT_RATIOS, OPENAI_LABELS, source);
   }
 
-  // Unknown model: return everything
+  // SVG & unknown models: all ratios supported
   return source;
 };
 

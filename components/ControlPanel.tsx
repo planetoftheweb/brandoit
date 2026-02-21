@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team } from '../types';
+import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode } from '../types';
 import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
@@ -28,7 +28,10 @@ import {
   Send,
   Wand2,
   Copy,
-  RotateCcw
+  RotateCcw,
+  Play,
+  Pause,
+  MousePointer2
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 
@@ -1081,7 +1084,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   );
 
   const currentType = options.graphicTypes.find(t => t.id === config.graphicTypeId);
-  const currentStyle = options.visualStyles.find(s => s.id === config.visualStyleId);
+  const isSvgModel = SUPPORTED_MODELS.find(m => m.id === selectedModel)?.format === 'vector';
+  const filteredStyles = options.visualStyles.filter(s => {
+    if (!s.supportedFormats || s.supportedFormats.length === 0) return true;
+    return s.supportedFormats.includes(isSvgModel ? 'vector' : 'raster');
+  });
+  const currentStyle = filteredStyles.find(s => s.id === config.visualStyleId)
+    || options.visualStyles.find(s => s.id === config.visualStyleId);
   const currentColor = options.brandColors.find(c => c.id === config.colorSchemeId);
   const modelAspectRatios = getAspectRatiosForModel(selectedModel, options.aspectRatios);
   const currentRatio =
@@ -1089,7 +1098,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     options.aspectRatios.find(r => r.value === config.aspectRatio);
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana',
-    openai: 'GPT Image'
+    openai: 'GPT Image',
+    'gemini-svg': 'Gemini SVG'
   };
   const modelLabel =
     user?.preferences.modelLabels?.[selectedModel] ||
@@ -1205,7 +1215,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                   {user && <SearchInput />}
                   <GroupedList 
-                    items={options.visualStyles} 
+                    items={filteredStyles} 
                     type="style" 
                     configKey="visualStyleId" 
                   />
@@ -1217,6 +1227,43 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
               )}
             </div>
+
+            {/* SVG Mode (only for vector models) */}
+            {isSvgModel && (
+              <div className="relative">
+                <DropdownButton 
+                  icon={config.svgMode === 'animated' ? Play : config.svgMode === 'interactive' ? MousePointer2 : Pause} 
+                  subLabel="Mode" 
+                  label={config.svgMode === 'animated' ? 'Animated' : config.svgMode === 'interactive' ? 'Interactive' : 'Static'} 
+                  isActive={activeDropdown === 'svgmode'} 
+                  onClick={() => toggleDropdown('svgmode')} 
+                />
+                {activeDropdown === 'svgmode' && (
+                  <div className="absolute top-full left-0 mt-2 w-56 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+                    {([
+                      { id: 'static' as SvgMode, label: 'Static', icon: Pause, desc: 'No animations' },
+                      { id: 'animated' as SvgMode, label: 'Animated', icon: Play, desc: 'CSS/SMIL animations' },
+                      { id: 'interactive' as SvgMode, label: 'Interactive', icon: MousePointer2, desc: 'Hover & focus states' },
+                    ]).map(mode => (
+                      <button
+                        key={mode.id}
+                        onClick={() => {
+                          setConfig(prev => ({ ...prev, svgMode: mode.id }));
+                          setActiveDropdown(null);
+                        }}
+                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${(config.svgMode || 'static') === mode.id ? 'text-brand-teal font-semibold' : 'text-slate-700 dark:text-slate-200'}`}
+                      >
+                        <mode.icon size={14} className="text-brand-teal" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">{mode.label}</span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{mode.desc}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Color Palette */}
             <div className="relative">
@@ -1263,9 +1310,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     configKey="aspectRatio" 
                   />
                   <div className="w-full text-left p-3 text-[11px] text-slate-500 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117]">
-                    {selectedModel === 'gemini'
-                      ? 'Showing only ratios Nano Banana supports natively.'
-                      : 'Showing only ratios GPT Image outputs natively.'}
+                    {isSvgModel
+                      ? 'SVG: all ratios available (mapped to viewBox).'
+                      : selectedModel === 'gemini'
+                        ? 'Showing only ratios Nano Banana supports natively.'
+                        : 'Showing only ratios GPT Image outputs natively.'}
                   </div>
                 </div>
               )}
