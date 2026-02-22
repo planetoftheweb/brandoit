@@ -371,7 +371,7 @@ ${version.svgCode}
     <div className="flex-1 flex flex-col h-full relative">
       {/* Version Navigator */}
       {hasMultipleVersions && (
-        <div className="w-full flex justify-center pt-4 px-4">
+        <div className="w-full flex justify-center pt-4 px-4 relative z-50">
           <div className="relative inline-flex items-center gap-2 bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] px-3 py-1.5 rounded-full shadow-sm">
             <Layers size={14} className="text-slate-400" />
             <button
