@@ -74,6 +74,7 @@ export interface GenerationVersion {
   imageData: string;
   imageUrl: string;
   mimeType: string;
+  aspectRatio?: string;
 
   svgCode?: string;
 

@@ -476,7 +476,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     if (!config.prompt || isExpandingPrompt) return;
     setIsExpandingPrompt(true);
     try {
-      const customKey = user?.preferences?.apiKeys?.[user?.preferences?.selectedModel || 'gemini'] || user?.preferences?.geminiApiKey;
+      const activeModel = user?.preferences?.selectedModel || 'gemini';
+      const customKey =
+        user?.preferences?.apiKeys?.[activeModel] ||
+        (activeModel === 'gemini' || activeModel === 'gemini-3.1-flash-image-preview' || activeModel === 'gemini-svg'
+          ? user?.preferences?.apiKeys?.gemini || user?.preferences?.geminiApiKey
+          : user?.preferences?.geminiApiKey);
       const expanded = await expandPrompt(config.prompt, config, { ...options, aspectRatios: options.aspectRatios as any }, customKey);
       setConfig(prev => ({ ...prev, prompt: expanded }));
     } catch (err) {
@@ -730,8 +735,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
           return user.preferences.apiKeys[selectedModel];
         }
-        if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
-          return user.preferences.geminiApiKey;
+        if (
+          selectedModel === 'gemini' ||
+          selectedModel === 'gemini-3.1-flash-image-preview' ||
+          selectedModel === 'gemini-svg'
+        ) {
+          if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
+          if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
         }
         return undefined;
       };
@@ -1097,7 +1107,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     modelAspectRatios.find(r => r.value === config.aspectRatio) ||
     options.aspectRatios.find(r => r.value === config.aspectRatio);
   const modelLabelMap: Record<string, string> = {
-    gemini: 'Nano Banana',
+    gemini: 'Nano Banana Pro',
+    'gemini-3.1-flash-image-preview': 'Nano Banana 2',
     openai: 'GPT Image',
     'gemini-svg': 'Gemini SVG'
   };
@@ -1312,9 +1323,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   <div className="w-full text-left p-3 text-[11px] text-slate-500 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117]">
                     {isSvgModel
                       ? 'SVG: all ratios available (mapped to viewBox).'
-                      : selectedModel === 'gemini'
-                        ? 'Showing only ratios Nano Banana supports natively.'
-                        : 'Showing only ratios GPT Image outputs natively.'}
+                      : selectedModel === 'openai'
+                        ? 'Showing only ratios GPT Image outputs natively.'
+                        : 'Showing only ratios Nano Banana models support natively.'}
                   </div>
                 </div>
               )}

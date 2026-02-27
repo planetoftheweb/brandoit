@@ -129,8 +129,14 @@ export const GRAPHIC_TYPES: GraphicType[] = [
 export const SUPPORTED_MODELS = [
   {
     id: 'gemini',
-    name: 'Nano Banana',
+    name: 'Nano Banana Pro',
     description: 'Gemini 3 Pro Image Preview',
+    format: 'raster' as const
+  },
+  {
+    id: 'gemini-3.1-flash-image-preview',
+    name: 'Nano Banana 2',
+    description: 'Gemini 3.1 Flash Image Preview',
     format: 'raster' as const
   },
   {

@@ -48,6 +48,8 @@ export const RichSelect: React.FC<RichSelectProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [menuAlign, setMenuAlign] = useState<'left' | 'right'>('left');
+  const [menuVerticalAlign, setMenuVerticalAlign] = useState<'down' | 'up'>('down');
+  const [menuListMaxHeight, setMenuListMaxHeight] = useState(288);
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -90,9 +92,20 @@ export const RichSelect: React.FC<RichSelectProps> = ({
 
     const evaluateAlignment = () => {
       const menuEl = menuRef.current;
-      if (!menuEl) return;
+      const containerEl = containerRef.current;
+      if (!menuEl || !containerEl) return;
       const rect = menuEl.getBoundingClientRect();
+      const containerRect = containerEl.getBoundingClientRect();
       const viewportPadding = 12;
+      const spaceBelow = window.innerHeight - containerRect.bottom - viewportPadding;
+      const spaceAbove = containerRect.top - viewportPadding;
+      const shouldOpenUp = spaceBelow < 240 && spaceAbove > spaceBelow;
+      setMenuVerticalAlign(shouldOpenUp ? 'up' : 'down');
+
+      const availableSpace = shouldOpenUp ? spaceAbove : spaceBelow;
+      const menuChrome = searchable ? 86 : 18;
+      const nextMaxListHeight = Math.max(160, Math.min(420, Math.floor(availableSpace - menuChrome)));
+      setMenuListMaxHeight(nextMaxListHeight);
 
       if (rect.right > window.innerWidth - viewportPadding) {
         setMenuAlign('right');
@@ -168,6 +181,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
   const isInteractive = !disabled && options.length > 0;
   const hasToolbarPresentation = Boolean(subLabel || Icon) && !compact;
   const labelText = selectedOption?.label || placeholder;
+  const verticalPositionClass = menuVerticalAlign === 'up' ? 'bottom-full mb-2' : 'top-full mt-2';
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>
@@ -248,7 +262,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
       {isOpen && (
         <div
           ref={menuRef}
-          className={`absolute top-full ${menuAlign === 'right' ? 'right-0' : 'left-0'} mt-2 z-[80] bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 ${
+          className={`absolute ${verticalPositionClass} ${menuAlign === 'right' ? 'right-0' : 'left-0'} z-[120] bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 ${
             expandMenuToContent
               ? 'min-w-full w-max max-w-[min(40rem,calc(100vw-1.5rem))]'
               : 'w-full'
@@ -270,7 +284,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
             </div>
           )}
 
-          <div className="max-h-72 overflow-y-auto custom-scrollbar p-1">
+          <div className="overflow-y-auto custom-scrollbar p-1" style={{ maxHeight: menuListMaxHeight }}>
             {groupedOptions.map(group => (
               <div key={group.key || 'ungrouped'} className="mb-1">
                 {group.label && (

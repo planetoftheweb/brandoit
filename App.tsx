@@ -14,12 +14,21 @@ import {
   ASPECT_RATIOS,
   SUPPORTED_MODELS
 } from './constants';
-import { generateGraphic, refineGraphic, analyzeBrandGuidelines, describeImagePrompt } from './services/geminiService';
+import {
+  generateGraphic,
+  generateGraphicWithStyleReference,
+  refineGraphic,
+  analyzeBrandGuidelines,
+  describeImagePrompt,
+  analyzeImageForCorrectionPrompt
+} from './services/geminiService';
 import { generateOpenAIImage } from './services/openaiService';
 import { generateSvg, refineSvg } from './services/svgService';
-import { getAspectRatiosForModel, getSafeAspectRatioForModel } from './services/aspectRatioService';
+import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
 import { historyService, createGeneration, addRefinementVersion, getCurrentVersion } from './services/historyService';
+import { detectLikelyCanvasPadding } from './services/recomposeQualityService';
+import { toMarkLabel } from './services/versionUtils';
 // import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
 import { resourceService } from './services/resourceService'; // Import resource service
@@ -30,6 +39,9 @@ import {
   Moon, 
   HelpCircle, 
   X,
+  KeyRound,
+  Sparkles,
+  ArrowRight,
   Layout,
   PenTool,
   Palette,
@@ -153,6 +165,7 @@ const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isSetupModalOpen, setIsSetupModalOpen] = useState(true);
 
   // Application State for Options (allows adding/removing)
   const [brandColors, setBrandColors] = useState<BrandColor[]>([]);
@@ -170,6 +183,11 @@ const App: React.FC = () => {
       graphicTypeId: cached?.graphicTypeId || '',
       aspectRatio: cached?.aspectRatio || ''
     };
+  });
+  const [guestSelectedModel, setGuestSelectedModel] = useState<string>(() => {
+    const cachedSelection = readToolbarSelection() || readLastToolbarSelection();
+    const cachedModel = cachedSelection?.selectedModel;
+    return cachedModel && MODEL_ID_SET.has(cachedModel) ? cachedModel : 'gemini';
   });
   const [hasHydratedToolbarState, setHasHydratedToolbarState] = useState(false);
 
@@ -212,7 +230,11 @@ const App: React.FC = () => {
     const selectedModelForDefaults =
       cachedSelection?.selectedModel ||
       activeUser?.preferences.selectedModel ||
+      (!activeUser ? guestSelectedModel : undefined) ||
       'gemini';
+    if (!activeUser && selectedModelForDefaults !== guestSelectedModel) {
+      setGuestSelectedModel(selectedModelForDefaults);
+    }
     const modelAspectRatios = getAspectRatiosForModel(selectedModelForDefaults, resources.aspectRatios);
     const preferredAspectRatio = cachedSelection?.aspectRatio || settings?.defaultAspectRatio;
 
@@ -294,6 +316,14 @@ const App: React.FC = () => {
               }
             : restoredUser;
         setUser(hydratedUser);
+        try {
+          const mergeResult = await historyService.mergeLocalToRemote(hydratedUser.id);
+          if (mergeResult.failed > 0) {
+            setError(`Synced ${mergeResult.synced} item(s), but ${mergeResult.failed} local item(s) are still pending sync.`);
+          }
+        } catch (mergeErr) {
+          console.error("Failed to merge pending local history on session restore:", mergeErr);
+        }
         // Load history for restored user
         const updatedHistory = await historyService.getHistory(hydratedUser);
         setHistory(updatedHistory);
@@ -331,7 +361,15 @@ const App: React.FC = () => {
     // Ensure selected IDs in config are still valid... (Logic handled in loadResources mostly)
     
     // Merge local history if any
-    await historyService.mergeLocalToRemote(loggedInUser.id);
+    try {
+      const mergeResult = await historyService.mergeLocalToRemote(loggedInUser.id);
+      if (mergeResult.failed > 0) {
+        setError(`Synced ${mergeResult.synced} item(s), but ${mergeResult.failed} local item(s) could not be synced yet. They were kept locally.`);
+      }
+    } catch (e) {
+      console.error("Failed to merge local history:", e);
+      setError("Some local history could not be synced to your account. Your local copies were kept.");
+    }
     const updatedHistory = await historyService.getHistory(loggedInUser);
     setHistory(updatedHistory);
   };
@@ -345,7 +383,7 @@ const App: React.FC = () => {
 
   // Grouped context for easier passing
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
-  const selectedModel = user?.preferences.selectedModel || 'gemini';
+  const selectedModel = user?.preferences.selectedModel || guestSelectedModel;
 
   useEffect(() => {
     setConfig(prev => {
@@ -377,21 +415,35 @@ const App: React.FC = () => {
     user?.id
   ]);
 
-  const getActiveApiKey = (): string | undefined => {
+  const getApiKeyForModel = (modelId: string): string | undefined => {
     if (!user) return undefined;
-    if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
-      return user.preferences.apiKeys[selectedModel];
+    if (user.preferences.apiKeys && user.preferences.apiKeys[modelId]) {
+      return user.preferences.apiKeys[modelId];
     }
-    // gemini-svg shares the gemini key
-    if (selectedModel === 'gemini-svg') {
+    // Gemini-family models share the gemini key by default.
+    if (
+      modelId === 'gemini' ||
+      modelId === 'gemini-3.1-flash-image-preview' ||
+      modelId === 'gemini-svg'
+    ) {
       if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
       if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
     }
-    if (selectedModel === 'gemini' && user.preferences.geminiApiKey) {
-      return user.preferences.geminiApiKey;
-    }
     return undefined;
   };
+
+  const getActiveApiKey = (): string | undefined => getApiKeyForModel(selectedModel);
+
+  const activeApiKey = getActiveApiKey();
+  const needsSetup = !user || !activeApiKey;
+
+  useEffect(() => {
+    if (needsSetup) {
+      setIsSetupModalOpen(true);
+    } else {
+      setIsSetupModalOpen(false);
+    }
+  }, [needsSetup, user?.id]);
 
   const executeDeleteHistory = async (generationId: string) => {
     if (user) {
@@ -544,11 +596,26 @@ const App: React.FC = () => {
     setSkipFutureConfirm(false);
   };
 
+  const openAuthModal = (mode: 'login' | 'signup' = 'login') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
+
   const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
+      if (!user) {
+        openAuthModal('signup');
+        throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to start generating.');
+      }
+
       const customKey = getActiveApiKey();
+      if (!customKey) {
+        setSettingsMode(true);
+        throw new Error('Add your API key in Settings before generating. Free accounts use BYOK keys.');
+      }
+
       const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
       const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
       if (safeAspectRatio !== config.aspectRatio) {
@@ -562,7 +629,7 @@ const App: React.FC = () => {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
         result = await generateOpenAIImage(structuredPrompt, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
-        result = await generateGraphic(safeConfig, context, customKey, user?.preferences.systemPrompt);
+        result = await generateGraphic(safeConfig, context, customKey, user?.preferences.systemPrompt, selectedModel);
       }
 
       const generation = await createGeneration(result, { ...safeConfig }, selectedModel);
@@ -585,9 +652,23 @@ const App: React.FC = () => {
     setIsGenerating(true);
     setError(null);
     try {
+      if (!user) {
+        openAuthModal('signup');
+        throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to refine images.');
+      }
+
       const customKey = getActiveApiKey();
+      if (!customKey) {
+        setSettingsMode(true);
+        throw new Error('Add your API key in Settings before refining. Free accounts use BYOK keys.');
+      }
+
       const currentVersion = getCurrentVersion(currentGeneration);
-      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
+      const requestedAspectRatio = extractAspectRatioFromText(refinementText, selectedModel, aspectRatios);
+      const currentVersionAspectRatio =
+        normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
+      const desiredAspectRatio = requestedAspectRatio || currentVersionAspectRatio || config.aspectRatio;
+      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, desiredAspectRatio, aspectRatios);
       const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
       if (safeAspectRatio !== config.aspectRatio) {
         setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
@@ -609,10 +690,25 @@ const App: React.FC = () => {
         const refinementRequest = `${structuredPrompt}\nRefinement: ${refinementText}`;
         result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, user?.preferences.systemPrompt);
       } else {
-        result = await refineGraphic(currentImage, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
+        result = await refineGraphic(
+          currentImage,
+          refinementText,
+          safeConfig,
+          context,
+          customKey,
+          user?.preferences.systemPrompt,
+          selectedModel,
+          currentVersionAspectRatio || currentGeneration.config.aspectRatio
+        );
       }
 
-      const updatedGeneration = await addRefinementVersion(currentGeneration, result, refinementText);
+      const updatedGeneration = await addRefinementVersion(
+        currentGeneration,
+        result,
+        refinementText,
+        selectedModel,
+        safeAspectRatio
+      );
       setCurrentGeneration(updatedGeneration);
 
       await historyService.updateGeneration(user, updatedGeneration);
@@ -626,15 +722,239 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRestoreFromHistory = (gen: Generation) => {
-    setConfig(gen.config);
-    setCurrentGeneration(gen);
-    if (user && gen.modelId) {
+  const handleAnalyzeRefinePrompt = async (): Promise<string> => {
+    if (!currentGeneration) {
+      throw new Error('Restore or generate an image first.');
+    }
+
+    if (!user) {
+      openAuthModal('signup');
+      throw new Error('Create a free account and add your API key in Settings before running analysis.');
+    }
+
+    const analysisKey = getApiKeyForModel('gemini');
+    if (!analysisKey) {
+      setSettingsMode(true);
+      throw new Error('Add a Gemini API key in Settings to run image analysis.');
+    }
+
+    const currentVersion = getCurrentVersion(currentGeneration);
+    const currentImage: GeneratedImage = {
+      imageUrl: currentVersion.imageUrl,
+      base64Data: currentVersion.imageData,
+      mimeType: currentVersion.mimeType,
+    };
+
+    const plan = await analyzeImageForCorrectionPrompt(
+      currentImage,
+      currentGeneration.config,
+      context,
+      analysisKey,
+      user?.preferences.systemPrompt
+    );
+
+    const issueLines = plan.issues.length > 0
+      ? plan.issues.map((issue, idx) => `${idx + 1}. ${issue.trim()}`).join('\n')
+      : '1. No explicit issues listed by analysis model.';
+
+    // Route the fix through the stronger image-editing model by default.
+    handleModelChange('gemini');
+
+    const detailedPrompt = [
+      'Correction Plan',
+      `Summary: ${plan.analysisSummary || 'Review image text and labels for accuracy.'}`,
+      '',
+      'Detected Issues',
+      issueLines,
+      '',
+      'Apply These Fixes',
+      plan.fixPrompt || 'Correct all detected spelling, factual, and label alignment issues while preserving composition and style.'
+    ].join('\n');
+
+    return detailedPrompt.trim();
+  };
+
+  const handleResizeCanvasRefine = async (targetAspectRatioInput: string): Promise<void> => {
+    if (!currentGeneration) {
+      throw new Error('Restore or generate an image first.');
+    }
+
+    if (!user) {
+      openAuthModal('signup');
+      throw new Error('Create a free account and add your API key in Settings before resizing canvas.');
+    }
+
+    const targetModel =
+      selectedModel === 'gemini' || selectedModel === 'gemini-3.1-flash-image-preview'
+        ? selectedModel
+        : 'gemini';
+    const customKey = getApiKeyForModel(targetModel);
+    if (!customKey) {
+      setSettingsMode(true);
+      throw new Error('Add a Gemini API key in Settings to run canvas resize.');
+    }
+
+    const currentVersion = getCurrentVersion(currentGeneration);
+    if (currentVersion.mimeType === 'image/svg+xml') {
+      throw new Error('Resize Canvas is currently optimized for raster images.');
+    }
+
+    const targetAspectRatio = getSafeAspectRatioForModel(targetModel, targetAspectRatioInput, aspectRatios);
+    const sourceAspectRatio = normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
+    const normalizedTarget = normalizeAspectRatio(targetAspectRatio);
+
+    if (!normalizedTarget) {
+      throw new Error('Choose a valid target Size before resizing.');
+    }
+
+    if (sourceAspectRatio === normalizedTarget) {
+      throw new Error(`Target size is already ${normalizedTarget}. Choose a different Size first.`);
+    }
+
+    if (selectedModel !== targetModel) {
+      handleModelChange(targetModel);
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const currentImage: GeneratedImage = {
+        imageUrl: currentVersion.imageUrl,
+        base64Data: currentVersion.imageData,
+        mimeType: currentVersion.mimeType,
+      };
+
+      const resizeConfig: GenerationConfig = {
+        ...config,
+        aspectRatio: targetAspectRatio
+      };
+
+      const colorScheme = context.brandColors.find(c => c.id === resizeConfig.colorSchemeId);
+      const style = context.visualStyles.find(s => s.id === resizeConfig.visualStyleId);
+      const type = context.graphicTypes.find(t => t.id === resizeConfig.graphicTypeId);
+      const lockedResizePrompt = [
+        `Aspect-ratio recomposition only: ${sourceAspectRatio || 'current'} -> ${normalizedTarget}.`,
+        `Output must fully use the ${normalizedTarget} canvas without blank margins, color bars, or simple padded background extension.`,
+        `Treat the source image as authoritative. Keep the same subject, illustration style, typography style, color palette, and overall design language (${type?.name || 'infographic'} / ${style?.name || 'current style'} / ${colorScheme ? `${colorScheme.name} (${colorScheme.colors.join(', ')})` : 'source palette'}).`,
+        'Preserve existing text and labels verbatim unless there is an obvious typo; do not invent unrelated copy or random detached icons.',
+        'Recompose layout for the new ratio by repositioning/expanding existing callouts and decorative structure so the result feels intentionally designed for this canvas.',
+        'Keep the central figure and core information hierarchy intact, avoid major redraws, and avoid style drift or photorealism.'
+      ].join(' ');
+
+      const firstPassResult = await refineGraphic(
+        currentImage,
+        lockedResizePrompt,
+        resizeConfig,
+        context,
+        customKey,
+        user?.preferences.systemPrompt,
+        targetModel,
+        sourceAspectRatio || currentGeneration.config.aspectRatio,
+        {
+          forceAspectOnlyEdit: true,
+          forceFillCanvas: true
+        }
+      );
+
+      let result = firstPassResult;
+      try {
+        let looksPadded = await detectLikelyCanvasPadding(firstPassResult);
+        if (looksPadded) {
+          const secondPassPrompt = [
+            `Second pass correction for ${normalizedTarget}: remove any empty side/top/bottom margins, border framing, or padded background from the previous output.`,
+            'Rebuild layout so designed content fills almost the entire canvas while keeping the same subject, style, text, and palette.',
+            'Do not produce a centered poster look; preserve the original visual identity and information hierarchy.'
+          ].join(' ');
+
+          result = await refineGraphic(
+            firstPassResult,
+            secondPassPrompt,
+            resizeConfig,
+            context,
+            customKey,
+            user?.preferences.systemPrompt,
+            targetModel,
+            normalizedTarget,
+            {
+              forceAspectOnlyEdit: true,
+              forceFillCanvas: true
+            }
+          );
+          looksPadded = await detectLikelyCanvasPadding(result);
+        }
+
+        if (looksPadded) {
+          const conceptBrief = await describeImagePrompt(
+            currentVersion.imageData,
+            currentVersion.mimeType,
+            customKey
+          );
+          const styleReferencePrompt = [
+            `Rebuild this as a new composition at ${normalizedTarget}.`,
+            'Use the original image as style reference only, not as a layout template.',
+            'Keep the same subject matter and information intent, but redesign layout for this canvas.',
+            `Concept brief: ${conceptBrief}`,
+            'Prioritize clean typography, coherent callout placement, and full-canvas composition with no side padding.'
+          ].join(' ');
+
+          result = await generateGraphicWithStyleReference(
+            currentImage,
+            styleReferencePrompt,
+            resizeConfig,
+            context,
+            customKey,
+            user?.preferences.systemPrompt,
+            targetModel
+          );
+        }
+      } catch (qualityCheckError) {
+        console.warn('Resize quality check failed; keeping first pass result.', qualityCheckError);
+      }
+
+      const updatedGeneration = await addRefinementVersion(
+        currentGeneration,
+        result,
+        `Recompose resize to ${normalizedTarget} (same style)`,
+        targetModel,
+        targetAspectRatio
+      );
+      setCurrentGeneration(updatedGeneration);
+      setConfig(prev => ({ ...prev, aspectRatio: targetAspectRatio }));
+
+      await historyService.updateGeneration(user, updatedGeneration);
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+    } catch (err: any) {
+      setError(err.message || 'Failed to resize canvas.');
+      throw err;
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleRestoreFromHistory = async (gen: Generation) => {
+    let restoredGeneration = gen;
+    try {
+      const hydrated = await historyService.getGeneration(user, gen.id, gen);
+      if (hydrated) {
+        restoredGeneration = hydrated;
+      }
+    } catch (err) {
+      console.error("Failed to hydrate generation on restore:", err);
+    }
+
+    setConfig(restoredGeneration.config);
+    setCurrentGeneration(restoredGeneration);
+    setHistory(prev =>
+      prev.map(item => (item.id === restoredGeneration.id ? restoredGeneration : item))
+    );
+
+    if (user && restoredGeneration.modelId) {
       const updatedUser = {
         ...user,
         preferences: {
           ...user.preferences,
-          selectedModel: gen.modelId
+          selectedModel: restoredGeneration.modelId
         }
       };
       setUser(updatedUser);
@@ -644,14 +964,104 @@ const App: React.FC = () => {
 
   const handleVersionChange = (index: number) => {
     if (!currentGeneration) return;
-    setCurrentGeneration({ ...currentGeneration, currentVersionIndex: index });
+    const nextVersion = currentGeneration.versions[index];
+    const nextAspectRatio = normalizeAspectRatio(
+      nextVersion?.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio
+    );
+    const updatedGeneration = {
+      ...currentGeneration,
+      currentVersionIndex: index,
+      config: nextAspectRatio
+        ? { ...currentGeneration.config, aspectRatio: nextAspectRatio }
+        : currentGeneration.config
+    };
+    setCurrentGeneration(updatedGeneration);
+    if (nextAspectRatio && nextAspectRatio !== config.aspectRatio) {
+      setConfig((prev) => ({ ...prev, aspectRatio: nextAspectRatio }));
+    }
+  };
+
+  const handleDeleteRefinementVersion = async (versionId: string) => {
+    if (!currentGeneration) return;
+
+    const targetIndex = currentGeneration.versions.findIndex((version) => version.id === versionId);
+    if (targetIndex < 0) return;
+
+    const targetVersion = currentGeneration.versions[targetIndex];
+    if (targetVersion.type !== 'refinement') {
+      throw new Error('Only refinement versions can be deleted.');
+    }
+
+    const remainingVersions = currentGeneration.versions.filter((version) => version.id !== versionId);
+    if (remainingVersions.length === 0) {
+      throw new Error('Cannot delete the last version.');
+    }
+
+    const renumberedVersions = remainingVersions.map((version, idx) => ({
+      ...version,
+      number: idx + 1,
+      label: toMarkLabel(idx + 1)
+    }));
+
+    const currentIndex = currentGeneration.currentVersionIndex;
+    const shiftedIndex =
+      currentIndex > targetIndex
+        ? currentIndex - 1
+        : currentIndex === targetIndex
+          ? targetIndex - 1
+          : currentIndex;
+    const nextCurrentVersionIndex = Math.min(
+      Math.max(0, shiftedIndex),
+      renumberedVersions.length - 1
+    );
+
+    const activeVersionAfterDelete = renumberedVersions[nextCurrentVersionIndex];
+    const nextAspectRatio = normalizeAspectRatio(
+      activeVersionAfterDelete?.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio
+    );
+
+    const updatedGeneration: Generation = {
+      ...currentGeneration,
+      config: nextAspectRatio
+        ? { ...currentGeneration.config, aspectRatio: nextAspectRatio }
+        : currentGeneration.config,
+      versions: renumberedVersions,
+      currentVersionIndex: nextCurrentVersionIndex
+    };
+
+    setCurrentGeneration(updatedGeneration);
+    if (nextAspectRatio && nextAspectRatio !== config.aspectRatio) {
+      setConfig((prev) => ({ ...prev, aspectRatio: nextAspectRatio }));
+    }
+    setHistory((prev) =>
+      prev.map((item) => (item.id === updatedGeneration.id ? updatedGeneration : item))
+    );
+
+    try {
+      await historyService.updateGeneration(user, updatedGeneration);
+      const updatedHistory = await historyService.getHistory(user);
+      setHistory(updatedHistory);
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete refinement.');
+      throw err;
+    }
   };
 
   const handleUploadGuidelines = async (file: File) => {
     setIsAnalyzing(true);
     setError(null);
     try {
+      if (!user) {
+        openAuthModal('signup');
+        throw new Error('Create a free account and add your API key in Settings before analyzing brand guidelines.');
+      }
+
       const customKey = getActiveApiKey();
+      if (!customKey) {
+        setSettingsMode(true);
+        throw new Error('Add your API key in Settings before analyzing brand guidelines. Free accounts use BYOK keys.');
+      }
+
       const result = await analyzeBrandGuidelines(file, customKey, user?.preferences.systemPrompt);
       setAnalysisResult(result);
       setIsAnalysisModalOpen(true);
@@ -807,7 +1217,7 @@ const App: React.FC = () => {
   };
 
   const handleResetToPreferenceDefaults = () => {
-    const defaultModel = user?.preferences.selectedModel || 'gemini';
+    const defaultModel = user?.preferences.selectedModel || guestSelectedModel;
     const settings = user?.preferences.settings;
     const modelRatios = getAspectRatiosForModel(defaultModel, aspectRatios);
 
@@ -834,6 +1244,23 @@ const App: React.FC = () => {
         ? getSafeAspectRatioForModel(defaultModel, settings.defaultAspectRatio, aspectRatios)
         : getSafeAspectRatioForModel(defaultModel, modelRatios[0]?.value || '', aspectRatios)
     }));
+  };
+
+  const handleModelChange = (modelId: string) => {
+    if (!user) {
+      setGuestSelectedModel(modelId);
+      return;
+    }
+
+    const updatedUser = {
+      ...user,
+      preferences: {
+        ...user.preferences,
+        selectedModel: modelId
+      }
+    };
+    setUser(updatedUser);
+    authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   };
 
   return (
@@ -1016,43 +1443,12 @@ const App: React.FC = () => {
             user={user}
             selectedModel={selectedModel}
             onResetToDefaults={handleResetToPreferenceDefaults}
-            onModelChange={(modelId) => {
-              if (!user) return;
-              const updatedUser = {
-                ...user,
-                preferences: {
-                  ...user.preferences,
-                  selectedModel: modelId
-                }
-              };
-              setUser(updatedUser);
-              authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
-            }}
+            onModelChange={handleModelChange}
           />
 
           {/* Main Content Area */}
           <main className="flex-1 relative flex flex-col min-w-0 bg-gray-50 dark:bg-[#0d1117] transition-colors duration-200">
             
-            {/* API Key Requirement Banner */}
-            {(!user || !getActiveApiKey()) && (
-              <div className="w-full bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-800/50 px-6 py-4 text-center">
-                <p className="text-sm md:text-base text-blue-800 dark:text-blue-200 flex flex-col md:flex-row items-center justify-center gap-2 md:gap-3">
-                  <span className="p-1.5 bg-blue-100 dark:bg-blue-800/50 rounded-full shrink-0">
-                    <SettingsIcon size={18} />
-                  </span>
-                  {!user ? (
-                    <span>
-                      To use BranDoIt, please <strong>Log In</strong> and add your <strong>API Key</strong> in settings.
-                    </span>
-                  ) : (
-                    <span>
-                      To generate graphics, you must add your <strong>API Key</strong> in <button onClick={() => setSettingsMode(true)} className="underline hover:text-blue-600 dark:hover:text-blue-100 font-bold decoration-2 underline-offset-2">Preferences</button>.
-                    </span>
-                  )}
-                </p>
-              </div>
-            )}
-
             {/* Error Toast */}
             {error && (
               <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 bg-red-100 dark:bg-red-900/90 text-red-800 dark:text-red-100 px-4 py-3 rounded-lg shadow-lg border border-red-200 dark:border-red-800 flex items-center gap-2 animate-bounce-in backdrop-blur-sm">
@@ -1068,10 +1464,17 @@ const App: React.FC = () => {
             <ImageDisplay 
               generation={currentGeneration}
               onRefine={handleRefine}
+              onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
+              onResizeCanvasRefine={handleResizeCanvasRefine}
               isRefining={isGenerating}
               onCopy={handleCopyCurrent}
               onDelete={requestDeleteCurrent}
               onVersionChange={handleVersionChange}
+              onDeleteRefinementVersion={handleDeleteRefinementVersion}
+              selectedModel={selectedModel}
+              onModelChange={handleModelChange}
+              modelLabels={user?.preferences.modelLabels}
+              resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
               options={context}
             />
 
@@ -1150,6 +1553,118 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {needsSetup && isSetupModalOpen && (
+        <div
+          className="fixed inset-0 z-[140] flex items-center justify-center p-4 sm:p-6"
+          onClick={() => setIsSetupModalOpen(false)}
+        >
+          <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-white/15 bg-white dark:bg-[#0d1117] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,rgba(14,165,233,0.18),transparent_45%),radial-gradient(circle_at_bottom_left,rgba(239,68,68,0.15),transparent_40%)]" />
+            <div className="relative p-6 sm:p-8">
+              <button
+                onClick={() => setIsSetupModalOpen(false)}
+                className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#1f2937] transition-colors"
+                aria-label="Close setup instructions"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-900/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-200">
+                <Sparkles size={12} />
+                Quick Start
+              </div>
+
+              {!user ? (
+                <>
+                  <h2 className="mt-4 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    Start free with your own API key
+                  </h2>
+                  <p className="mt-3 text-sm sm:text-base text-slate-600 dark:text-slate-300">
+                    BranDoIt uses BYOK on free accounts. Create your account, add a Gemini or OpenAI key, and you are ready to generate.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 className="mt-4 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    One setup step left
+                  </h2>
+                  <p className="mt-3 text-sm sm:text-base text-slate-600 dark:text-slate-300">
+                    Add your API key in Settings to start generating. Free accounts run on BYOK keys.
+                  </p>
+                </>
+              )}
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 dark:border-[#30363d] bg-slate-50/80 dark:bg-[#111827]/70 p-4">
+                  <div className="flex items-center gap-2 text-slate-900 dark:text-white font-semibold text-sm">
+                    <KeyRound size={14} className="text-sky-600 dark:text-sky-300" />
+                    Free = BYOK
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Bring your own key, control your own usage.</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 dark:border-[#30363d] bg-slate-50/80 dark:bg-[#111827]/70 p-4">
+                  <div className="flex items-center gap-2 text-slate-900 dark:text-white font-semibold text-sm">
+                    <UserIcon size={14} className="text-sky-600 dark:text-sky-300" />
+                    Account Benefits
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Save styles, color palettes, settings, and history.</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 dark:border-[#30363d] bg-slate-50/80 dark:bg-[#111827]/70 p-4">
+                  <div className="flex items-center gap-2 text-slate-900 dark:text-white font-semibold text-sm">
+                    <Sparkles size={14} className="text-sky-600 dark:text-sky-300" />
+                    Paid Plans Soon
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">More model access and additional workspace features.</p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-wrap items-center gap-2">
+                {!user ? (
+                  <>
+                    <button
+                      onClick={() => openAuthModal('login')}
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] px-4 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#1f2937] transition-colors"
+                    >
+                      <LogIn size={15} />
+                      Log In
+                    </button>
+                    <button
+                      onClick={() => openAuthModal('signup')}
+                      className="inline-flex items-center gap-2 rounded-xl bg-brand-red hover:bg-red-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-red/20 transition-colors"
+                    >
+                      Create Free Account
+                      <ArrowRight size={15} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setSettingsMode(true);
+                      setIsSetupModalOpen(false);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl bg-brand-red hover:bg-red-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-red/20 transition-colors"
+                  >
+                    <SettingsIcon size={15} />
+                    Open Settings
+                    <ArrowRight size={15} />
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsSetupModalOpen(false)}
+                  className="inline-flex items-center rounded-xl border border-transparent px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                >
+                  Continue Exploring
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Help Modal */}
       {isHelpOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -1166,12 +1681,12 @@ const App: React.FC = () => {
                 BranDoIt helps you create consistent graphics for your brand using AI.
               </p>
               <ul className="space-y-4">
-               <li className="flex items-start gap-3">
+                <li className="flex items-start gap-3">
                   <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
                     <UserIcon size={16} />
                   </div>
                   <div>
-                    <strong className="text-slate-900 dark:text-white">Account:</strong> Log in to save your custom colors, styles, and settings so they are available next time you visit.
+                    <strong className="text-slate-900 dark:text-white">Account + API Key:</strong> Free accounts use BYOK. Add your Gemini/OpenAI API key in Settings, then generate. Your account saves your custom colors, styles, settings, and history for next time.
                   </div>
                 </li>
                <li className="flex items-start gap-3">

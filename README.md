@@ -21,6 +21,9 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
 *   **⚙️ Full Settings Management:** dedicated page for managing API keys, profile settings, and application preferences.
 *   **🔑 BYOK (Bring Your Own Key):** Multi-model keys for Google Gemini and OpenAI GPT-Image 1.5 with per-model labels you can customize in settings.
+*   **🧠 Refinement Workspace:** Per-image refine model + target size controls, built-in correction analysis prompt generator, and style-reference fallback for difficult recompositions.
+*   **🧬 Versioned Iteration:** Mark-based generation/refinement history with restore, per-refinement deletion, and per-version aspect-ratio tracking so follow-up edits keep the correct size.
+*   **📝 Better Prompt Editing:** Compact refine textbox with optional full-screen prompt editor and keyboard submit shortcut (`Cmd/Ctrl + Enter`).
 *   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore). Overlays show model, prompt, tags, and timestamps.
 
 ## Tech Stack
@@ -31,7 +34,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   **Authentication:** Email/Password & Profile Management
     *   **Firestore:** Real-time NoSQL Database (Normalized Structure)
     *   **Storage:** Profile photos & Asset storage
-*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-2.5-flash`) and OpenAI GPT-Image 1.5
+*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`, `gemini-2.5-flash`) and OpenAI GPT-Image 1.5
 *   **Icons:** Lucide React
 *   **Font:** Mona Sans & Inter
 

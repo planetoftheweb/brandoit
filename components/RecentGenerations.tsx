@@ -35,7 +35,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return () => {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
-  }, [history]);
+  }, []);
 
   React.useEffect(() => {
     return () => {
@@ -140,7 +140,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const getModelLabel = (modelId?: string) => {
     if (modelId === 'openai') return 'GPT Image';
     if (modelId === 'gemini-svg') return 'Gemini SVG';
-    return 'Nano Banana';
+    if (modelId === 'gemini-3.1-flash-image-preview') return 'Nano Banana 2';
+    return 'Nano Banana Pro';
   };
 
   const formatTimestamp = (ts: number) => {

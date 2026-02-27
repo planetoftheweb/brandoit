@@ -1,19 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2 } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCurrentVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { webpToPngBlob } from '../services/imageConversionService';
 import { sanitizeSvg } from '../services/svgService';
+import { SUPPORTED_MODELS } from '../constants';
+import { normalizeAspectRatio } from '../services/aspectRatioService';
+import { RichSelect, RichSelectOption } from './RichSelect';
 
 interface ImageDisplayProps {
   generation: Generation | null;
   onRefine: (refinementText: string) => void;
+  onAnalyzeRefinePrompt: () => Promise<string>;
+  onResizeCanvasRefine: (targetAspectRatio: string) => Promise<void>;
   isRefining: boolean;
   onCopy?: () => void;
   onDelete?: () => void;
   onVersionChange: (index: number) => void;
+  onDeleteRefinementVersion: (versionId: string) => Promise<void>;
+  selectedModel: string;
+  onModelChange: (modelId: string) => void;
+  modelLabels?: Record<string, string>;
+  resizeAspectRatios: AspectRatioOption[];
   options: {
     brandColors: BrandColor[];
     visualStyles: VisualStyle[];
@@ -25,10 +35,17 @@ interface ImageDisplayProps {
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
   generation,
   onRefine,
+  onAnalyzeRefinePrompt,
+  onResizeCanvasRefine,
   isRefining,
   onCopy,
   onDelete,
   onVersionChange,
+  onDeleteRefinementVersion,
+  selectedModel,
+  onModelChange,
+  modelLabels,
+  resizeAspectRatios,
   options
 }) => {
   const [refinementInput, setRefinementInput] = useState('');
@@ -39,6 +56,11 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [versionDropdownOpen, setVersionDropdownOpen] = useState(false);
   const [animationPaused, setAnimationPaused] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
+  const [isAnalyzingRefinePrompt, setIsAnalyzingRefinePrompt] = useState(false);
+  const [isResizingCanvas, setIsResizingCanvas] = useState(false);
+  const [deletingRefinementId, setDeletingRefinementId] = useState<string | null>(null);
+  const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
+  const [resizeAspectRatio, setResizeAspectRatio] = useState('');
   const svgContainerRef = useRef<HTMLDivElement>(null);
 
   const version = generation ? getCurrentVersion(generation) : null;
@@ -94,7 +116,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   };
 
   const modelLabelMap: Record<string, string> = {
-    gemini: 'Nano Banana',
+    gemini: 'Nano Banana Pro',
+    'gemini-3.1-flash-image-preview': 'Nano Banana 2',
     openai: 'GPT Image',
     'gemini-svg': 'Gemini SVG'
   };
@@ -309,11 +332,102 @@ ${version.svgCode}
     if (onDelete) onDelete();
   };
 
+  const cleanupRefinementPromptForSubmission = (input: string): string => {
+    const normalized = input
+      .replace(/\r\n/g, '\n')
+      .replace(/\u00A0/g, ' ')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    return normalized.replace(/\s+/g, ' ').trim();
+  };
+
+  const submitRefinementOrResize = (): boolean => {
+    const preparedInput = cleanupRefinementPromptForSubmission(refinementInput);
+    if (preparedInput) {
+      onRefine(preparedInput);
+      setRefinementInput('');
+      return true;
+    }
+    if (canResizeToSelected) {
+      void handleResizeCanvasClick();
+      return true;
+    }
+    return false;
+  };
+
   const handleRefineSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (refinementInput.trim()) {
-      onRefine(refinementInput);
-      setRefinementInput('');
+    submitRefinementOrResize();
+  };
+
+  const isSubmitShortcut = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean =>
+    (event.metaKey || event.ctrlKey) && event.key === 'Enter';
+
+  const handleInlinePromptKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    submitRefinementOrResize();
+  };
+
+  const handleModalPromptKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    if (submitRefinementOrResize()) {
+      setIsPromptEditorOpen(false);
+    }
+  };
+
+  const handleAnalyzeRefineClick = async () => {
+    if (isRefining || isAnalyzingRefinePrompt || isResizingCanvas) return;
+    setIsAnalyzingRefinePrompt(true);
+    try {
+      const prompt = await onAnalyzeRefinePrompt();
+      if (prompt?.trim()) {
+        setRefinementInput(prompt.trim());
+        showNotice('Analysis complete. Detailed fix prompt added.');
+      } else {
+        showNotice('Analysis finished with no prompt.');
+      }
+    } catch (error: any) {
+      showNotice(error?.message || 'Analysis failed');
+    } finally {
+      setIsAnalyzingRefinePrompt(false);
+    }
+  };
+
+  const handleResizeCanvasClick = async () => {
+    if (isRefining || isAnalyzingRefinePrompt || isResizingCanvas) return;
+    const sourceAspect = normalizeAspectRatio(version?.aspectRatio || generation?.config.aspectRatio || '');
+    const targetAspect = normalizeAspectRatio(resizeAspectRatio);
+    if (!targetAspect || !sourceAspect || targetAspect === sourceAspect) {
+      showNotice('Choose a different target size first');
+      return;
+    }
+    setIsResizingCanvas(true);
+    try {
+      await onResizeCanvasRefine(resizeAspectRatio);
+      showNotice('Canvas resize complete');
+    } catch (error: any) {
+      showNotice(error?.message || 'Resize failed');
+    } finally {
+      setIsResizingCanvas(false);
+    }
+  };
+
+  const handleDeleteRefinementClick = async (versionId: string) => {
+    if (deletingRefinementId) return;
+    setDeletingRefinementId(versionId);
+    try {
+      await onDeleteRefinementVersion(versionId);
+      showNotice('Refinement deleted');
+      setVersionDropdownOpen(false);
+    } catch (error: any) {
+      showNotice(error?.message || 'Failed to delete refinement');
+    } finally {
+      setDeletingRefinementId(null);
     }
   };
 
@@ -327,6 +441,38 @@ ${version.svgCode}
     setFallbackBlobUrl(blobUrl);
     setRenderImageSrc(blobUrl);
   };
+
+  const refineModelOptions = SUPPORTED_MODELS.filter((model) =>
+    isSvg ? true : model.format !== 'vector'
+  );
+  const safeRefineModelId = refineModelOptions.some((model) => model.id === selectedModel)
+    ? selectedModel
+    : refineModelOptions[0]?.id || selectedModel;
+
+  useEffect(() => {
+    if (!generation || !version) return;
+    if (safeRefineModelId !== selectedModel) {
+      onModelChange(safeRefineModelId);
+    }
+  }, [generation?.id, version?.id, safeRefineModelId, selectedModel, onModelChange]);
+
+  useEffect(() => {
+    if (!generation || !version) return;
+    const source = normalizeAspectRatio(version.aspectRatio || generation.config.aspectRatio || '');
+    const normalizedOptions = resizeAspectRatios
+      .map((ratio) => normalizeAspectRatio(ratio.value))
+      .filter(Boolean);
+    if (normalizedOptions.length === 0) return;
+
+    const firstDifferent = normalizedOptions.find((value) => value !== source) || normalizedOptions[0];
+    setResizeAspectRatio((current) => {
+      const normalizedCurrent = normalizeAspectRatio(current);
+      if (normalizedCurrent && normalizedOptions.includes(normalizedCurrent)) {
+        return normalizedCurrent;
+      }
+      return firstDifferent;
+    });
+  }, [generation?.id, generation?.config.aspectRatio, version?.id, version?.aspectRatio, resizeAspectRatios]);
 
   if (!generation || !version) {
     return (
@@ -344,6 +490,32 @@ ${version.svgCode}
 
   const cfg = generation.config;
   const hasMultipleVersions = generation.versions.length > 1;
+  const resizeSourceAspectRatio = normalizeAspectRatio(version.aspectRatio || generation.config.aspectRatio || '');
+  const resizeSourceLabel = getLabel(resizeSourceAspectRatio, resizeAspectRatios) || resizeSourceAspectRatio;
+  const resizeAspectLabel = getLabel(resizeAspectRatio, resizeAspectRatios) || resizeAspectRatio;
+  const canResizeToSelected = Boolean(
+    resizeAspectRatio &&
+      resizeSourceAspectRatio &&
+      normalizeAspectRatio(resizeAspectRatio) !== normalizeAspectRatio(resizeSourceAspectRatio)
+  );
+  const refineModelSelectOptions: RichSelectOption[] = refineModelOptions.map((model) => ({
+    value: model.id,
+    label: modelLabels?.[model.id] || modelLabelMap[model.id] || model.name,
+    description: model.description
+  }));
+  const resizeTargetOptions = resizeAspectRatios.reduce<RichSelectOption[]>((acc, ratio) => {
+    const normalizedValue = normalizeAspectRatio(ratio.value);
+    if (!normalizedValue || acc.some((option) => option.value === normalizedValue)) {
+      return acc;
+    }
+    const optionLabel = ratio.label || ratio.name || normalizedValue;
+    acc.push({
+      value: normalizedValue,
+      label: optionLabel,
+      description: normalizedValue === resizeSourceAspectRatio ? 'Current size' : undefined
+    });
+    return acc;
+  }, []);
 
   const ActionButton = ({ onClick, title, children, tooltip, variant = 'default' }: {
     onClick: () => void;
@@ -371,7 +543,7 @@ ${version.svgCode}
     <div className="flex-1 flex flex-col h-full relative">
       {/* Version Navigator */}
       {hasMultipleVersions && (
-        <div className="w-full flex justify-center pt-4 px-4 relative z-50">
+        <div className="w-full flex justify-center pt-4 px-4 relative z-10">
           <div className="relative inline-flex items-center gap-2 bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] px-3 py-1.5 rounded-full shadow-sm">
             <Layers size={14} className="text-slate-400" />
             <button
@@ -387,27 +559,52 @@ ${version.svgCode}
 
             {versionDropdownOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setVersionDropdownOpen(false)} />
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-56 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden">
+                <div className="fixed inset-0 z-10" onClick={() => setVersionDropdownOpen(false)} />
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-20 overflow-hidden p-1">
                   {generation.versions.map((v, idx) => (
-                    <button
+                    <div
                       key={v.id}
-                      onClick={() => {
-                        onVersionChange(idx);
-                        setVersionDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between transition-colors ${
+                      className={`flex items-center gap-1 rounded-lg ${
                         idx === generation.currentVersionIndex
-                          ? 'bg-brand-teal/10 text-brand-teal font-semibold'
-                          : 'text-slate-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-[#21262d]'
+                          ? 'bg-brand-teal/10'
+                          : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
                       }`}
                     >
-                      <span className="flex items-center gap-2">
-                        <span className="font-mono text-xs w-16">{v.label}</span>
-                        <span className="text-xs text-slate-400 capitalize">{v.type}</span>
-                      </span>
-                      <span className="text-[10px] text-slate-400">{formatTimestamp(v.timestamp)}</span>
-                    </button>
+                      <button
+                        onClick={() => {
+                          onVersionChange(idx);
+                          setVersionDropdownOpen(false);
+                        }}
+                        className={`flex-1 min-w-0 text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                          idx === generation.currentVersionIndex
+                            ? 'text-brand-teal font-semibold'
+                            : 'text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        <span className="font-mono text-xs w-16 shrink-0">{v.label}</span>
+                        <span className="text-xs text-slate-400">{v.type === 'refinement' ? 'Refinement' : 'Original'}</span>
+                      </button>
+                      {v.type === 'refinement' && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleDeleteRefinementClick(v.id);
+                          }}
+                          disabled={Boolean(deletingRefinementId)}
+                          className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
+                            deletingRefinementId
+                              ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                              : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
+                          }`}
+                          aria-label={`Delete ${v.label}`}
+                          title={`Delete ${v.label}`}
+                        >
+                          {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </>
@@ -604,53 +801,165 @@ ${version.svgCode}
         </div>
       )}
 
-      {/* Refinement Bar */}
-      <div className="w-full flex flex-col items-center pb-8 px-4 pointer-events-none gap-3">
-        {/* Refinement history thread */}
-        {generation.versions.filter(v => v.type === 'refinement').length > 0 && (
-          <div className="pointer-events-auto w-full max-w-2xl">
-            <div className="flex flex-wrap gap-2 justify-center">
-              {generation.versions.filter(v => v.type === 'refinement').map(v => (
-                <button
-                  key={v.id}
-                  onClick={() => {
-                    const idx = generation.versions.findIndex(ver => ver.id === v.id);
-                    if (idx >= 0) onVersionChange(idx);
-                  }}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    v.id === version?.id
-                      ? 'bg-brand-teal/10 border-brand-teal/50 text-brand-teal font-semibold'
-                      : 'bg-white/80 dark:bg-[#161b22]/80 border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-400 hover:border-brand-teal/30'
-                  }`}
-                >
-                  <span className="font-mono mr-1">{v.label}</span>
-                  <span className="truncate max-w-[150px] inline-block align-bottom">{v.refinementPrompt}</span>
-                </button>
-              ))}
+      {isPromptEditorOpen && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-auto">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsPromptEditorOpen(false)} />
+          <div className="relative w-full max-w-3xl bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Refine Prompt Editor</h3>
+              <button
+                type="button"
+                onClick={() => setIsPromptEditorOpen(false)}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                aria-label="Close prompt editor"
+              >
+                <X size={15} />
+              </button>
             </div>
-          </div>
-        )}
-
-        <div className="pointer-events-auto w-full max-w-2xl bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] p-2 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/50">
-          <form onSubmit={handleRefineSubmit} className="flex gap-2">
-            <input
-              type="text"
+            <textarea
               value={refinementInput}
               onChange={(e) => setRefinementInput(e.target.value)}
+              onKeyDown={handleModalPromptKeyDown}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              className="flex-1 p-3 bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none"
-              disabled={isRefining}
+              rows={12}
+              className="w-full p-3 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60"
+              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPromptEditorOpen(false)}
+                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-[#30363d] text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (submitRefinementOrResize()) {
+                    setIsPromptEditorOpen(false);
+                  }
+                }}
+                disabled={(!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold text-white transition-colors ${
+                  (!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                    ? 'bg-gray-300 dark:bg-[#30363d] cursor-not-allowed'
+                    : 'bg-brand-red hover:bg-red-700'
+                }`}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refinement Bar */}
+      <div className="w-full flex flex-col items-center pb-8 px-4 pointer-events-none gap-3 relative z-40">
+        <div className="pointer-events-auto w-full max-w-2xl bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] p-2 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/50">
+          <div className="px-1 pb-1 flex flex-wrap items-center gap-2">
+            <div className="min-w-[180px] flex-1">
+              <RichSelect
+                value={safeRefineModelId}
+                onChange={onModelChange}
+                options={refineModelSelectOptions}
+                placeholder="Refine model"
+                icon={Wand2}
+                compact
+                disabled={isRefining || isResizingCanvas}
+                buttonClassName="rounded-xl"
+                menuClassName="max-w-[22rem] z-[220]"
+              />
+            </div>
+            <div className="min-w-[170px] flex-1">
+              <RichSelect
+                value={resizeAspectRatio}
+                onChange={setResizeAspectRatio}
+                options={resizeTargetOptions}
+                placeholder="Target size"
+                icon={Maximize2}
+                compact
+                disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                buttonClassName="rounded-xl"
+                menuClassName="max-w-[18rem] z-[220]"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleResizeCanvasClick}
+              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas || !canResizeToSelected}
+              className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group ${
+                isRefining || isAnalyzingRefinePrompt || isResizingCanvas || !canResizeToSelected
+                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                  : 'bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+              }`}
+              aria-label={`Recompose image from ${resizeSourceAspectRatio || 'current'} to ${resizeAspectLabel} while preserving style`}
+              title={canResizeToSelected ? `Recompose to ${resizeAspectLabel}` : 'Select a different target size'}
+            >
+              {isResizingCanvas ? <RefreshCw size={12} className="animate-spin" /> : <Maximize2 size={12} />}
+              {isResizingCanvas ? 'Recomposing…' : 'Recompose'}
+              <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                Rebuilds the image for {resizeAspectLabel} while preserving the same style and palette.
+              </span>
+            </button>
+          </div>
+          <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400">
+            Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
+          </div>
+          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-center">
+            <textarea
+              value={refinementInput}
+              onChange={(e) => setRefinementInput(e.target.value)}
+              onKeyDown={handleInlinePromptKeyDown}
+              placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
+              rows={1}
+              className="flex-1 h-11 p-3 bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
+              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
             />
             <button
+              type="button"
+              onClick={() => setIsPromptEditorOpen(true)}
+              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all ${
+                isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+              }`}
+              aria-label="Open full prompt editor"
+              title="Open full prompt editor"
+            >
+              <Maximize2 size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={handleAnalyzeRefineClick}
+              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+              }`}
+              aria-label="Analyze current image for spelling, factual, and annotation issues and generate a correction prompt"
+              title="Run analysis"
+            >
+              {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <Wand2 size={16} />}
+              <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                Run analysis
+              </span>
+              <span className="pointer-events-none absolute top-full mt-2 right-0 w-64 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                Checks text accuracy, spelling, and label/factual issues, then drafts a detailed correction prompt and switches refine model to Nano Banana Pro.
+              </span>
+            </button>
+            <button
               type="submit"
-              disabled={!refinementInput || isRefining}
-              className={`px-4 rounded-xl font-medium text-white flex items-center gap-2 transition-all ${
-                !refinementInput || isRefining
+              disabled={(!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              className={`h-11 w-11 shrink-0 rounded-xl font-medium text-white inline-flex items-center justify-center transition-all ${
+                (!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas
                   ? 'bg-gray-200 dark:bg-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
                   : 'bg-brand-red hover:bg-red-700 text-white shadow-lg shadow-brand-red/20'
               }`}
             >
-               {isRefining ? (
+               {isRefining || isResizingCanvas ? (
                  <RefreshCw size={16} className="animate-spin" />
                ) : (
                  <Send size={16} />

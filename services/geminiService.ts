@@ -1,8 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
-import { getSafeAspectRatioForModel } from "./aspectRatioService";
+import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioService";
 
-const NANO_BANANA_MODEL = 'gemini-3-pro-image-preview'; // DO NOT CHANGE: Required Model
+const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
+const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
 const ANALYSIS_MODEL = 'gemini-2.5-flash'; // DO NOT CHANGE
 const SUPPORTED_INPUT_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -18,6 +19,17 @@ interface GenerationContext {
   graphicTypes: GraphicType[];
 }
 
+export interface ImageCorrectionPlan {
+  analysisSummary: string;
+  issues: string[];
+  fixPrompt: string;
+}
+
+export interface RefineGraphicOptions {
+  forceAspectOnlyEdit?: boolean;
+  forceFillCanvas?: boolean;
+}
+
 // Helper to get the client
 const getAiClient = (customKey?: string) => {
   // BYOK Enforcement: Only accept customKey.
@@ -29,6 +41,13 @@ const getAiClient = (customKey?: string) => {
 const prependSystemInstruction = (prompt: string, systemPrompt?: string): string => {
   if (!systemPrompt || !systemPrompt.trim()) return prompt;
   return `System Instruction: ${systemPrompt.trim()}\n\n${prompt}`;
+};
+
+const resolveGeminiImageModel = (selectedModel?: string): string => {
+  if (selectedModel === NANO_BANANA_2_MODEL) {
+    return NANO_BANANA_2_MODEL;
+  }
+  return NANO_BANANA_PRO_MODEL;
 };
 
 /**
@@ -58,15 +77,17 @@ export const generateGraphic = async (
   config: GenerationConfig,
   context: GenerationContext,
   customApiKey?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  selectedModel: string = 'gemini'
 ): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
   const fullPrompt = prependSystemInstruction(constructFullPrompt(config, context), systemPrompt);
-  const safeAspectRatio = getSafeAspectRatioForModel('gemini', config.aspectRatio, []);
+  const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
+  const generationModel = resolveGeminiImageModel(selectedModel);
 
   try {
     const response = await ai.models.generateContent({
-      model: NANO_BANANA_MODEL,
+      model: generationModel,
       contents: {
         parts: [{ text: fullPrompt }],
       },
@@ -85,32 +106,144 @@ export const generateGraphic = async (
   }
 };
 
+// Generate a fresh composition while using an input image as style reference only.
+export const generateGraphicWithStyleReference = async (
+  styleReferenceImage: GeneratedImage,
+  conceptPrompt: string,
+  config: GenerationConfig,
+  context: GenerationContext,
+  customApiKey?: string,
+  systemPrompt?: string,
+  selectedModel: string = 'gemini'
+): Promise<GeneratedImage> => {
+  const ai = getAiClient(customApiKey);
+  const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
+  const style = context.visualStyles.find(s => s.id === config.visualStyleId);
+  const type = context.graphicTypes.find(t => t.id === config.graphicTypeId);
+  const colors = colorScheme ? colorScheme.colors.join(', ') : 'source palette tones';
+  const styleDesc = style ? style.description : 'consistent illustrated style';
+  const typeName = type ? type.name : 'infographic';
+  const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
+  const generationModel = resolveGeminiImageModel(selectedModel);
+
+  const prompt = prependSystemInstruction(`
+    Create a brand-new ${typeName} composition.
+    Use the attached image ONLY as a STYLE REFERENCE (line quality, rendering texture, visual motifs, and palette behavior).
+    Do NOT copy the exact layout, framing, element positions, wording, or arrows from the reference image.
+    Build a fresh composition that fully uses the ${safeAspectRatio} canvas with no side padding or centered poster effect.
+    Keep visual style: ${styleDesc}.
+    Keep palette direction: ${colors}.
+    Ensure text is legible and spelled correctly.
+
+    Request:
+    ${conceptPrompt}
+  `.trim(), systemPrompt);
+
+  try {
+    const sourceImage = await resolveImageInputForRefinement(styleReferenceImage);
+    const response = await ai.models.generateContent({
+      model: generationModel,
+      contents: {
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              data: sourceImage.base64Data,
+              mimeType: sourceImage.mimeType,
+            },
+          }
+        ]
+      },
+      config: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        imageConfig: {
+          aspectRatio: safeAspectRatio,
+        }
+      }
+    });
+
+    return extractImageFromResponse(response);
+  } catch (error: any) {
+    console.error("Gemini Style Reference Generation Error:", error);
+    throw new Error(error.message || "Failed to generate from style reference.");
+  }
+};
+
 export const refineGraphic = async (
   currentImage: GeneratedImage, 
   refinementPrompt: string, 
   config: GenerationConfig,
   context: GenerationContext,
   customApiKey?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  selectedModel: string = 'gemini',
+  previousAspectRatio?: string,
+  options?: RefineGraphicOptions
 ): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
   const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
   const style = context.visualStyles.find(s => s.id === config.visualStyleId);
-  const safeAspectRatio = getSafeAspectRatioForModel('gemini', config.aspectRatio, []);
+  const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
+  const generationModel = resolveGeminiImageModel(selectedModel);
   
   const colors = colorScheme ? colorScheme.colors.join(', ') : '';
   const styleDesc = style ? style.description : '';
+  const previousRatio = normalizeAspectRatio(previousAspectRatio || '');
+  const nextRatio = normalizeAspectRatio(safeAspectRatio || config.aspectRatio || '');
+  const aspectRatioChanged = Boolean(previousRatio && nextRatio && previousRatio !== nextRatio);
+  const ratioPattern = /\d+(?:\.\d+)?\s*(?:[:xX×/])\s*\d+(?:\.\d+)?/;
+  const ratioKeywordPattern = /\b(?:aspect\s*ratio|ratio|landscape|portrait|square|ultra[\s-]?wide|widescreen|canvas size)\b/i;
+  const ratioRequestedInPrompt = ratioPattern.test(refinementPrompt) || ratioKeywordPattern.test(refinementPrompt);
+  const reducedPrompt = refinementPrompt
+    .toLowerCase()
+    .replace(ratioPattern, ' ')
+    .replace(/\b(?:change|adjust|set|make|to|the|aspect|ratio|size|canvas|image|from|into|landscape|portrait|square|ultrawide|widescreen|please|just|only)\b/g, ' ')
+    .replace(/[^a-z]+/g, ' ')
+    .trim();
+  const forceAspectOnlyEdit = Boolean(options?.forceAspectOnlyEdit);
+  const likelyAspectOnlyRequest = forceAspectOnlyEdit || (ratioRequestedInPrompt && reducedPrompt.length <= 6);
+
+  const ratioDirective = aspectRatioChanged
+    ? `
+    Aspect ratio instruction: change canvas from ${previousRatio} to ${nextRatio}.
+    Use outpainting/canvas extension to preserve the existing design and scene.
+    Do not redraw or replace the main subject, layout, or text blocks.
+  `.trim()
+    : '';
+
+  const strictPreservationDirective = likelyAspectOnlyRequest
+    ? `
+    This is an aspect-ratio-only edit.
+    Keep all text wording, label positions, typography style, and illustration details as close as possible to the source.
+    Only extend/reframe and minimally reposition elements for fit; do not invent new sections, detached icons, or rewrite copy.
+    Keep the same central subject scale and placement logic from the original composition.
+  `.trim()
+    : `
+    Preserve the existing composition, visual style, and palette unless explicitly changed.
+    Keep existing text and labels stable unless the request explicitly asks to rewrite them.
+  `.trim();
+
+  const fillCanvasDirective = options?.forceFillCanvas
+    ? `
+    The new composition must visually occupy almost the full canvas.
+    Do not return a centered poster surrounded by empty margins, decorative border frames, or padded sidebars.
+    Use only a very small safe margin near edges (about 2-4%).
+  `.trim()
+    : '';
 
   const fullRefinementPrompt = prependSystemInstruction(`
-    Edit this image.
+    Edit this exact image with minimal necessary changes.
     Request: ${refinementPrompt}.
     Maintain the existing style (${styleDesc}) and color palette (${colors}).
+    ${ratioDirective}
+    ${strictPreservationDirective}
+    ${fillCanvasDirective}
   `.trim(), systemPrompt);
 
   try {
     const sourceImage = await resolveImageInputForRefinement(currentImage);
     const response = await ai.models.generateContent({
-      model: NANO_BANANA_MODEL,
+      model: generationModel,
       contents: {
         parts: [
           {
@@ -340,6 +473,91 @@ export const describeImagePrompt = async (
 
   if (!response.text) throw new Error("No description generated");
   return response.text.trim();
+};
+
+export const analyzeImageForCorrectionPrompt = async (
+  currentImage: GeneratedImage,
+  config: GenerationConfig,
+  context: GenerationContext,
+  customApiKey?: string,
+  systemPrompt?: string
+): Promise<ImageCorrectionPlan> => {
+  const ai = getAiClient(customApiKey);
+  const sourceImage = await resolveImageInputForRefinement(currentImage);
+
+  const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
+  const style = context.visualStyles.find(s => s.id === config.visualStyleId);
+  const type = context.graphicTypes.find(t => t.id === config.graphicTypeId);
+  const contextHint = [
+    `Original request: ${config.prompt || 'N/A'}`,
+    `Graphic type: ${type?.name || config.graphicTypeId || 'N/A'}`,
+    `Visual style: ${style?.name || config.visualStyleId || 'N/A'}${style?.description ? ` (${style.description})` : ''}`,
+    `Color palette: ${colorScheme ? `${colorScheme.name} [${colorScheme.colors.join(', ')}]` : 'N/A'}`,
+    `Aspect ratio: ${config.aspectRatio || 'N/A'}`,
+  ].join('\n');
+
+  const prompt = prependSystemInstruction(`
+    You are auditing a generated image for correctness and usability.
+
+    Tasks:
+    1. Detect textual problems: spelling, grammar, punctuation, capitalization, awkward wording.
+    2. Detect factual/semantic inaccuracies and visual mismatches (for example labels pointing to wrong parts, contradictory annotations, impossible claims).
+    3. Produce a single detailed image-edit prompt that corrects the issues while preserving the overall composition, style, and palette.
+
+    Context:
+    ${contextHint}
+
+    Output requirements:
+    - Return strict JSON.
+    - "analysisSummary": 1-2 concise sentences.
+    - "issues": array of concrete issue lines ("what is wrong -> what to change").
+    - "fixPrompt": a specific, ready-to-run editing prompt for a high-quality image model.
+    - In "fixPrompt", include: text correction instructions, factual correction instructions, label/annotation alignment, readability improvements.
+    - Keep the image concept intact; do not introduce unrelated new content.
+  `.trim(), systemPrompt);
+
+  try {
+    const response = await ai.models.generateContent({
+      model: ANALYSIS_MODEL,
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: sourceImage.base64Data,
+              mimeType: sourceImage.mimeType,
+            },
+          },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            analysisSummary: { type: Type.STRING },
+            issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+            fixPrompt: { type: Type.STRING }
+          },
+          required: ["analysisSummary", "issues", "fixPrompt"]
+        }
+      }
+    });
+
+    if (!response.text) throw new Error("No correction analysis generated");
+    const parsed = JSON.parse(response.text) as Partial<ImageCorrectionPlan>;
+
+    return {
+      analysisSummary: (parsed.analysisSummary || '').trim(),
+      issues: Array.isArray(parsed.issues)
+        ? parsed.issues.map(issue => String(issue).trim()).filter(Boolean)
+        : [],
+      fixPrompt: (parsed.fixPrompt || '').trim()
+    };
+  } catch (error: any) {
+    console.error("Image Correction Analysis Error:", error);
+    throw new Error(error.message || "Failed to analyze image for correction.");
+  }
 };
 
 // Expand a short prompt into a richer, visual-focused description (text-only, no reference image)

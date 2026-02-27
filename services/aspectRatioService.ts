@@ -43,10 +43,25 @@ const OPENAI_LABELS: Record<string, string> = {
   '3:2': 'Landscape (3:2)'
 };
 
-const normalizeAspectRatio = (value?: string): string => (value || '').replace(/\s+/g, '').trim();
+export const normalizeAspectRatio = (value?: string): string => {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+
+  const compact = raw
+    .replace(/\s+/g, '')
+    .replace(/_/g, ':')
+    .replace(/[xX×]/g, ':')
+    .replace(/\//g, ':');
+
+  const match = compact.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+  if (!match) return compact;
+
+  return `${match[1]}:${match[2]}`;
+};
 
 const parseRatio = (value: string): number | null => {
-  const [width, height] = value.split(':').map(Number);
+  const normalized = normalizeAspectRatio(value);
+  const [width, height] = normalized.split(':').map(Number);
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
@@ -91,7 +106,14 @@ const buildFilteredRatios = (
   const sourceByValue = new Map(source.map(r => [normalizeAspectRatio(r.value), r]));
   return allowedRatios.map((value) => {
     const existing = sourceByValue.get(value);
-    if (existing) return existing;
+    if (existing) {
+      return {
+        ...existing,
+        value,
+        label: labels[value],
+        name: labels[value]
+      };
+    }
 
     return {
       id: `model-${value.replace(':', '-')}`,
@@ -109,6 +131,33 @@ const buildFilteredRatios = (
   });
 };
 
+export const extractAspectRatioFromText = (
+  text: string,
+  modelId: string,
+  allRatios: AspectRatioOption[]
+): string | null => {
+  const value = (text || '').trim();
+  if (!value) return null;
+
+  const ratioMatch = value.match(/(\d+(?:\.\d+)?)\s*(?:[:xX×/])\s*(\d+(?:\.\d+)?)/);
+  if (ratioMatch) {
+    const requested = normalizeAspectRatio(`${ratioMatch[1]}:${ratioMatch[2]}`);
+    return requested ? getSafeAspectRatioForModel(modelId, requested, allRatios) : null;
+  }
+
+  const keywordMap: Array<{ pattern: RegExp; ratio: string }> = [
+    { pattern: /\bultra[\s-]?wide\b|\b21\s*[:xX×/]\s*9\b/i, ratio: '21:9' },
+    { pattern: /\blandscape\b|\bwidescreen\b|\b16\s*[:xX×/]\s*9\b/i, ratio: '16:9' },
+    { pattern: /\bportrait\b|\b9\s*[:xX×/]\s*16\b/i, ratio: '9:16' },
+    { pattern: /\bsquare\b|\b1\s*[:xX×/]\s*1\b/i, ratio: '1:1' }
+  ];
+
+  const keywordMatch = keywordMap.find((entry) => entry.pattern.test(value));
+  if (!keywordMatch) return null;
+
+  return getSafeAspectRatioForModel(modelId, keywordMatch.ratio, allRatios);
+};
+
 /**
  * Returns only the aspect ratios that the given model actually supports.
  * No silent conversions -- what you see is what you get.
@@ -119,7 +168,7 @@ export const getAspectRatiosForModel = (
 ): AspectRatioOption[] => {
   const source = dedupeByValue(allRatios?.length ? allRatios : ASPECT_RATIOS);
 
-  if (modelId === 'gemini') {
+  if (modelId === 'gemini' || modelId === 'gemini-3.1-flash-image-preview') {
     return buildFilteredRatios(GEMINI_ALLOWED_ASPECT_RATIOS, GEMINI_LABELS, source);
   }
 

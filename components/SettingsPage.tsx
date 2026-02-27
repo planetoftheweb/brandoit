@@ -341,7 +341,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         onChange={(e) => handleModelLabelChange(model.id, e.target.value)}
                         onBlur={handleModelLabelBlur}
                         className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
-                        placeholder={model.id === 'openai' ? 'GPT Image' : model.id === 'gemini' ? 'Nano Banana' : model.name}
+                        placeholder={
+                          model.id === 'openai'
+                            ? 'GPT Image'
+                            : model.id === 'gemini'
+                              ? 'Nano Banana Pro'
+                              : model.id === 'gemini-3.1-flash-image-preview'
+                                ? 'Nano Banana 2'
+                                : model.name
+                        }
                       />
                       <p className="text-[11px] text-slate-500 mt-1">
                         Controls the text shown in the toolbar model dropdown.
@@ -543,9 +551,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       searchable
                     />
                     <p className="text-xs text-slate-500 mt-1">
-                      {selectedModel === 'gemini'
-                        ? 'Showing only ratios Nano Banana supports natively.'
-                        : 'Showing only ratios GPT Image outputs natively.'}
+                      {selectedModel === 'openai'
+                        ? 'Showing only ratios GPT Image outputs natively.'
+                        : selectedModel === 'gemini-svg'
+                          ? 'SVG: all ratios available (mapped to viewBox).'
+                          : 'Showing only ratios Nano Banana models support natively.'}
                     </p>
                   </div>
                 </div>
