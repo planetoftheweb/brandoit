@@ -67,12 +67,22 @@ export const getImagePayload = (
   return null;
 };
 
-export const createBlobUrlFromImage = (image: ImageSource): string | null => {
+export const getBlobFromImageSource = (image: ImageSource): Blob | null => {
   try {
     const payload = getImagePayload(image);
     if (!payload) return null;
     const bytes = decodeBase64ToBytes(payload.base64Data);
-    const blob = new Blob([bytes], { type: payload.mimeType || "image/png" });
+    return new Blob([bytes], { type: payload.mimeType || "image/png" });
+  } catch (error) {
+    console.warn("Failed to build blob from image payload:", error);
+    return null;
+  }
+};
+
+export const createBlobUrlFromImage = (image: ImageSource): string | null => {
+  try {
+    const blob = getBlobFromImageSource(image);
+    if (!blob) return null;
     return URL.createObjectURL(blob);
   } catch (error) {
     console.warn("Failed to create blob URL from image payload:", error);

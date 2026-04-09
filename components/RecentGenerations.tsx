@@ -1,11 +1,12 @@
 import React from 'react';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode } from 'lucide-react';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getLatestVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
+import { buildGenerationsZipBlob, downloadBlobAsFile, defaultBatchExportFilename } from '../services/batchExportService';
 
 interface RecentGenerationsProps {
   history: Generation[];
@@ -28,8 +29,53 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [copyLoadingId, setCopyLoadingId] = React.useState<string | null>(null);
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
+  const [selectionMode, setSelectionMode] = React.useState(false);
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+  const [zipLoading, setZipLoading] = React.useState(false);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
+
+  const exitSelectionMode = React.useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  React.useEffect(() => {
+    if (!selectionMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitSelectionMode();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectionMode, exitSelectionMode]);
+
+  React.useEffect(() => {
+    const valid = new Set(history.map((g) => g.id));
+    setSelectedIds((prev) => prev.filter((id) => valid.has(id)));
+  }, [history]);
+
+  const handleExportZip = async () => {
+    const selected = history.filter((g) => selectedIds.includes(g.id));
+    if (selected.length === 0) return;
+    setZipLoading(true);
+    try {
+      const blob = await buildGenerationsZipBlob(selected);
+      downloadBlobAsFile(blob, defaultBatchExportFilename());
+      showToast('ZIP download started');
+      exitSelectionMode();
+    } catch (err) {
+      console.error('Batch export failed', err);
+      showToast('Could not create ZIP. Try again.');
+    } finally {
+      setZipLoading(false);
+    }
+  };
 
   React.useEffect(() => {
     return () => {
@@ -178,13 +224,64 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 md:px-6 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 border-t border-gray-200 dark:border-[#30363d] mt-8">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <div className="flex flex-wrap items-center gap-2 text-slate-500 dark:text-slate-400">
           <Clock size={18} />
           <h3 className="text-sm font-bold uppercase tracking-wider">Recent Generations</h3>
           <span className="text-xs text-slate-400 dark:text-slate-500">
             ({history.length} {history.length === 1 ? 'item' : 'items'})
           </span>
+          {selectionMode && selectedIds.length > 0 && (
+            <span className="text-xs font-semibold text-brand-teal" aria-live="polite">
+              {selectedIds.length} selected
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectionMode ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(history.map((g) => g.id))}
+                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportZip()}
+                disabled={selectedIds.length === 0 || zipLoading}
+                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition"
+                aria-busy={zipLoading}
+              >
+                <Archive size={16} aria-hidden />
+                {zipLoading ? 'Preparing…' : `Download ZIP (${selectedIds.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={exitSelectionMode}
+                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-slate-500 transition"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSelectionMode(true)}
+              className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+            >
+              <CheckSquare size={16} aria-hidden />
+              Select for export
+            </button>
+          )}
         </div>
       </div>
 
@@ -196,11 +293,31 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           return (
             <div 
               key={gen.id} 
-              className="group relative bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-visible shadow-sm hover:shadow-lg hover:border-brand-teal dark:hover:border-brand-teal transition-all"
+              className={`group relative bg-white dark:bg-[#161b22] border rounded-xl overflow-visible shadow-sm hover:shadow-lg transition-all ${
+                selectionMode && selectedIds.includes(gen.id)
+                  ? 'border-brand-teal ring-2 ring-brand-teal/50 dark:ring-brand-teal/40'
+                  : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal'
+              }`}
             >
+              {selectionMode && (
+                <div className="absolute top-2 left-2 z-20">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelect(gen.id);
+                    }}
+                    className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg border border-gray-300/80 dark:border-white/15 bg-white/95 dark:bg-[#1f252d]/95 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70"
+                    aria-pressed={selectedIds.includes(gen.id)}
+                    aria-label={selectedIds.includes(gen.id) ? 'Deselect generation' : 'Select generation'}
+                  >
+                    {selectedIds.includes(gen.id) ? <CheckSquare size={20} /> : <Square size={20} />}
+                  </button>
+                </div>
+              )}
               {/* Mark badge */}
               {versionCount > 1 && (
-                <div className="absolute top-2 left-2 z-10">
+                <div className={`absolute top-2 z-10 ${selectionMode ? 'left-14' : 'left-2'}`}>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/90 text-white shadow-sm">
                     {latestVersion.label}
                   </span>
@@ -336,15 +453,33 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   />
                 )}
                 <button
+                  type="button"
                   onClick={() => {
+                    if (selectionMode) {
+                      toggleSelect(gen.id);
+                      return;
+                    }
                     onSelect(gen);
                     showToast('Restored');
                   }}
-                  className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"
-                  aria-label="Restore generation"
+                  className={
+                    selectionMode
+                      ? 'absolute inset-0 bg-black/25 flex items-center justify-center opacity-100 transition-colors'
+                      : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100'
+                  }
+                  aria-label={selectionMode ? 'Toggle selection' : 'Restore generation'}
                 >
                   <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
-                    <ArrowUpRight size={14} /> Restore
+                    {selectionMode ? (
+                      <>
+                        {selectedIds.includes(gen.id) ? <CheckSquare size={14} /> : <Square size={14} />}{' '}
+                        {selectedIds.includes(gen.id) ? 'Selected' : 'Select'}
+                      </>
+                    ) : (
+                      <>
+                        <ArrowUpRight size={14} /> Restore
+                      </>
+                    )}
                   </span>
                 </button>
               </div>
