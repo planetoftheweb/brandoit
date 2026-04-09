@@ -69,6 +69,10 @@ const TOOLBAR_SELECTION_KEY_PREFIX = 'brandoit_toolbar_selection_v1';
 const TOOLBAR_SELECTION_LAST_KEY = `${TOOLBAR_SELECTION_KEY_PREFIX}:last`;
 const MODEL_ID_SET = new Set(SUPPORTED_MODELS.map(model => model.id));
 
+const GITHUB_REPO_BASE = 'https://github.com/planetoftheweb/brandoit';
+const GITHUB_CHANGELOG_URL = `${GITHUB_REPO_BASE}/blob/main/CHANGELOG.md`;
+const GITHUB_RELEASES_URL = `${GITHUB_REPO_BASE}/releases`;
+
 const getToolbarSelectionKey = (userId?: string | null) =>
   `${TOOLBAR_SELECTION_KEY_PREFIX}:${userId || 'guest'}`;
 
@@ -1389,7 +1393,7 @@ const App: React.FC = () => {
              <HelpCircle size={20} />
            </button>
            <a
-             href="https://github.com/planetoftheweb/brandoit"
+             href={GITHUB_REPO_BASE}
              target="_blank"
              rel="noopener noreferrer"
              className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
@@ -1488,6 +1492,40 @@ const App: React.FC = () => {
           </main>
         </>
       )}
+
+      <footer
+        className="mt-auto w-full border-t border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-4 py-4 sm:px-6"
+        role="contentinfo"
+        aria-label="Site copyright and project links"
+      >
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-2 text-center text-xs text-slate-500 dark:text-slate-400 sm:flex-row sm:flex-wrap sm:gap-x-4 sm:gap-y-1">
+          <p>© {new Date().getFullYear()} BranDoIt. All rights reserved.</p>
+          <nav
+            className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2"
+            aria-label="Project documentation"
+          >
+            <a
+              href={GITHUB_CHANGELOG_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center font-medium text-brand-teal hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#0d1117]"
+            >
+              Changelog
+            </a>
+            <span className="hidden text-slate-300 dark:text-slate-600 sm:inline" aria-hidden="true">
+              |
+            </span>
+            <a
+              href={GITHUB_RELEASES_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center font-medium text-brand-teal hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#0d1117]"
+            >
+              Releases
+            </a>
+          </nav>
+        </div>
+      </footer>
 
       {/* Auth Modal */}
       <AuthModal 
