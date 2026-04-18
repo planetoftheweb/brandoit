@@ -1,10 +1,21 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode } from '../types';
 import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
 import { SUPPORTED_MODELS } from '../constants';
 import { getAspectRatiosForModel } from '../services/aspectRatioService';
+import { expandPromptPermutations } from '../services/promptExpansionService';
+import {
+  batchCapFor,
+  isAdminUser,
+  DEFAULT_BATCH_CONCURRENCY,
+} from '../services/batchGenerationService';
+import {
+  estimateBatchDuration,
+  formatDuration,
+  getModelSecondsPerGen,
+} from '../services/timeEstimationService';
 import { 
   Palette, 
   PenTool, 
@@ -38,7 +49,7 @@ import { RichSelect } from './RichSelect';
 interface ControlPanelProps {
   config: GenerationConfig;
   setConfig: React.Dispatch<React.SetStateAction<GenerationConfig>>;
-  onGenerate: () => void;
+  onGenerate: (count: number) => void;
   isGenerating: boolean;
   options: {
     brandColors: BrandColor[];
@@ -461,6 +472,31 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [isAnalysingOption, setIsAnalysingOption] = useState(false);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const [isExpandingPrompt, setIsExpandingPrompt] = useState(false);
+
+  // Batch generation controls: variations-per-prompt count and brace expansion preview.
+  const [batchCount, setBatchCount] = useState<number>(1);
+  const batchCap = batchCapFor(user);
+  const isAdmin = isAdminUser(user);
+  const batchCapLabel = Number.isFinite(batchCap) ? String(batchCap) : 'unlimited';
+  const expansion = useMemo(
+    () => expandPromptPermutations(config.prompt || ''),
+    [config.prompt]
+  );
+  const expandedPromptCount = expansion.prompts.length;
+  const safeBatchCount = Math.max(1, Math.floor(batchCount || 1));
+  const totalBatchRuns = expandedPromptCount * safeBatchCount;
+  const exceedsBatchCap = Number.isFinite(batchCap) && totalBatchRuns > batchCap;
+  const durationEstimate = useMemo(
+    () =>
+      estimateBatchDuration({
+        total: totalBatchRuns,
+        concurrency: DEFAULT_BATCH_CONCURRENCY,
+        secondsPerGen: getModelSecondsPerGen(selectedModel),
+      }),
+    [totalBatchRuns, selectedModel]
+  );
+  const estimatedLabel = formatDuration(durationEstimate.totalSeconds);
+  const hasBatchInfo = !!config.prompt && (totalBatchRuns > 0 || expansion.hasBraces || exceedsBatchCap);
   const [paletteCopyMessage, setPaletteCopyMessage] = useState<string | null>(null);
   const paletteCopyTimerRef = useRef<number | null>(null);
   const [bulkPaletteInput, setBulkPaletteInput] = useState('');
@@ -1412,58 +1448,171 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
 
           {/* 2. Prompt Input Area */}
-          <div className="w-full max-w-5xl mx-auto flex flex-col sm:flex-row gap-3">
-             <div className="relative flex-1">
-              <div className="absolute top-1/2 -translate-y-1/2 left-3 text-slate-400 dark:text-slate-500 pointer-events-none">
-                <span className="text-sm font-bold uppercase tracking-wider text-brand-teal">Prompt</span>
-               </div>
-               <input 
+          <div className="w-full max-w-5xl mx-auto flex flex-col gap-1.5">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <div className="absolute top-1/2 -translate-y-1/2 left-3 text-slate-400 dark:text-slate-500 pointer-events-none">
+                  <span className="text-sm font-bold uppercase tracking-wider text-brand-teal">Prompt</span>
+                </div>
+                <input 
                   type="text"
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
-                  placeholder="Describe your graphic (e.g. 'A futuristic city chart')..."
-                 className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3.5 pl-24 pr-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner"
+                  placeholder="Describe your graphic (use {a, b, c} for variations)..."
+                  className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3.5 pl-24 pr-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner"
                 />
-             </div>
-             
-            <div className="flex gap-2 sm:w-auto w-full">
-              <button
-                type="button"
-                onClick={handleExpandPrompt}
-                disabled={!config.prompt || isExpandingPrompt}
-                className={`flex-1 sm:flex-none relative inline-flex items-center justify-center px-3 py-3 rounded-lg font-semibold border transition-all group ${
-                  !config.prompt || isExpandingPrompt
-                    ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
-                    : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
-                }`}
-                aria-label="Expand prompt with additional creative detail"
-              >
-                {isExpandingPrompt ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                  Expand prompt
-                </span>
-              </button>
-              
-              <button
-                onClick={onGenerate}
-                disabled={!config.prompt || isGenerating}
-                className={`flex-none relative inline-flex items-center justify-center px-5 py-3 rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 sm:w-auto w-full group ${
-                  !config.prompt || isGenerating
-                    ? 'bg-gray-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                    : 'bg-brand-red hover:bg-red-700 text-white shadow-brand-red/20'
-                }`}
-                aria-label="Generate image"
-              >
-                {isGenerating ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <Send size={16} className="text-white" />
-                )}
-                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                  Generate
-                </span>
-              </button>
+              </div>
+
+              <div className="flex gap-2 sm:w-auto w-full">
+                {/* Variations: typable number with a 1–5 quick-pick dropdown. */}
+                <div
+                  className="relative group flex items-center self-stretch pl-2 pr-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] shadow-sm"
+                  title={`Variations per prompt${Number.isFinite(batchCap) ? ` (max ${batchCapLabel})` : ''}`}
+                >
+                  <label htmlFor="batch-count-input" className="sr-only">Variations per prompt</label>
+                  <div className="flex flex-col items-center leading-none">
+                    <span className="text-[10px] uppercase font-bold text-brand-teal tracking-wider mb-0.5">
+                      Qty
+                    </span>
+                    <input
+                      id="batch-count-input"
+                      type="number"
+                      min={1}
+                      max={Number.isFinite(batchCap) ? batchCap : 99}
+                      step={1}
+                      value={batchCount}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        if (!Number.isFinite(raw)) {
+                          setBatchCount(1);
+                          return;
+                        }
+                        const hardMax = Number.isFinite(batchCap) ? batchCap : 99;
+                        const clamped = Math.max(1, Math.min(Math.floor(raw), hardMax));
+                        setBatchCount(clamped);
+                      }}
+                      className="w-7 bg-transparent text-slate-900 dark:text-white text-base font-semibold text-center tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      aria-label="Variations per prompt"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleDropdown('batch-count')}
+                    aria-haspopup="listbox"
+                    aria-expanded={activeDropdown === 'batch-count'}
+                    aria-label="Pick a preset count"
+                    className="h-7 w-6 flex items-center justify-center rounded-md text-slate-500 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform duration-200 ${
+                        activeDropdown === 'batch-count' ? 'rotate-180 text-brand-teal' : ''
+                      }`}
+                    />
+                  </button>
+
+                  {activeDropdown === 'batch-count' && (
+                    <div
+                      className="absolute top-full right-0 mt-2 w-16 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 py-0.5"
+                      role="listbox"
+                      aria-label="Variations per prompt"
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => {
+                        const isSelected = batchCount === n;
+                        return (
+                          <button
+                            key={n}
+                            type="button"
+                            role="option"
+                            aria-selected={isSelected}
+                            onClick={() => {
+                              setBatchCount(n);
+                              setActiveDropdown(null);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-0.5 text-sm tabular-nums transition-colors ${
+                              isSelected
+                                ? 'bg-brand-teal/10 text-brand-teal font-semibold'
+                                : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                            }`}
+                          >
+                            <span>{n}</span>
+                            {isSelected && <Check size={12} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleExpandPrompt}
+                  disabled={!config.prompt || isExpandingPrompt}
+                  className={`flex-1 sm:flex-none relative inline-flex items-center justify-center px-3 py-3 rounded-lg font-semibold border transition-all group ${
+                    !config.prompt || isExpandingPrompt
+                      ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                      : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                  }`}
+                  aria-label="Expand prompt with additional creative detail"
+                >
+                  {isExpandingPrompt ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                    Expand prompt
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => onGenerate(safeBatchCount)}
+                  disabled={!config.prompt || isGenerating || exceedsBatchCap}
+                  className={`flex-none relative inline-flex items-center justify-center px-5 py-3 rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 sm:w-auto w-full group ${
+                    !config.prompt || isGenerating || exceedsBatchCap
+                      ? 'bg-gray-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                      : 'bg-brand-red hover:bg-red-700 text-white shadow-brand-red/20'
+                  }`}
+                  aria-label={totalBatchRuns > 1 ? `Generate ${totalBatchRuns} images` : 'Generate image'}
+                >
+                  {isGenerating ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Send size={16} className="text-white" />
+                  )}
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                    {totalBatchRuns > 1 ? `Generate x${totalBatchRuns}` : 'Generate'}
+                  </span>
+                </button>
+              </div>
             </div>
+
+            {hasBatchInfo && (
+              <div
+                className={`text-xs pl-1 ${
+                  exceedsBatchCap
+                    ? 'text-red-600 dark:text-red-400 font-medium'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+                role={exceedsBatchCap ? 'alert' : undefined}
+                aria-live="polite"
+              >
+                {exceedsBatchCap ? (
+                  `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count or brace options.`
+                ) : (
+                  <>
+                    {expansion.hasBraces
+                      ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                      : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
+                    {totalBatchRuns > 0 && (
+                      <span className="text-slate-400 dark:text-slate-500">
+                        {' '}Est. ~{estimatedLabel}
+                        {totalBatchRuns > 1 && durationEstimate.effectiveConcurrency > 1
+                          ? ` (${durationEstimate.effectiveConcurrency} in parallel)`
+                          : ''}
+                        .
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
         </div>

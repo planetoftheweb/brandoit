@@ -6,7 +6,7 @@ import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getLatestVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
-import { buildGenerationsZipBlob, downloadBlobAsFile, defaultBatchExportFilename } from '../services/batchExportService';
+import { DownloadMenu } from './DownloadMenu';
 
 interface RecentGenerationsProps {
   history: Generation[];
@@ -31,7 +31,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
-  const [zipLoading, setZipLoading] = React.useState(false);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
 
@@ -60,22 +59,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setSelectedIds((prev) => prev.filter((id) => valid.has(id)));
   }, [history]);
 
-  const handleExportZip = async () => {
-    const selected = history.filter((g) => selectedIds.includes(g.id));
-    if (selected.length === 0) return;
-    setZipLoading(true);
-    try {
-      const blob = await buildGenerationsZipBlob(selected);
-      downloadBlobAsFile(blob, defaultBatchExportFilename());
-      showToast('ZIP download started');
-      exitSelectionMode();
-    } catch (err) {
-      console.error('Batch export failed', err);
-      showToast('Could not create ZIP. Try again.');
-    } finally {
-      setZipLoading(false);
-    }
-  };
+  // Items that the "download all" menu operates on: selected items when the
+  // user has made a selection; otherwise the full visible history.
+  const downloadScope = React.useMemo(() => {
+    if (selectedIds.length === 0) return history;
+    return history.filter((g) => selectedIds.includes(g.id));
+  }, [history, selectedIds]);
+  const downloadScopeLabel =
+    selectedIds.length > 0
+      ? `Download selected (${selectedIds.length})`
+      : `Download all (${history.length})`;
 
   React.useEffect(() => {
     return () => {
@@ -254,16 +247,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               >
                 Clear
               </button>
-              <button
-                type="button"
-                onClick={() => void handleExportZip()}
-                disabled={selectedIds.length === 0 || zipLoading}
-                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition"
-                aria-busy={zipLoading}
-              >
-                <Archive size={16} aria-hidden />
-                {zipLoading ? 'Preparing…' : `Download ZIP (${selectedIds.length})`}
-              </button>
+              <DownloadMenu
+                mode="all-only"
+                allGenerations={downloadScope}
+                allLabel={downloadScopeLabel}
+                triggerLabel={downloadScopeLabel}
+                triggerTitle={downloadScopeLabel}
+                icon={<Archive size={16} aria-hidden />}
+                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition"
+                disabled={downloadScope.length === 0}
+                onNotify={showToast}
+                align="right"
+              />
               <button
                 type="button"
                 onClick={exitSelectionMode}
@@ -273,14 +268,28 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={() => setSelectionMode(true)}
-              className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
-            >
-              <CheckSquare size={16} aria-hidden />
-              Select for export
-            </button>
+            <>
+              <DownloadMenu
+                mode="all-only"
+                allGenerations={history}
+                allLabel={`Download all (${history.length})`}
+                triggerLabel={`Download all (${history.length})`}
+                triggerTitle="Download all as ZIP"
+                icon={<Archive size={16} aria-hidden />}
+                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none"
+                disabled={history.length === 0}
+                onNotify={showToast}
+                align="right"
+              />
+              <button
+                type="button"
+                onClick={() => setSelectionMode(true)}
+                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+              >
+                <CheckSquare size={16} aria-hidden />
+                Select for export
+              </button>
+            </>
           )}
         </div>
       </div>

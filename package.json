@@ -1,13 +1,13 @@
 {
   "name": "brandoit",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check:no-native-selects": "if rg -n \"<select\" App.tsx components; then echo \"Native <select> found. Use RichSelect.\" && exit 1; else echo \"No native <select> tags found.\"; fi"
+    "check:no-native-selects": "if grep -R --line-number --include='*.tsx' --include='*.ts' '<select' App.tsx components 2>/dev/null | grep -q .; then echo \"Native <select> found. Use RichSelect.\" && exit 1; else echo \"No native <select> tags found.\"; fi"
   },
   "dependencies": {
     "@google/genai": "^1.33.0",

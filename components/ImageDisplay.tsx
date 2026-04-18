@@ -9,6 +9,7 @@ import { sanitizeSvg } from '../services/svgService';
 import { SUPPORTED_MODELS } from '../constants';
 import { normalizeAspectRatio } from '../services/aspectRatioService';
 import { RichSelect, RichSelectOption } from './RichSelect';
+import { DownloadMenu } from './DownloadMenu';
 
 interface ImageDisplayProps {
   generation: Generation | null;
@@ -30,6 +31,7 @@ interface ImageDisplayProps {
     graphicTypes: GraphicType[];
     aspectRatios: AspectRatioOption[];
   };
+  history?: Generation[];
 }
 
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
@@ -46,7 +48,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onModelChange,
   modelLabels,
   resizeAspectRatios,
-  options
+  options,
+  history = []
 }) => {
   const [refinementInput, setRefinementInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
@@ -61,7 +64,16 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [deletingRefinementId, setDeletingRefinementId] = useState<string | null>(null);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [resizeAspectRatio, setResizeAspectRatio] = useState('');
+  // Thumbnail strip hover: while hovering a thumbnail, the main viewport
+  // mirrors that version without committing it. Null = show the committed
+  // `currentVersionIndex`.
+  const [hoveredVersionIdx, setHoveredVersionIdx] = useState<number | null>(null);
+  // Vertical anchor (in rail-outer coordinates) for the floating hover
+  // popover. Rendered at the rail-outer level so it can escape the inner
+  // scroller's overflow clip without needing position: fixed.
+  const [popoverTop, setPopoverTop] = useState<number>(0);
   const svgContainerRef = useRef<HTMLDivElement>(null);
+  const railInnerRef = useRef<HTMLDivElement>(null);
 
   const version = generation ? getCurrentVersion(generation) : null;
   const isSvg = version?.mimeType === 'image/svg+xml';
@@ -80,6 +92,12 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     }
     setAnimationPaused(false);
   }, [version?.imageUrl]);
+
+  // Drop hover preview whenever the underlying generation changes so we
+  // don't display a thumbnail pointer into a stale version list.
+  useEffect(() => {
+    setHoveredVersionIdx(null);
+  }, [generation?.id]);
 
   useEffect(() => {
     return () => {
@@ -613,13 +631,141 @@ ${version.svgCode}
         </div>
       )}
 
-      {/* Main Viewport */}
-      <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center">
-        <div className={`relative group ${isSvg ? 'w-full max-w-5xl' : 'max-w-full max-h-full'}`}>
+      {/* Main Viewport — the thumbnail rail (when multiple versions exist)
+          lives inside the same centered row as the image card so its height
+          tracks the image, not the full viewport. This avoids a tall,
+          mostly-empty rail when there are only a handful of marks. */}
+      <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center min-h-0">
+        <div className="flex items-stretch gap-3 max-w-full max-h-full">
+
+          {/* Thumbnail rail — outer div has no intrinsic height (its scroller
+              is absolutely positioned out of flow), so `items-stretch` above
+              pins the rail's height to the image card's height. When the
+              batch has more thumbs than fit, the inner scroller handles it. */}
+          {hasMultipleVersions && (
+            <div className="relative w-[124px] shrink-0 self-stretch">
+              <div
+                ref={railInnerRef}
+                onScroll={() => setHoveredVersionIdx(null)}
+                onMouseLeave={() => setHoveredVersionIdx(null)}
+                className="absolute inset-0 overflow-y-auto py-2 px-2 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50/60 dark:bg-[#0d1117]/60"
+                role="listbox"
+                aria-label="Generation versions"
+              >
+                {generation.versions.map((v, idx) => {
+                  const isCommitted = idx === generation.currentVersionIndex;
+                  const isHovered = idx === hoveredVersionIdx;
+                  const isSvgThumb = v.mimeType === 'image/svg+xml';
+                  const handleEnter: React.MouseEventHandler<HTMLButtonElement> = (event) => {
+                    setHoveredVersionIdx(idx);
+                    const btn = event.currentTarget;
+                    const scroller = railInnerRef.current;
+                    if (scroller) {
+                      // Anchor the popover to the thumb's vertical center in
+                      // the rail's coordinate space. offsetTop is relative to
+                      // the scroller, so we subtract scrollTop to translate
+                      // into the visible area.
+                      setPopoverTop(btn.offsetTop - scroller.scrollTop + btn.offsetHeight / 2);
+                    }
+                  };
+                  const handleFocus: React.FocusEventHandler<HTMLButtonElement> = (event) => {
+                    setHoveredVersionIdx(idx);
+                    const btn = event.currentTarget;
+                    const scroller = railInnerRef.current;
+                    if (scroller) {
+                      setPopoverTop(btn.offsetTop - scroller.scrollTop + btn.offsetHeight / 2);
+                    }
+                  };
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      role="option"
+                      aria-selected={isCommitted}
+                      title={v.label}
+                      onMouseEnter={handleEnter}
+                      onFocus={handleFocus}
+                      onBlur={() => setHoveredVersionIdx((prev) => (prev === idx ? null : prev))}
+                      onClick={() => onVersionChange(idx)}
+                      className={`relative shrink-0 w-full aspect-square rounded-md overflow-hidden border transition-all ${
+                        isCommitted
+                          ? 'border-brand-teal ring-2 ring-brand-teal/30'
+                          : isHovered
+                            ? 'border-brand-teal/70'
+                            : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal/40'
+                      }`}
+                    >
+                      {isSvgThumb && v.svgCode ? (
+                        <div
+                          className="w-full h-full bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
+                          dangerouslySetInnerHTML={{ __html: sanitizeSvg(v.svgCode) }}
+                        />
+                      ) : v.imageUrl ? (
+                        <img
+                          src={v.imageUrl}
+                          alt={v.label}
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-gray-100 dark:bg-[#161b22]" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Floating hover/focus preview — rendered at the rail-outer
+                  level so the inner scroller's overflow clip can't eat it.
+                  Purely visual (pointer-events: none) so it never steals
+                  clicks from the next thumb. */}
+              {hoveredVersionIdx !== null && generation.versions[hoveredVersionIdx] && (() => {
+                const v = generation.versions[hoveredVersionIdx];
+                const isCommitted = hoveredVersionIdx === generation.currentVersionIndex;
+                const isSvgThumb = v.mimeType === 'image/svg+xml';
+                return (
+                  <div
+                    className="pointer-events-none absolute left-full ml-3 -translate-y-1/2 z-30 animate-in fade-in zoom-in-95 duration-150"
+                    style={{ top: popoverTop }}
+                    aria-hidden="true"
+                  >
+                    <div className="w-[280px] bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg shadow-2xl overflow-hidden">
+                      <div className="aspect-square bg-gray-50 dark:bg-[#0d1117] flex items-center justify-center">
+                        {isSvgThumb && v.svgCode ? (
+                          <div
+                            className="w-full h-full bg-white flex items-center justify-center p-3 [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
+                            dangerouslySetInnerHTML={{ __html: sanitizeSvg(v.svgCode) }}
+                          />
+                        ) : v.imageUrl ? (
+                          <img
+                            src={v.imageUrl}
+                            alt=""
+                            className="max-w-full max-h-full object-contain"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="px-3 py-2 flex items-center justify-between gap-2 border-t border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22]">
+                        <span className={`text-xs font-semibold ${isCommitted ? 'text-brand-teal' : 'text-slate-700 dark:text-slate-200'}`}>
+                          {v.label}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wider text-slate-400">
+                          {v.type === 'refinement' ? 'Refinement' : 'Original'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <div className={`relative group ${isSvg ? 'w-full max-w-5xl' : 'max-w-full max-h-full'}`}>
           <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-visible border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
 
-            {/* SVG Inline Rendering */}
+            {/* Main viewport renders only the committed version. The
+                thumbnail rail's hover popover provides the sneak-peek; a
+                click commits the mark and swaps the large preview. */}
             {isSvg && version.svgCode ? (
               <div
                 ref={svgContainerRef}
@@ -628,9 +774,9 @@ ${version.svgCode}
                 dangerouslySetInnerHTML={{ __html: sanitizeSvg(version.svgCode) }}
               />
             ) : (
-              <img 
-                src={renderImageSrc || version.imageUrl} 
-                alt="Generated Output" 
+              <img
+                src={renderImageSrc || version.imageUrl}
+                alt="Generated Output"
                 className="max-w-full max-h-[70vh] object-contain block rounded-lg"
                 onError={handleImageError}
               />
@@ -747,25 +893,14 @@ ${version.svgCode}
                 </ActionButton>
               )}
 
-              {/* SVG-specific actions */}
+              {/* SVG-specific copy actions (non-download) */}
               {isSvg && version.svgCode && (
-                <>
-                  <ActionButton onClick={handleCopySvgCode} title="Copy SVG code" tooltip="Copy SVG">
-                    <Code size={18} />
-                  </ActionButton>
-                  <ActionButton onClick={handleDownloadSvg} title="Download as SVG" tooltip="SVG">
-                    <FileCode size={18} />
-                  </ActionButton>
-                  <ActionButton onClick={handleDownloadHtml} title="Download as HTML page" tooltip="HTML">
-                    <Globe size={18} />
-                  </ActionButton>
-                  <ActionButton onClick={handleDownloadSvgAsPng} title="Download as PNG" tooltip="PNG">
-                    <FileImage size={18} />
-                  </ActionButton>
-                </>
+                <ActionButton onClick={handleCopySvgCode} title="Copy SVG code" tooltip="Copy SVG">
+                  <Code size={18} />
+                </ActionButton>
               )}
 
-              {/* Raster-specific actions */}
+              {/* Raster-specific copy actions (non-download) */}
               {!isSvg && (
                 <>
                   <ActionButton onClick={handleCopyImageToClipboard} title="Copy image to clipboard" tooltip="Copy image">
@@ -774,14 +909,22 @@ ${version.svgCode}
                   <ActionButton onClick={handleCopyImageUrl} title="Copy image URL" tooltip="Copy URL">
                     <Link size={18} />
                   </ActionButton>
-                  <ActionButton onClick={handleDownloadPng} title="Download as PNG" tooltip="PNG">
-                    <FileImage size={18} />
-                  </ActionButton>
-                  <ActionButton onClick={handleDownloadWebP} title="Download as WebP" tooltip="WebP">
-                    <Download size={20} />
-                  </ActionButton>
                 </>
               )}
+
+              {/* Unified Download menu (this + all) */}
+              <DownloadMenu
+                mode="this-and-all"
+                currentGeneration={generation}
+                allGenerations={history}
+                allLabel={history.length > 0 ? `Download all (${history.length})` : undefined}
+                triggerClassName="group/btn bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition inline-flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                triggerTitle="Download"
+                icon={<Download size={18} />}
+                onNotify={showNotice}
+                align="right"
+              />
+
 
               {onDelete && (
                 <ActionButton onClick={handleDeleteWithNotice} title="Delete" tooltip="Delete" variant="danger">
@@ -791,6 +934,7 @@ ${version.svgCode}
             </div>
           </div>
         </div>
+      </div>
       </div>
 
       {copyNotice && (

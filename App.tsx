@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { AuthModal } from './components/AuthModal';
@@ -26,7 +26,27 @@ import { generateOpenAIImage } from './services/openaiService';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
-import { historyService, createGeneration, addRefinementVersion, getCurrentVersion } from './services/historyService';
+import {
+  historyService,
+  createGeneration,
+  addRefinementVersion,
+  getCurrentVersion,
+  createVersionFromImage,
+} from './services/historyService';
+import { expandPromptPermutations } from './services/promptExpansionService';
+import {
+  runBatchGenerations,
+  batchCapFor,
+  BatchJob,
+  BatchProgress,
+  DEFAULT_BATCH_CONCURRENCY,
+} from './services/batchGenerationService';
+import {
+  estimateRemainingSeconds,
+  formatDuration,
+  getModelSecondsPerGen,
+  recordModelDuration,
+} from './services/timeEstimationService';
 import { detectLikelyCanvasPadding } from './services/recomposeQualityService';
 import { toMarkLabel } from './services/versionUtils';
 // import { seedCatalog } from './services/seeder'; // Removed
@@ -200,6 +220,17 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  // Wall-clock start of the active batch, used to compute elapsed/remaining in
+  // the progress banner. Null when no batch is running.
+  const [batchStartedAt, setBatchStartedAt] = useState<number | null>(null);
+  // Ticks once per second while a batch is running so the banner's elapsed
+  // time stays live without re-rendering every sibling on each update.
+  const [batchClockTick, setBatchClockTick] = useState(0);
+  // Abort controller for the active batch. Captured in a ref so the Stop
+  // button can reach it without re-rendering handleGenerate's closure.
+  const batchAbortRef = useRef<AbortController | null>(null);
+  const [isBatchStopping, setIsBatchStopping] = useState(false);
 
   // Analysis Modal State
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
@@ -449,6 +480,16 @@ const App: React.FC = () => {
     }
   }, [needsSetup, user?.id]);
 
+  // Keep the batch progress banner's elapsed/remaining display live by
+  // nudging a tick once per second while a batch is running.
+  useEffect(() => {
+    if (!batchProgress || !batchStartedAt) return;
+    const interval = window.setInterval(() => {
+      setBatchClockTick((t) => (t + 1) % 1_000_000);
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [batchProgress, batchStartedAt]);
+
   const executeDeleteHistory = async (generationId: string) => {
     if (user) {
       await historyService.deleteFromRemote(user.id, generationId);
@@ -605,9 +646,22 @@ const App: React.FC = () => {
     setIsAuthModalOpen(true);
   };
 
-  const handleGenerate = async () => {
+  const handleStopBatch = () => {
+    const controller = batchAbortRef.current;
+    if (!controller || controller.signal.aborted) return;
+    setIsBatchStopping(true);
+    controller.abort();
+  };
+
+  const handleGenerate = async (count: number = 1) => {
     setIsGenerating(true);
     setError(null);
+    setBatchProgress(null);
+    setBatchStartedAt(Date.now());
+    setBatchClockTick(0);
+    setIsBatchStopping(false);
+    const abortController = new AbortController();
+    batchAbortRef.current = abortController;
     try {
       if (!user) {
         openAuthModal('signup');
@@ -625,28 +679,136 @@ const App: React.FC = () => {
       if (safeAspectRatio !== config.aspectRatio) {
         setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
       }
-      const structuredPrompt = buildStructuredPrompt(safeConfig);
-      let result;
-      if (selectedModel === 'gemini-svg') {
-        result = await generateSvg(safeConfig, context, customKey, user?.preferences.systemPrompt);
-      } else if (selectedModel === 'openai') {
-        if (!customKey) throw new Error('OpenAI API key is required for image generation.');
-        result = await generateOpenAIImage(structuredPrompt, safeConfig, customKey, user?.preferences.systemPrompt);
-      } else {
-        result = await generateGraphic(safeConfig, context, customKey, user?.preferences.systemPrompt, selectedModel);
+
+      const { prompts } = expandPromptPermutations(safeConfig.prompt || '');
+      const safeCount = Math.max(1, Math.floor(count || 1));
+      const totalRuns = prompts.length * safeCount;
+      const cap = batchCapFor(user);
+      if (Number.isFinite(cap) && totalRuns > cap) {
+        throw new Error(
+          `Batch would run ${totalRuns} generation${totalRuns === 1 ? '' : 's'} (limit ${cap}). Reduce the variations count or brace options.`
+        );
       }
 
-      const generation = await createGeneration(result, { ...safeConfig }, selectedModel);
-      setCurrentGeneration(generation);
+      // Consolidate the entire batch — every brace variation AND every copy
+      // — onto a single Generation so the whole submit becomes one history
+      // tile with Mark I, Mark II, Mark III, … instead of sprawling across N
+      // tiles. Each version carries its own expanded prompt in
+      // `refinementPrompt` so the per-mark prompt is never lost.
+      let batchGeneration: Generation | null = null;
+      // Single persistence queue so "decide + save/update" is serialized.
+      // API calls still run in parallel; only the Firestore write path is
+      // sequenced to avoid create-vs-update races and mark-number collisions.
+      let persistQueue: Promise<Generation | null> = Promise.resolve(null);
 
-      await historyService.saveGeneration(user, generation);
-      const updatedHistory = await historyService.getHistory(user);
-      setHistory(updatedHistory);
+      const runOne = async (job: BatchJob): Promise<Generation> => {
+        const jobConfig: GenerationConfig = { ...safeConfig, prompt: job.prompt };
+        const structuredPrompt = buildStructuredPrompt(jobConfig);
 
+        const jobStart = performance.now();
+        let result;
+        if (selectedModel === 'gemini-svg') {
+          result = await generateSvg(jobConfig, context, customKey, user?.preferences.systemPrompt);
+        } else if (selectedModel === 'openai') {
+          if (!customKey) throw new Error('OpenAI API key is required for image generation.');
+          result = await generateOpenAIImage(structuredPrompt, jobConfig, customKey, user?.preferences.systemPrompt);
+        } else {
+          result = await generateGraphic(jobConfig, context, customKey, user?.preferences.systemPrompt, selectedModel);
+        }
+        // Feed the rolling per-model duration estimator so future batches
+        // get a more accurate time preview.
+        recordModelDuration(selectedModel, performance.now() - jobStart);
+
+        const prev = persistQueue;
+        const next: Promise<Generation> = prev.then(async () => {
+          if (!batchGeneration) {
+            // First successful job of the batch → seed Mark I. Use this job's
+            // expanded prompt as the tile-level config.prompt so the tile
+            // shows something concrete rather than the raw brace template.
+            const generation = await createGeneration(result, { ...jobConfig }, selectedModel);
+            batchGeneration = generation;
+            await historyService.saveGeneration(user, generation);
+            return generation;
+          }
+
+          // Append this job as the next Mark on the shared batch Generation.
+          const nextNumber = batchGeneration.versions.length + 1;
+          const newVersion = await createVersionFromImage(
+            result,
+            nextNumber,
+            'generation',
+            job.prompt,
+            batchGeneration.versions[batchGeneration.currentVersionIndex]?.id,
+            jobConfig.aspectRatio
+          );
+          const updated: Generation = {
+            ...batchGeneration,
+            versions: [...batchGeneration.versions, newVersion],
+            // Advance to the newest mark so the viewer keeps showing "latest".
+            currentVersionIndex: batchGeneration.versions.length,
+          };
+          batchGeneration = updated;
+          await historyService.updateGeneration(user, updated);
+          return updated;
+        });
+
+        persistQueue = next;
+        return next;
+      };
+
+      const batchResult = await runBatchGenerations({
+        prompts,
+        copiesPerPrompt: safeCount,
+        concurrency: DEFAULT_BATCH_CONCURRENCY,
+        signal: abortController.signal,
+        runOne,
+        onProgress: (progress) => {
+          setBatchProgress(progress);
+          if (progress.latest) {
+            const latest = progress.latest;
+            setCurrentGeneration(latest);
+            setHistory((prev) => {
+              // When a batch appends a new mark, the Generation's id stays the
+              // same — replace the existing tile so the mark count/thumbnail
+              // stay current rather than leaving a stale snapshot behind.
+              const idx = prev.findIndex((g) => g.id === latest.id);
+              if (idx >= 0) {
+                const nextHistory = [...prev];
+                nextHistory[idx] = latest;
+                return nextHistory;
+              }
+              return [latest, ...prev];
+            });
+          }
+        }
+      });
+
+      try {
+        const updatedHistory = await historyService.getHistory(user);
+        setHistory(updatedHistory);
+      } catch (historyErr) {
+        console.warn('History refresh after batch failed:', historyErr);
+      }
+
+      const wasAborted = abortController.signal.aborted;
+      if (wasAborted) {
+        setError(
+          `Stopped after ${batchResult.completed} of ${batchResult.total}. Kept the completed generation${batchResult.completed === 1 ? '' : 's'}.`
+        );
+      } else if (batchResult.failed > 0) {
+        const sample = batchResult.errors[0]?.message;
+        setError(
+          `Completed ${batchResult.completed} of ${batchResult.total}. ${batchResult.failed} failed${sample ? `: ${sample}` : '.'}`
+        );
+      }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
     } finally {
       setIsGenerating(false);
+      setBatchProgress(null);
+      setBatchStartedAt(null);
+      setIsBatchStopping(false);
+      batchAbortRef.current = null;
     }
   };
 
@@ -1464,8 +1626,92 @@ const App: React.FC = () => {
               </div>
             )}
 
+            {/* Batch progress banner */}
+            {batchProgress && batchProgress.total > 1 && (() => {
+              // `batchClockTick` is read so this block re-renders each second
+              // while a batch is active, keeping elapsed/remaining live.
+              void batchClockTick;
+              const doneCount = batchProgress.completed + batchProgress.failed;
+              const elapsedMs = batchStartedAt ? Date.now() - batchStartedAt : 0;
+              const elapsedLabel = formatDuration(elapsedMs / 1000);
+              const remainingSeconds = estimateRemainingSeconds({
+                total: batchProgress.total,
+                completed: batchProgress.completed,
+                failed: batchProgress.failed,
+                elapsedMs,
+                concurrency: DEFAULT_BATCH_CONCURRENCY,
+                secondsPerGen: getModelSecondsPerGen(selectedModel),
+              });
+              const remainingLabel = formatDuration(remainingSeconds);
+              const inFlight = batchProgress.inFlight;
+              return (
+                <div
+                  className="absolute top-24 left-1/2 -translate-x-1/2 z-40 w-full max-w-md px-4"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="bg-white/95 dark:bg-[#161b22]/95 border border-gray-200 dark:border-[#30363d] rounded-xl shadow-lg backdrop-blur-sm px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-4 h-4 border-2 border-brand-teal/30 border-t-brand-teal rounded-full animate-spin shrink-0" />
+                        <span className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                          {isBatchStopping ? 'Finishing ' : 'Generating '}
+                          {doneCount} of {batchProgress.total}
+                          {inFlight > 0 && (
+                            <span className="text-slate-500 dark:text-slate-400 font-normal">
+                              {' '}· {inFlight} running
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {batchProgress.failed > 0 && (
+                          <span className="text-xs font-semibold text-red-600 dark:text-red-400">
+                            {batchProgress.failed} failed
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleStopBatch}
+                          disabled={isBatchStopping}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-gray-200 dark:border-[#30363d] text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                          title={isBatchStopping
+                            ? 'Waiting for in-flight generations to finish…'
+                            : 'Stop queuing new generations. In-flight ones will finish and be saved.'}
+                          aria-label="Stop batch generation"
+                        >
+                          <span className="block w-2 h-2 rounded-sm bg-red-500" aria-hidden="true" />
+                          {isBatchStopping ? 'Stopping…' : 'Stop'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 h-1.5 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-brand-teal transition-all duration-200"
+                        style={{
+                          width: `${Math.round(
+                            (doneCount / Math.max(1, batchProgress.total)) * 100
+                          )}%`
+                        }}
+                      />
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                      <span>{elapsedLabel} elapsed</span>
+                      {isBatchStopping ? (
+                        <span>Wrapping up in-flight…</span>
+                      ) : remainingSeconds > 0 ? (
+                        <span>~{remainingLabel} remaining</span>
+                      ) : (
+                        <span>Finishing up…</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Display */}
-            <ImageDisplay 
+            <ImageDisplay
               generation={currentGeneration}
               onRefine={handleRefine}
               onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
@@ -1480,6 +1726,7 @@ const App: React.FC = () => {
               modelLabels={user?.preferences.modelLabels}
               resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
               options={context}
+              history={history}
             />
 
             {/* History Gallery */}

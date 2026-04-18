@@ -25,6 +25,10 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **🧬 Versioned Iteration:** Mark-based generation/refinement history with restore, per-refinement deletion, and per-version aspect-ratio tracking so follow-up edits keep the correct size.
 *   **📝 Better Prompt Editing:** Compact refine textbox with optional full-screen prompt editor and keyboard submit shortcut (`Cmd/Ctrl + Enter`).
 *   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore). Overlays show model, prompt, tags, and timestamps.
+*   **⚡ Batch generation:** Numeric `QTY` plus brace expansion in prompts, pre-send size and duration estimates, a live progress banner with stop, and one history tile with Mark I / II / III grouping (with per-mark expanded prompts and thumbnails).
+*   **⬇️ Unified downloads:** Single download menu on the main preview and in history for PNG, WebP, SVG, or HTML; download-all zips every generation mark; export selected tiles as a ZIP from Recent Generations.
+*   **🖼️ Thumbnail rail:** When a tile has multiple marks, browse and preview versions from a left rail without leaving the main viewport.
+*   **📄 Site footer:** Copyright plus quick links to the changelog and GitHub releases.
 
 ## Tech Stack
 
@@ -121,6 +125,6 @@ Ensure you add all the Environment Variables listed above in your Render service
 
 MIT
 
-## Release Notes
+## Changelog
 
-See `RELEASE_NOTES.md` for detailed changes per version.
+See [`CHANGELOG.md`](./CHANGELOG.md) for a full, versioned history of changes.
