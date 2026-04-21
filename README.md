@@ -30,6 +30,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **🖼️ Thumbnail rail:** When a tile has multiple marks, browse and preview versions from a left rail without leaving the main viewport.
 *   **📄 Site footer:** Copyright plus quick links to the changelog and GitHub releases.
 *   **🛡️ Admin panel:** Claims-based admin role (Firebase Auth custom claims, not a hardcoded username) with a paginated user table — clear API keys, wipe system prompts, suspend / unsuspend accounts, promote or demote admins, and conservatively delete user data (Firestore + Storage + Auth). Suspended users are hard-blocked with a clear notice.
+*   **📊 Admin usage stats:** Live dashboard with total images generated, refinements, active users, signups/day and images/day for the last 30 days, breakdowns by model / graphic type / visual style / aspect ratio, and a top-users leaderboard — aggregated directly from Firestore with one `collectionGroup('history')` query.
 
 ## Tech Stack
 

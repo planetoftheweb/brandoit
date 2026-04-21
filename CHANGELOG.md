@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-21
+### Added
+- **Admin usage-stats dashboard.** New `Stats` tab on the Admin page with live metrics aggregated directly from Firestore:
+  - Top-line tiles: total images generated (generation-type marks), total refinements, total users, active-last-7d, active-last-30d, admin signals, suspended users, users with an API key, and average images per user.
+  - Time-series charts for "images generated per day" (stacked images + refinements with peak-day callout) and "new signups per day" over the last 30 days.
+  - Breakdown bar charts by **model**, **graphic type**, **visual style (top 10)**, and **aspect ratio**, with per-row count and percent-of-total.
+  - Top 10 users leaderboard by images generated (with refinement and tile counts).
+  - One-click refresh with "computed Xs ago" relative-time labels.
+- **`services/statsService.ts`**: does a single `collectionGroup('history')` scan + one `users/` read + one catalog read, then aggregates in memory. Correctly handles every timestamp shape the codebase has ever used (Firestore `Timestamp`, `serverTimestamp()`, ms epoch, ISO string) and counts batch marks correctly (a tile with 3 variations = 3 images).
+- **Admin page now has a `Users | Stats` tab switcher**; the existing Users panel and all row actions are unchanged.
+- **Hand-rolled SVG/CSS chart primitives** (`StatTile`, `HorizontalBarList`, `DailyBarChart`) — no chart library dependency, keeps the bundle small (+5 KB gzipped).
+- **Firebase Analytics (GA4)** now actually loads in production. The `measurementId` (`G-FH2TCLP7BP`) has been in the Firebase config since initial setup, but `getAnalytics(app)` was never called — so `gtag.js` never loaded and no hits ever reached GA4. The `services/firebase.ts` module now calls `getAnalytics(app)` behind `isSupported()`, skips emulator dev sessions, and no-ops when `measurementId` is absent.
+
+### Changed
+- `firestore.rules`: added a collection-group admin-read rule (`match /{path=**}/history/{docId} { allow read: if isAdmin(); }`) so the Stats dashboard can run `collectionGroup('history')` queries. The nested per-user history rule is unchanged; this new block is the one that applies to group queries.
+- `setAdminRole` Cloud Function now surfaces the underlying Firebase Admin SDK error code and message instead of a bare `"internal"` error, so failures are actually actionable.
+
+### Fixed
+- Google Analytics (`G-FH2TCLP7BP`) was showing "Data collection isn't active" because the GA4 SDK was never initialized — see "Changed" above. Page-view and default events now flow to GA4 on every production page load (ad-blocker behaviour notwithstanding).
+
 ## [0.2.0] - 2026-04-21
 ### Added
 - **Admin panel** (`components/AdminPage.tsx`): paginated user table with client-side search, row-level action menu (clear API keys, wipe system prompt, suspend/unsuspend, promote/demote admin, delete account), inline destructive-action confirmations, and status/error banners matching the existing Settings page styling.
