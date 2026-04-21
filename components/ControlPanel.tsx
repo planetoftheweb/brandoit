@@ -1149,7 +1149,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     'gemini-svg': 'Gemini SVG'
   };
   const modelLabel =
-    user?.preferences.modelLabels?.[selectedModel] ||
     modelLabelMap[selectedModel] ||
     SUPPORTED_MODELS.find(m => m.id === selectedModel)?.name ||
     'Model';
@@ -1388,7 +1387,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     >
                       <Sparkles size={14} className="text-brand-teal" />
                       <div className="flex flex-col">
-                        <span className="font-medium">{user?.preferences.modelLabels?.[model.id] || modelLabelMap[model.id] || model.name}</span>
+                        <span className="font-medium">{modelLabelMap[model.id] || model.name}</span>
                         <span className="text-xs text-slate-500 dark:text-slate-400">{model.description}</span>
                       </div>
                     </button>

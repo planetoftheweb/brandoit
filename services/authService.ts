@@ -48,15 +48,6 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
   }
   if (prefs.selectedModel) clean.selectedModel = prefs.selectedModel;
   if (prefs.systemPrompt) clean.systemPrompt = prefs.systemPrompt;
-  if (prefs.modelLabels) {
-    const trimmedLabels: { [modelId: string]: string } = {};
-    for (const [modelId, value] of Object.entries(prefs.modelLabels)) {
-      if (typeof value === 'string' && value.trim() !== '') {
-        trimmedLabels[modelId] = value;
-      }
-    }
-    clean.modelLabels = trimmedLabels;
-  }
 
   if (prefs.settings) {
     const s = prefs.settings;
@@ -89,7 +80,6 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     apiKeys: savedPrefs.apiKeys || {},
     selectedModel: savedPrefs.selectedModel || 'gemini',
     systemPrompt: savedPrefs.systemPrompt,
-    modelLabels: savedPrefs.modelLabels || {},
     settings: {
       contributeByDefault: savedPrefs.settings?.contributeByDefault ?? defaultPreferences.settings?.contributeByDefault ?? false,
       defaultGraphicTypeId: savedPrefs.settings?.defaultGraphicTypeId,

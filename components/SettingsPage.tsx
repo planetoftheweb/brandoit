@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { UserSettings, AspectRatioOption, GraphicType, User, Team, VisualStyle, BrandColor } from '../types';
-import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Loader2, Users, Plus, Key, CheckCircle, Layout, PenTool, Palette, Maximize, Sparkles, ChevronDown, Tag, X } from 'lucide-react';
+import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Loader2, Users, Plus, Key, CheckCircle, Layout, PenTool, Palette, Maximize, Sparkles, ChevronDown, X } from 'lucide-react';
 import { uploadProfileImage } from '../services/imageService';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
@@ -17,8 +17,7 @@ interface SettingsPageProps {
     geminiApiKey?: string,
     systemPrompt?: string,
     selectedModel?: string,
-    apiKeys?: { [modelId: string]: string },
-    modelLabels?: { [modelId: string]: string }
+    apiKeys?: { [modelId: string]: string }
   ) => void;
   graphicTypes: GraphicType[];
   visualStyles: VisualStyle[];
@@ -51,9 +50,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   });
   const [selectedModel, setSelectedModel] = useState<string>(user.preferences.selectedModel || 'gemini');
   const [systemPrompt, setSystemPrompt] = useState<string>(user.preferences.systemPrompt || '');
-  const [modelLabels, setModelLabels] = useState<{ [key: string]: string }>(() => ({
-    ...(user.preferences.modelLabels || {})
-  }));
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -61,18 +57,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Per-model key overrides and toolbar-label sections are hidden by default to
-  // reduce clutter: every Gemini variant uses the shared Google Gemini key, and
-  // every OpenAI-family model uses the shared OpenAI key. We auto-expand the
-  // overrides section if the user already has any per-model override saved,
-  // so existing data is never hidden without explanation.
+  // Per-model key overrides are hidden by default to reduce clutter: every
+  // Gemini variant uses the shared Google Gemini key, and every OpenAI-family
+  // model uses the shared OpenAI key. Auto-expand the overrides section if
+  // the user already has any per-model override saved, so existing data is
+  // never hidden without explanation.
   const hasPerModelOverride = Object.entries(apiKeys).some(
     ([key, value]) => key !== 'gemini' && key !== 'openai' && !!value
   );
   const [showOverrides, setShowOverrides] = useState<boolean>(hasPerModelOverride);
-  const [showLabels, setShowLabels] = useState<boolean>(
-    Object.values(modelLabels).some(Boolean)
-  );
 
   // Teams State
   const [teams, setTeams] = useState<Team[]>([]);
@@ -92,14 +85,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setApiKeys(keys);
     setSelectedModel(user.preferences.selectedModel || 'gemini');
     setSystemPrompt(user.preferences.systemPrompt || '');
-    const nextLabels = user.preferences.modelLabels || {};
-    setModelLabels(nextLabels);
     setShowOverrides(
       Object.entries(keys).some(
         ([modelId, value]) => modelId !== 'gemini' && modelId !== 'openai' && !!value
       )
     );
-    setShowLabels(Object.values(nextLabels).some(Boolean));
     loadTeams();
   }, [user]);
 
@@ -227,8 +217,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         geminiApiKey,
         systemPrompt,
         selectedModel,
-        apiKeys,
-        modelLabels
+        apiKeys
       );
 
       setSaveSuccess(true);
@@ -255,7 +244,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         selectedModel,
         geminiApiKey: next['gemini'] ?? '',
         systemPrompt,
-        modelLabels,
         settings: localSettings
       });
       setSaveSuccess(true);
@@ -275,7 +263,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       selectedModel,
       geminiApiKey: apiKeys['gemini'] ?? '',
       systemPrompt,
-      modelLabels,
       settings: localSettings
     });
   };
@@ -287,20 +274,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
       console.error("Failed to save API key:", err);
-    }
-  };
-
-  const handleModelLabelChange = (modelId: string, value: string) => {
-    setModelLabels(prev => ({ ...prev, [modelId]: value }));
-  };
-
-  const handleModelLabelBlur = async () => {
-    try {
-      await persistPreferences();
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2000);
-    } catch (err) {
-      console.error("Failed to save model labels:", err);
     }
   };
 
@@ -474,49 +447,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               )}
 
-              {/* Toolbar labels — cosmetic only; keeps the old customization
-                  path but is closed by default to reduce clutter. */}
-              <div className="pt-3 border-t border-gray-200 dark:border-[#30363d]">
-                <button
-                  type="button"
-                  onClick={() => setShowLabels((v) => !v)}
-                  className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
-                  aria-expanded={showLabels}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <Tag size={12} /> Toolbar labels (optional)
-                  </span>
-                  <ChevronDown
-                    size={14}
-                    className={`transition-transform ${showLabels ? 'rotate-180' : ''}`}
-                  />
-                </button>
-
-                {showLabels && (
-                  <div className="mt-3 space-y-2">
-                    <p className="text-xs text-slate-500">
-                      Override the display name shown in the toolbar model dropdown.
-                    </p>
-                    {SUPPORTED_MODELS.map((model) => (
-                      <div key={model.id} className="space-y-1">
-                        <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                          {model.name}
-                        </label>
-                        <input
-                          type="text"
-                          value={modelLabels[model.id] || ''}
-                          onChange={(e) => handleModelLabelChange(model.id, e.target.value)}
-                          onBlur={handleModelLabelBlur}
-                          className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
-                          placeholder={model.name}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-[#30363d]">
+              <div className="space-y-2 pt-3 border-t border-gray-200 dark:border-[#30363d]">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
                   System Prompt (applied to generations)
                 </label>

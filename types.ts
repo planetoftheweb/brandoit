@@ -105,9 +105,6 @@ export interface UserPreferences {
   };
   selectedModel?: string;
   systemPrompt?: string;
-  modelLabels?: {
-    [modelId: string]: string;
-  };
   settings?: UserSettings; 
 }
 

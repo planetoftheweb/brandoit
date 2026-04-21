@@ -23,7 +23,6 @@ interface ImageDisplayProps {
   onDeleteRefinementVersion: (versionId: string) => Promise<void>;
   selectedModel: string;
   onModelChange: (modelId: string) => void;
-  modelLabels?: Record<string, string>;
   resizeAspectRatios: AspectRatioOption[];
   options: {
     brandColors: BrandColor[];
@@ -46,7 +45,6 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onDeleteRefinementVersion,
   selectedModel,
   onModelChange,
-  modelLabels,
   resizeAspectRatios,
   options,
   history = []
@@ -518,7 +516,7 @@ ${version.svgCode}
   );
   const refineModelSelectOptions: RichSelectOption[] = refineModelOptions.map((model) => ({
     value: model.id,
-    label: modelLabels?.[model.id] || modelLabelMap[model.id] || model.name,
+    label: modelLabelMap[model.id] || model.name,
     description: model.description
   }));
   const resizeTargetOptions = resizeAspectRatios.reduce<RichSelectOption[]>((acc, ratio) => {

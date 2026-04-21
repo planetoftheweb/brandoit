@@ -381,14 +381,13 @@ const App: React.FC = () => {
         apiKeys: user.preferences.apiKeys,
         selectedModel: user.preferences.selectedModel,
         systemPrompt: user.preferences.systemPrompt,
-        modelLabels: user.preferences.modelLabels,
         settings: user.preferences.settings
       }).catch(err => {
         // Silently fail if it's just a sync issue (not a critical error)
         console.warn("Failed to sync preferences:", err);
       });
     }
-  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt, user?.preferences.modelLabels]); // Only trigger on actual preference changes, not user object changes
+  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt]); // Only trigger on actual preference changes, not user object changes
 
   const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
@@ -1334,17 +1333,15 @@ const App: React.FC = () => {
     geminiApiKey?: string,
     systemPrompt?: string,
     preferredModel?: string,
-    apiKeys?: { [modelId: string]: string },
-    modelLabels?: { [modelId: string]: string }
+    apiKeys?: { [modelId: string]: string }
   ) => {
     if (!user) return;
     const nextSelectedModel = preferredModel || user.preferences.selectedModel || 'gemini';
 
-    // Use the apiKeys / modelLabels from SettingsPage as-is (they reflect the user's
-    // latest edits, including deletions). Falling back to `user.preferences.*` here
-    // would re-introduce the bug where cleared keys came back after Save.
+    // Use the apiKeys from SettingsPage as-is (it reflects the user's latest
+    // edits, including deletions). Falling back to `user.preferences.apiKeys`
+    // here would re-introduce the bug where cleared keys came back after Save.
     const nextApiKeys = apiKeys !== undefined ? apiKeys : (user.preferences.apiKeys || {});
-    const nextModelLabels = modelLabels !== undefined ? modelLabels : (user.preferences.modelLabels || {});
 
     // Update local state for immediate feedback
     const updatedUser = {
@@ -1360,8 +1357,7 @@ const App: React.FC = () => {
             geminiApiKey: geminiApiKey !== undefined ? geminiApiKey : user.preferences.geminiApiKey,
             systemPrompt: systemPrompt !== undefined ? systemPrompt : user.preferences.systemPrompt,
             selectedModel: nextSelectedModel,
-            apiKeys: nextApiKeys,
-            modelLabels: nextModelLabels
+            apiKeys: nextApiKeys
         }
     };
     setUser(updatedUser);
@@ -1757,7 +1753,6 @@ const App: React.FC = () => {
               onDeleteRefinementVersion={handleDeleteRefinementVersion}
               selectedModel={selectedModel}
               onModelChange={handleModelChange}
-              modelLabels={user?.preferences.modelLabels}
               resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
               options={context}
               history={history}
