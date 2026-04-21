@@ -34,9 +34,29 @@ const defaultPreferences: UserPreferences = {
 const sanitizePreferences = (prefs: UserPreferences): any => {
   const clean: any = {};
   // Only save settings and API keys. Arrays are managed via resourceService.
-  if (prefs.geminiApiKey) clean.geminiApiKey = prefs.geminiApiKey; // Legacy support
-  if (prefs.apiKeys) clean.apiKeys = prefs.apiKeys;
+  // Legacy support: omit when empty so clearing the field actually persists.
+  if (prefs.geminiApiKey) clean.geminiApiKey = prefs.geminiApiKey;
+  if (prefs.apiKeys) {
+    // Strip empty-string entries so deleting a key in the UI actually clears it in Firestore.
+    const trimmedKeys: { [modelId: string]: string } = {};
+    for (const [modelId, value] of Object.entries(prefs.apiKeys)) {
+      if (typeof value === 'string' && value.trim() !== '') {
+        trimmedKeys[modelId] = value;
+      }
+    }
+    clean.apiKeys = trimmedKeys;
+  }
   if (prefs.selectedModel) clean.selectedModel = prefs.selectedModel;
+  if (prefs.systemPrompt) clean.systemPrompt = prefs.systemPrompt;
+  if (prefs.modelLabels) {
+    const trimmedLabels: { [modelId: string]: string } = {};
+    for (const [modelId, value] of Object.entries(prefs.modelLabels)) {
+      if (typeof value === 'string' && value.trim() !== '') {
+        trimmedLabels[modelId] = value;
+      }
+    }
+    clean.modelLabels = trimmedLabels;
+  }
 
   if (prefs.settings) {
     const s = prefs.settings;
@@ -68,6 +88,8 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     geminiApiKey: savedPrefs.geminiApiKey, // Legacy support
     apiKeys: savedPrefs.apiKeys || {},
     selectedModel: savedPrefs.selectedModel || 'gemini',
+    systemPrompt: savedPrefs.systemPrompt,
+    modelLabels: savedPrefs.modelLabels || {},
     settings: {
       contributeByDefault: savedPrefs.settings?.contributeByDefault ?? defaultPreferences.settings?.contributeByDefault ?? false,
       defaultGraphicTypeId: savedPrefs.settings?.defaultGraphicTypeId,

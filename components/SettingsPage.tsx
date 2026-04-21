@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { UserSettings, AspectRatioOption, GraphicType, User, Team, VisualStyle, BrandColor } from '../types';
-import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Loader2, Users, Plus, Key, CheckCircle, Layout, PenTool, Palette, Maximize, Sparkles } from 'lucide-react';
+import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Loader2, Users, Plus, Key, CheckCircle, Layout, PenTool, Palette, Maximize, Sparkles, ChevronDown, Tag, X } from 'lucide-react';
 import { uploadProfileImage } from '../services/imageService';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
@@ -16,7 +16,9 @@ interface SettingsPageProps {
     profileData?: { name: string; username: string; photoURL?: string },
     geminiApiKey?: string,
     systemPrompt?: string,
-    selectedModel?: string
+    selectedModel?: string,
+    apiKeys?: { [modelId: string]: string },
+    modelLabels?: { [modelId: string]: string }
   ) => void;
   graphicTypes: GraphicType[];
   visualStyles: VisualStyle[];
@@ -59,6 +61,19 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Per-model key overrides and toolbar-label sections are hidden by default to
+  // reduce clutter: every Gemini variant uses the shared Google Gemini key, and
+  // every OpenAI-family model uses the shared OpenAI key. We auto-expand the
+  // overrides section if the user already has any per-model override saved,
+  // so existing data is never hidden without explanation.
+  const hasPerModelOverride = Object.entries(apiKeys).some(
+    ([key, value]) => key !== 'gemini' && key !== 'openai' && !!value
+  );
+  const [showOverrides, setShowOverrides] = useState<boolean>(hasPerModelOverride);
+  const [showLabels, setShowLabels] = useState<boolean>(
+    Object.values(modelLabels).some(Boolean)
+  );
+
   // Teams State
   const [teams, setTeams] = useState<Team[]>([]);
   const [newTeamName, setNewTeamName] = useState('');
@@ -77,7 +92,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setApiKeys(keys);
     setSelectedModel(user.preferences.selectedModel || 'gemini');
     setSystemPrompt(user.preferences.systemPrompt || '');
-    setModelLabels(user.preferences.modelLabels || {});
+    const nextLabels = user.preferences.modelLabels || {};
+    setModelLabels(nextLabels);
+    setShowOverrides(
+      Object.entries(keys).some(
+        ([modelId, value]) => modelId !== 'gemini' && modelId !== 'openai' && !!value
+      )
+    );
+    setShowLabels(Object.values(nextLabels).some(Boolean));
     loadTeams();
   }, [user]);
 
@@ -154,6 +176,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     []
   );
 
+  // All Gemini-family models share one Google Gemini API key via @google/genai.
+  // Only OpenAI-family models need their own key. Per-model overrides remain
+  // possible (see the Advanced section below) but are optional.
+  const API_PROVIDERS: Array<{
+    keyId: 'gemini' | 'openai';
+    label: string;
+    description: string;
+    placeholder: string;
+    helpText: string;
+  }> = [
+    {
+      keyId: 'gemini',
+      label: 'Google Gemini API Key',
+      description: 'Used by Nano Banana Pro, Nano Banana 2, and Gemini SVG.',
+      placeholder: 'AIza...',
+      helpText: 'Create one at aistudio.google.com/apikey.'
+    },
+    {
+      keyId: 'openai',
+      label: 'OpenAI API Key',
+      description: 'Used by GPT Image.',
+      placeholder: 'sk-...',
+      helpText: 'Create one at platform.openai.com/api-keys.'
+    }
+  ];
+
+  const OVERRIDE_MODELS = SUPPORTED_MODELS.filter(
+    (model) => model.id !== 'gemini' && model.id !== 'openai'
+  );
+
   const loadTeams = async () => {
     const userTeams = await teamService.getUserTeams(user.id);
     setTeams(userTeams);
@@ -162,22 +214,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const handleSave = async () => {
     setIsSaving(true);
     setSaveSuccess(false);
-    
+
     try {
-      // Save API keys and selected model to Firestore
-      await authService.updateUserPreferences(user.id, {
-        ...user.preferences,
-        apiKeys: apiKeys,
-        selectedModel: selectedModel,
-        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
+      // Delegate persistence to the parent (App.handleSaveSettings) so there is a single
+      // source-of-truth write. Previously this component wrote directly to Firestore and
+      // then the parent wrote again using stale state, which caused API key changes to be
+      // reverted (see GitHub issue #1).
+      const geminiApiKey = apiKeys['gemini'] ?? '';
+      onSave(
+        localSettings,
+        { name, username, photoURL },
+        geminiApiKey,
         systemPrompt,
-        modelLabels,
-        settings: localSettings
-      });
-      
-      const geminiApiKey = apiKeys['gemini'] || user.preferences.geminiApiKey;
-      onSave(localSettings, { name, username, photoURL }, geminiApiKey, systemPrompt, selectedModel);
-      
+        selectedModel,
+        apiKeys,
+        modelLabels
+      );
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
@@ -191,17 +244,45 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setApiKeys(prev => ({ ...prev, [modelId]: value }));
   };
 
-  const handleApiKeyBlur = async (modelId: string) => {
+  const handleClearOverride = async (modelId: string) => {
+    const next = { ...apiKeys };
+    delete next[modelId];
+    setApiKeys(next);
     try {
       await authService.updateUserPreferences(user.id, {
         ...user.preferences,
-        apiKeys: apiKeys,
-        selectedModel: selectedModel,
-        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
+        apiKeys: next,
+        selectedModel,
+        geminiApiKey: next['gemini'] ?? '',
         systemPrompt,
         modelLabels,
         settings: localSettings
       });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to clear API key override:", err);
+    }
+  };
+
+  const persistPreferences = async () => {
+    // Use local state as the source of truth; pass apiKeys['gemini'] directly (no `||`
+    // fallback) so clearing the Nano Banana key is actually persisted. sanitizePreferences
+    // in authService strips empty-string entries.
+    await authService.updateUserPreferences(user.id, {
+      ...user.preferences,
+      apiKeys,
+      selectedModel,
+      geminiApiKey: apiKeys['gemini'] ?? '',
+      systemPrompt,
+      modelLabels,
+      settings: localSettings
+    });
+  };
+
+  const handleApiKeyBlur = async (_modelId: string) => {
+    try {
+      await persistPreferences();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
@@ -215,15 +296,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const handleModelLabelBlur = async () => {
     try {
-      await authService.updateUserPreferences(user.id, {
-        ...user.preferences,
-        apiKeys,
-        selectedModel,
-        geminiApiKey: apiKeys['gemini'] || user.preferences.geminiApiKey,
-        systemPrompt,
-        modelLabels,
-        settings: localSettings
-      });
+      await persistPreferences();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
@@ -308,58 +381,139 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 <Key size={14} /> API Configuration
               </h4>
               
-              {/* API Keys for each model */}
+              {/* Provider API keys. Every Gemini variant shares the Google
+                  Gemini key, so we present two provider-level inputs instead
+                  of one per model. Per-model overrides live in the Advanced
+                  section below and are optional. */}
               <div className="space-y-4">
-                {SUPPORTED_MODELS.map((model, idx) => (
+                {API_PROVIDERS.map((provider) => (
                   <div
-                    key={model.id}
-                    className={`rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50/60 dark:bg-[#0f141c] p-3 space-y-2 ${idx > 0 ? 'mt-2' : ''}`}
+                    key={provider.keyId}
+                    className="rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50/60 dark:bg-[#0f141c] p-3 space-y-2"
                   >
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                      {model.name} API Key
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {provider.label}
                     </label>
+                    <p className="text-xs text-slate-500">{provider.description}</p>
                     <input
                       type="password"
-                      value={apiKeys[model.id] || ''}
-                      onChange={(e) => handleApiKeyChange(model.id, e.target.value)}
-                      onBlur={() => handleApiKeyBlur(model.id)}
+                      value={apiKeys[provider.keyId] || ''}
+                      onChange={(e) => handleApiKeyChange(provider.keyId, e.target.value)}
+                      onBlur={() => handleApiKeyBlur(provider.keyId)}
                       className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
-                      placeholder={`Enter your ${model.name} API Key...`}
+                      placeholder={provider.placeholder}
+                      autoComplete="off"
                     />
-                    {model.description && (
-                      <p className="text-xs text-slate-500 mt-1">
-                        {model.description}
-                      </p>
-                    )}
-                    <div className="pt-2 border-t border-gray-200 dark:border-[#30363d]">
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Toolbar Label
-                      </label>
-                      <input
-                        type="text"
-                        value={modelLabels[model.id] || ''}
-                        onChange={(e) => handleModelLabelChange(model.id, e.target.value)}
-                        onBlur={handleModelLabelBlur}
-                        className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
-                        placeholder={
-                          model.id === 'openai'
-                            ? 'GPT Image'
-                            : model.id === 'gemini'
-                              ? 'Nano Banana Pro'
-                              : model.id === 'gemini-3.1-flash-image-preview'
-                                ? 'Nano Banana 2'
-                                : model.name
-                        }
-                      />
-                      <p className="text-[11px] text-slate-500 mt-1">
-                        Controls the text shown in the toolbar model dropdown.
-                      </p>
-                    </div>
+                    <p className="text-[11px] text-slate-500">{provider.helpText}</p>
                   </div>
                 ))}
-                <p className="text-xs text-slate-500 mt-2">
-                  API keys are stored securely and only used for your requests. You can configure multiple models and switch between them.
+                <p className="text-xs text-slate-500">
+                  Keys are stored on your account and only used for your own requests.
                 </p>
+              </div>
+
+              {/* Advanced: per-model key overrides. Only needed if you want a
+                  specific Gemini variant to use a different key than the
+                  provider key above. */}
+              {OVERRIDE_MODELS.length > 0 && (
+                <div className="pt-3 border-t border-gray-200 dark:border-[#30363d]">
+                  <button
+                    type="button"
+                    onClick={() => setShowOverrides((v) => !v)}
+                    className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+                    aria-expanded={showOverrides}
+                  >
+                    <span>Advanced: per-model overrides (optional)</span>
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform ${showOverrides ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+
+                  {showOverrides && (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-xs text-slate-500">
+                        Leave blank to use the provider key above. Set a value only if this model should use a different key.
+                      </p>
+                      {OVERRIDE_MODELS.map((model) => {
+                        const override = apiKeys[model.id] || '';
+                        return (
+                          <div
+                            key={model.id}
+                            className="rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50/60 dark:bg-[#0f141c] p-3 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                {model.name} override
+                              </label>
+                              {override && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleClearOverride(model.id)}
+                                  className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                                  title={`Remove override for ${model.name}`}
+                                >
+                                  <X size={12} /> Clear
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="password"
+                              value={override}
+                              onChange={(e) => handleApiKeyChange(model.id, e.target.value)}
+                              onBlur={() => handleApiKeyBlur(model.id)}
+                              className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                              placeholder={`Use Google Gemini key (default)`}
+                              autoComplete="off"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Toolbar labels — cosmetic only; keeps the old customization
+                  path but is closed by default to reduce clutter. */}
+              <div className="pt-3 border-t border-gray-200 dark:border-[#30363d]">
+                <button
+                  type="button"
+                  onClick={() => setShowLabels((v) => !v)}
+                  className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+                  aria-expanded={showLabels}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Tag size={12} /> Toolbar labels (optional)
+                  </span>
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform ${showLabels ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {showLabels && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-slate-500">
+                      Override the display name shown in the toolbar model dropdown.
+                    </p>
+                    {SUPPORTED_MODELS.map((model) => (
+                      <div key={model.id} className="space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          {model.name}
+                        </label>
+                        <input
+                          type="text"
+                          value={modelLabels[model.id] || ''}
+                          onChange={(e) => handleModelLabelChange(model.id, e.target.value)}
+                          onBlur={handleModelLabelBlur}
+                          className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 text-sm focus:ring-1 focus:ring-brand-teal focus:outline-none text-slate-900 dark:text-white"
+                          placeholder={model.name}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-[#30363d]">

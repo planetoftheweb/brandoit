@@ -381,13 +381,14 @@ const App: React.FC = () => {
         apiKeys: user.preferences.apiKeys,
         selectedModel: user.preferences.selectedModel,
         systemPrompt: user.preferences.systemPrompt,
+        modelLabels: user.preferences.modelLabels,
         settings: user.preferences.settings
       }).catch(err => {
         // Silently fail if it's just a sync issue (not a critical error)
         console.warn("Failed to sync preferences:", err);
       });
     }
-  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt]); // Only trigger on actual preference changes, not user object changes
+  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt, user?.preferences.modelLabels]); // Only trigger on actual preference changes, not user object changes
 
   const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
@@ -479,6 +480,28 @@ const App: React.FC = () => {
       setIsSetupModalOpen(false);
     }
   }, [needsSetup, user?.id]);
+
+  // If the currently selected model has no usable API key but the user has
+  // configured a key for some other supported model, auto-switch to that
+  // model so the user can start generating immediately instead of being
+  // stuck behind the "One setup step left" banner.
+  useEffect(() => {
+    if (!user) return;
+    if (activeApiKey) return;
+    const fallbackModel = SUPPORTED_MODELS.find(
+      (model) => model.id !== selectedModel && !!getApiKeyForModel(model.id)
+    );
+    if (!fallbackModel) return;
+    const updatedUser = {
+      ...user,
+      preferences: {
+        ...user.preferences,
+        selectedModel: fallbackModel.id
+      }
+    };
+    setUser(updatedUser);
+    authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
+  }, [user?.id, user?.preferences.apiKeys, user?.preferences.geminiApiKey, selectedModel, activeApiKey]);
 
   // Keep the batch progress banner's elapsed/remaining display live by
   // nudging a tick once per second while a batch is running.
@@ -1310,11 +1333,19 @@ const App: React.FC = () => {
     profileData?: { name: string; username: string; photoURL?: string },
     geminiApiKey?: string,
     systemPrompt?: string,
-    preferredModel?: string
+    preferredModel?: string,
+    apiKeys?: { [modelId: string]: string },
+    modelLabels?: { [modelId: string]: string }
   ) => {
     if (!user) return;
     const nextSelectedModel = preferredModel || user.preferences.selectedModel || 'gemini';
-    
+
+    // Use the apiKeys / modelLabels from SettingsPage as-is (they reflect the user's
+    // latest edits, including deletions). Falling back to `user.preferences.*` here
+    // would re-introduce the bug where cleared keys came back after Save.
+    const nextApiKeys = apiKeys !== undefined ? apiKeys : (user.preferences.apiKeys || {});
+    const nextModelLabels = modelLabels !== undefined ? modelLabels : (user.preferences.modelLabels || {});
+
     // Update local state for immediate feedback
     const updatedUser = {
         ...user,
@@ -1324,10 +1355,13 @@ const App: React.FC = () => {
         preferences: {
             ...user.preferences,
             settings: newSettings,
-            // Keep legacy geminiApiKey for backward compatibility if provided
+            // Keep legacy geminiApiKey for backward compatibility if provided.
+            // Using `!== undefined` preserves the empty string so the key can be cleared.
             geminiApiKey: geminiApiKey !== undefined ? geminiApiKey : user.preferences.geminiApiKey,
             systemPrompt: systemPrompt !== undefined ? systemPrompt : user.preferences.systemPrompt,
-            selectedModel: nextSelectedModel
+            selectedModel: nextSelectedModel,
+            apiKeys: nextApiKeys,
+            modelLabels: nextModelLabels
         }
     };
     setUser(updatedUser);
