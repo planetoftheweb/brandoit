@@ -654,8 +654,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                             </div>
                             
                             <div className="flex items-center gap-1">
-                                {/* Admin "Make Default" Toggle -- hidden for size (model-locked) */}
-                                {type !== 'size' && user?.username === 'planetoftheweb' && (
+                                {/* Admin "Make Default" Toggle -- hidden for size (model-locked).
+                                    Prefers the Firebase Auth admin claim; keeps `planetoftheweb`
+                                    as a bootstrap fallback. */}
+                                {type !== 'size' && !!user && (user.isAdmin || user.username === 'planetoftheweb') && (
                                     <button
                                         onClick={(e) => handleToggleDefault(e, type, item)}
                                         className={`p-1.5 rounded-md transition-colors ${
@@ -1180,8 +1182,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       )}
       
       <div className={`flex items-center gap-1`}>
-        {/* Sizes are model-locked -- no edit/delete allowed */}
-        {type !== 'size' && user && ((!item.isSystem && item.authorId === user.id) || user.username === 'planetoftheweb') && (
+        {/* Sizes are model-locked -- no edit/delete allowed.
+            Admin-override: the claim-derived `user.isAdmin` (or the legacy
+            `planetoftheweb` bootstrap username) can edit any item. */}
+        {type !== 'size' && user && ((!item.isSystem && item.authorId === user.id) || user.isAdmin || user.username === 'planetoftheweb') && (
           <>
             <button 
               onClick={(e) => handleEdit(e, type, item)} 

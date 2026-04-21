@@ -126,6 +126,18 @@ export interface User {
   photoURL?: string; 
   preferences: UserPreferences;
   teamIds?: string[]; // IDs of teams the user belongs to
+
+  /**
+   * Derived from the Firebase Auth custom claim `admin` on every auth state
+   * change. Never persisted to Firestore — sanitized out of every write path.
+   */
+  isAdmin?: boolean;
+
+  /**
+   * Persisted flag that hard-blocks the account from accessing the app.
+   * Written by admins via `adminService.setUserDisabled`.
+   */
+  isDisabled?: boolean;
 }
 
 export interface Team {

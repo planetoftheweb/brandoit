@@ -204,10 +204,12 @@ export const runBatchGenerations = async ({
 // --- Admin / cap helpers -----------------------------------------------------
 
 /**
- * Admin flag mirrors the existing gate in App.tsx (seedStructures).
+ * Admin flag. Prefers the Firebase Auth custom claim via `user.isAdmin`, with
+ * the legacy `planetoftheweb` username kept as a bootstrap fallback so the
+ * first admin doesn't get stuck mid-migration before minting their claim.
  */
 export const isAdminUser = (user?: User | null): boolean =>
-  !!user && user.username === "planetoftheweb";
+  !!user && (user.isAdmin === true || user.username === "planetoftheweb");
 
 /**
  * Per-submit generation cap. Normal users: 5. Admins: effectively unlimited.

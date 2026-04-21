@@ -8,12 +8,16 @@ import {
 } from "../constants";
 import { User } from "../types";
 
-// The username allowed to seed public defaults
-const ADMIN_USERNAME = "planetoftheweb"; 
+// Retained as a bootstrap fallback so the legacy admin can keep seeding
+// defaults even before their Firebase Auth custom claim is minted. Any user
+// with `isAdmin === true` (claim-derived) is the preferred gate.
+const BOOTSTRAP_USERNAME = "planetoftheweb";
 
 export const seedStructures = async (currentUser?: User) => {
-  // Only proceed if the user is the designated admin
-  if (!currentUser || currentUser.username !== ADMIN_USERNAME) {
+  const isAdmin = Boolean(
+    currentUser && (currentUser.isAdmin || currentUser.username === BOOTSTRAP_USERNAME)
+  );
+  if (!currentUser || !isAdmin) {
     console.log("Skipping system seeding: User is not admin.");
     return;
   }

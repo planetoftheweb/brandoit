@@ -5,6 +5,7 @@ import { AuthModal } from './components/AuthModal';
 import { BrandAnalysisModal } from './components/BrandAnalysisModal';
 import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
+import { AdminPage } from './components/AdminPage';
 import { RecentGenerations } from './components/RecentGenerations';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis } from './types';
 import { 
@@ -74,7 +75,8 @@ import {
   User as UserIcon,
   Settings as SettingsIcon,
   Globe,
-  Github
+  Github,
+  ShieldCheck
 } from 'lucide-react';
 
 interface ToolbarSelectionCache {
@@ -183,6 +185,7 @@ const App: React.FC = () => {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [catalogMode, setCatalogMode] = useState<'style' | 'color' | null>(null);
+  const [adminMode, setAdminMode] = useState(false);
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -314,8 +317,11 @@ const App: React.FC = () => {
   }, [user?.id]);
 
   useEffect(() => {
-    if (user?.username === 'planetoftheweb') {
-       // Seed structures only if admin is logged in
+    // Seed structures only for admins. Prefer the Firebase Auth custom claim
+    // via `user.isAdmin`; keep the `planetoftheweb` username as a bootstrap
+    // fallback so the legacy admin can seed even before the claim is minted.
+    const canSeed = Boolean(user && (user.isAdmin || user.username === 'planetoftheweb'));
+    if (canSeed && user) {
        seedStructures(user).then(() => loadResources(user));
     } else {
        loadResources(user);
@@ -323,7 +329,7 @@ const App: React.FC = () => {
     
     // Seed catalog (legacy community items) - can probably be removed or gated too
     // seedCatalog().catch(console.error);
-  }, [user?.id, user?.username]); // Run when account context changes
+  }, [user?.id, user?.username, user?.isAdmin]); // Run when account context changes
 
   // Effect to toggle body class
   useEffect(() => {
@@ -1459,6 +1465,35 @@ const App: React.FC = () => {
     authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   };
 
+  // Suspended-account hard block. A signed-in user with `isDisabled === true`
+  // is stopped here before any studio, history, catalog, settings, or admin UI
+  // can render. Only a sign-out action is exposed.
+  if (user?.isDisabled === true) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#0d1117] px-6">
+        <div className="w-full max-w-md bg-white dark:bg-[#161b22] border border-red-200 dark:border-red-900/50 rounded-xl p-8 text-center shadow-lg">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+            <AlertCircle size={28} className="text-red-600 dark:text-red-300" />
+          </div>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">
+            Account suspended
+          </h1>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {user.email || 'This account'} has been suspended by an administrator.
+            If you think this is a mistake, contact support.
+          </p>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold"
+          >
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col w-full min-h-screen font-sans transition-colors duration-200">
       
@@ -1469,6 +1504,7 @@ const App: React.FC = () => {
             onClick={() => {
               setCatalogMode(null);
               setSettingsMode(false);
+              setAdminMode(false);
             }}
             className="flex items-center gap-3 hover:opacity-80 transition-opacity focus:outline-none"
           >
@@ -1487,6 +1523,7 @@ const App: React.FC = () => {
                 onClick={() => {
                   setCatalogMode('style');
                   setSettingsMode(false);
+                  setAdminMode(false);
                 }}
                 className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal transition-colors flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#21262d]"
               >
@@ -1496,6 +1533,7 @@ const App: React.FC = () => {
                 onClick={() => {
                   setCatalogMode('color');
                   setSettingsMode(false);
+                  setAdminMode(false);
                 }}
                 className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal transition-colors flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#21262d]"
               >
@@ -1531,17 +1569,36 @@ const App: React.FC = () => {
                         <p className="text-xs text-slate-500 uppercase font-bold">Signed in as</p>
                           <p className="text-sm font-medium truncate text-slate-900 dark:text-white">{user.email}</p>
                       </div>
-                      <div className="p-3 border-b border-gray-200 dark:border-[#30363d]">
-                        <button 
-                          onClick={() => {
-                            setSettingsMode(true);
-                            setIsUserMenuOpen(false);
-                          }}
-                          className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-                        >
-                          <SettingsIcon size={16} /> Settings
-                        </button>
-                      </div>
+                     <div className="p-3 border-b border-gray-200 dark:border-[#30363d] space-y-2">
+                       <button 
+                         onClick={() => {
+                           setSettingsMode(true);
+                           setAdminMode(false);
+                           setCatalogMode(null);
+                           setIsUserMenuOpen(false);
+                         }}
+                         className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+                       >
+                         <SettingsIcon size={16} /> Settings
+                       </button>
+                       {/* Admin link: visible to users with the admin claim. The
+                           `planetoftheweb` username is retained as a bootstrap
+                           fallback so the first admin can self-promote even
+                           before the claim is minted. */}
+                       {(user.isAdmin || user.username === 'planetoftheweb') && (
+                         <button
+                           onClick={() => {
+                             setAdminMode(true);
+                             setSettingsMode(false);
+                             setCatalogMode(null);
+                             setIsUserMenuOpen(false);
+                           }}
+                           className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+                         >
+                           <ShieldCheck size={16} /> Admin
+                         </button>
+                       )}
+                     </div>
                       <button 
                         onClick={handleLogout}
                         className="w-full text-left p-3 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2 transition-colors"
@@ -1605,7 +1662,12 @@ const App: React.FC = () => {
       </header>
 
       {/* 2. Content Switching */}
-      {settingsMode ? (
+      {adminMode && user ? (
+        <AdminPage
+          onBack={() => setAdminMode(false)}
+          currentUser={user}
+        />
+      ) : settingsMode ? (
         user && (
           <SettingsPage
             onBack={() => setSettingsMode(false)}

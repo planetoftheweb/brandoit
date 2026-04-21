@@ -1,0 +1,101 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Helpers ----------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    function isNotDisabled(uid) {
+      // A user cannot read/write as themselves if they've been marked disabled.
+      // Admin override is checked by callers separately via isAdmin().
+      return !(exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.isDisabled == true);
+    }
+
+    // ---- Users ------------------------------------------------------------
+    // Owner can read/write their own doc. Admins can read/write any user doc.
+    // Admins can also list (enables paginated user table on the admin page).
+    match /users/{uid} {
+      allow get:    if isOwner(uid) || isAdmin();
+      allow list:   if isAdmin();
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid) || isAdmin();
+      allow delete: if isAdmin();
+
+      // History subcollection is owner-private; admins override.
+      match /history/{docId} {
+        allow read:   if isOwner(uid) || isAdmin();
+        allow create: if isOwner(uid) || isAdmin();
+        allow update: if isOwner(uid) || isAdmin();
+        allow delete: if isOwner(uid) || isAdmin();
+      }
+    }
+
+    // ---- Shared catalog collections --------------------------------------
+    // Readable to any signed-in user. Writes require sign-in; authorship is
+    // enforced by the client (authorId == request.auth.uid). Admins override.
+    match /graphic_types/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /visual_styles/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /brand_colors/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /aspect_ratios/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    // ---- Teams ------------------------------------------------------------
+    // Team owner or a listed member can read. Only the owner (or admin) can
+    // modify the top-level doc. Member docs are managed by the owner + admin.
+    match /teams/{teamId} {
+      allow read:   if isSignedIn()
+        && (resource.data.ownerId == request.auth.uid
+            || request.auth.uid in resource.data.memberIds
+            || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && (resource.data.ownerId == request.auth.uid || isAdmin());
+
+      match /{subPath=**} {
+        allow read, write: if isSignedIn()
+          && (get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid
+              || request.auth.uid in get(/databases/$(database)/documents/teams/$(teamId)).data.memberIds
+              || isAdmin());
+      }
+    }
+
+    // Everything else is denied by default.
+    match /{path=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

@@ -14,7 +14,8 @@ import {
   doc, 
   setDoc, 
   getDoc, 
-  updateDoc 
+  updateDoc,
+  serverTimestamp
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { User, UserPreferences, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from "../types";
@@ -30,8 +31,15 @@ const defaultPreferences: UserPreferences = {
   settings: { contributeByDefault: false, confirmDeleteHistory: true, confirmDeleteCurrent: true }
 };
 
-// Helper to remove non-serializable fields (like React components/icons) from preferences
+// Helper to remove non-serializable fields (like React components/icons) from preferences.
+// Also defensively strips any `isAdmin` that slipped in from the in-memory User:
+// the admin flag is a Firebase Auth custom claim, it must NEVER be persisted.
 const sanitizePreferences = (prefs: UserPreferences): any => {
+  // Belt-and-suspenders: `isAdmin` is not in the UserPreferences type, but a
+  // caller might accidentally cast a User shape through here. Drop it loudly.
+  if (prefs && (prefs as any).isAdmin !== undefined) {
+    delete (prefs as any).isAdmin;
+  }
   const clean: any = {};
   // Only save settings and API keys. Arrays are managed via resourceService.
   // Legacy support: omit when empty so clearing the field actually persists.
@@ -92,16 +100,45 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
   };
 };
 
-// Helper to transform Firebase User + Firestore Data into our User type
-const transformUser = (firebaseUser: FirebaseUser, userData: any): User => {
+// Helper to transform Firebase User + Firestore Data into our User type.
+// `isAdmin` is derived from the Auth custom claim — NEVER from Firestore data.
+// `isDisabled` is persisted in Firestore and used to hard-block the account.
+const transformUser = (firebaseUser: FirebaseUser, userData: any, isAdmin: boolean = false): User => {
   return {
     id: firebaseUser.uid,
     name: userData?.name || firebaseUser.displayName || 'User',
     username: userData?.username, // Map username from Firestore
     email: firebaseUser.email || '',
     photoURL: userData?.photoURL || firebaseUser.photoURL || undefined, // Map photoURL
-    preferences: userData?.preferences ? hydratePreferences(userData.preferences) : defaultPreferences
+    preferences: userData?.preferences ? hydratePreferences(userData.preferences) : defaultPreferences,
+    isAdmin,
+    isDisabled: userData?.isDisabled === true,
   };
+};
+
+// Read the `admin` custom claim off the current session's token. Safe to call
+// with a recently-signed-in user; falls back to `false` on any error.
+const readAdminClaim = async (firebaseUser: FirebaseUser): Promise<boolean> => {
+  try {
+    const token = await firebaseUser.getIdTokenResult();
+    return token.claims?.admin === true;
+  } catch (err) {
+    console.warn("Failed to read admin claim:", err);
+    return false;
+  }
+};
+
+// Best-effort write of `lastSignInAt`. Never blocks the sign-in flow — the
+// admin table can tolerate a missing value.
+const recordSignIn = async (uid: string): Promise<void> => {
+  try {
+    await updateDoc(doc(db, "users", uid), { lastSignInAt: serverTimestamp() });
+  } catch (err) {
+    // Non-fatal: the doc may not exist yet (first-ever sign-in for a legacy
+    // account) or the user may be suspended — in either case callers still
+    // get a valid session back.
+    console.warn("Failed to record lastSignInAt:", err);
+  }
 };
 
 const checkUsernameUnique = async (username: string, excludeUserId?: string): Promise<void> => {
@@ -180,7 +217,7 @@ export const authService = {
       const docRef = doc(db, "users", user.uid);
       const docSnap = await getDoc(docRef);
 
-      let userData = {};
+      let userData: any = {};
       if (docSnap.exists()) {
         userData = docSnap.data();
       } else {
@@ -193,7 +230,9 @@ export const authService = {
         await setDoc(docRef, userData);
       }
 
-      return transformUser(user, userData);
+      await recordSignIn(user.uid);
+      const isAdmin = await readAdminClaim(user);
+      return transformUser(user, userData, isAdmin);
     } catch (error: any) {
       console.error("Login Error:", error);
       if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
@@ -220,7 +259,8 @@ export const authService = {
             const docRef = doc(db, "users", user.uid);
             const docSnap = await getDoc(docRef);
             const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
-            resolve(transformUser(user, userData));
+            const isAdmin = await readAdminClaim(user);
+            resolve(transformUser(user, userData, isAdmin));
           } catch (e) {
             console.error("Error fetching user profile:", e);
             resolve(null);
@@ -291,7 +331,10 @@ export const authService = {
         const docRef = doc(db, "users", user.uid);
         const docSnap = await getDoc(docRef);
         const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
-        callback(transformUser(user, userData));
+        const isAdmin = await readAdminClaim(user);
+        // Fire-and-forget — don't block the callback on the timestamp write.
+        void recordSignIn(user.uid);
+        callback(transformUser(user, userData, isAdmin));
       } else {
         callback(null);
       }
