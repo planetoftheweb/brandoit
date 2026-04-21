@@ -38,9 +38,18 @@ const getAiClient = (customKey?: string) => {
   return new GoogleGenAI({ apiKey: key });
 }
 
-const prependSystemInstruction = (prompt: string, systemPrompt?: string): string => {
-  if (!systemPrompt || !systemPrompt.trim()) return prompt;
-  return `System Instruction: ${systemPrompt.trim()}\n\n${prompt}`;
+// Merges the user's Settings > System Prompt into a generateContent config via
+// the SDK's dedicated `systemInstruction` field. This is stronger than a plain
+// text-prefix: the model treats it as a higher-priority directive, so per-call
+// task instructions (like expandPrompt's "return ONLY the brief") can't silently
+// outrank the user's brand-voice/safety constraints.
+const withSystemInstruction = <T extends Record<string, any>>(
+  baseConfig: T | undefined,
+  systemPrompt?: string
+): (T & { systemInstruction?: string }) | undefined => {
+  const trimmed = systemPrompt?.trim();
+  if (!trimmed) return baseConfig;
+  return { ...(baseConfig || {} as T), systemInstruction: trimmed };
 };
 
 const resolveGeminiImageModel = (selectedModel?: string): string => {
@@ -81,7 +90,7 @@ export const generateGraphic = async (
   selectedModel: string = 'gemini'
 ): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
-  const fullPrompt = prependSystemInstruction(constructFullPrompt(config, context), systemPrompt);
+  const fullPrompt = constructFullPrompt(config, context);
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
   const generationModel = resolveGeminiImageModel(selectedModel);
 
@@ -91,12 +100,12 @@ export const generateGraphic = async (
       contents: {
         parts: [{ text: fullPrompt }],
       },
-      config: {
+      config: withSystemInstruction({
         responseModalities: ['TEXT', 'IMAGE'],
         imageConfig: {
           aspectRatio: safeAspectRatio,
         }
-      },
+      }, systemPrompt),
     });
 
     return extractImageFromResponse(response);
@@ -126,7 +135,7 @@ export const generateGraphicWithStyleReference = async (
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
   const generationModel = resolveGeminiImageModel(selectedModel);
 
-  const prompt = prependSystemInstruction(`
+  const prompt = `
     Create a brand-new ${typeName} composition.
     Use the attached image ONLY as a STYLE REFERENCE (line quality, rendering texture, visual motifs, and palette behavior).
     Do NOT copy the exact layout, framing, element positions, wording, or arrows from the reference image.
@@ -137,7 +146,7 @@ export const generateGraphicWithStyleReference = async (
 
     Request:
     ${conceptPrompt}
-  `.trim(), systemPrompt);
+  `.trim();
 
   try {
     const sourceImage = await resolveImageInputForRefinement(styleReferenceImage);
@@ -154,12 +163,12 @@ export const generateGraphicWithStyleReference = async (
           }
         ]
       },
-      config: {
+      config: withSystemInstruction({
         responseModalities: ['TEXT', 'IMAGE'],
         imageConfig: {
           aspectRatio: safeAspectRatio,
         }
-      }
+      }, systemPrompt)
     });
 
     return extractImageFromResponse(response);
@@ -231,14 +240,14 @@ export const refineGraphic = async (
   `.trim()
     : '';
 
-  const fullRefinementPrompt = prependSystemInstruction(`
+  const fullRefinementPrompt = `
     Edit this exact image with minimal necessary changes.
     Request: ${refinementPrompt}.
     Maintain the existing style (${styleDesc}) and color palette (${colors}).
     ${ratioDirective}
     ${strictPreservationDirective}
     ${fillCanvasDirective}
-  `.trim(), systemPrompt);
+  `.trim();
 
   try {
     const sourceImage = await resolveImageInputForRefinement(currentImage);
@@ -257,12 +266,12 @@ export const refineGraphic = async (
           },
         ],
       },
-      config: {
+      config: withSystemInstruction({
         responseModalities: ['TEXT', 'IMAGE'],
         imageConfig: {
           aspectRatio: safeAspectRatio,
         }
-      },
+      }, systemPrompt),
     });
 
     return extractImageFromResponse(response);
@@ -284,7 +293,7 @@ export const analyzeBrandGuidelines = async (
   const base64Data = await fileToBase64(file);
   const mimeType = file.type;
 
-  const prompt = prependSystemInstruction(`
+  const prompt = `
     Analyze this brand guideline document. 
     Extract the following structured data:
     1. Brand Colors: Extract up to 5 distinct color palettes found. Provide a descriptive name for each palette (e.g., "Primary Brand", "Secondary Accents") and a list of hex codes.
@@ -292,7 +301,7 @@ export const analyzeBrandGuidelines = async (
     3. Graphic Types: Identify the types of graphics mentioned (e.g., "Icons", "Banners").
 
     Return the result as a strict JSON object matching the schema.
-  `.trim(), systemPrompt);
+  `.trim();
 
   try {
     const response = await ai.models.generateContent({
@@ -308,7 +317,7 @@ export const analyzeBrandGuidelines = async (
           { text: prompt }
         ]
       },
-      config: {
+      config: withSystemInstruction({
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -344,7 +353,7 @@ export const analyzeBrandGuidelines = async (
             }
           }
         }
-      }
+      }, systemPrompt)
     });
 
     if (!response.text) throw new Error("No analysis result generated");
@@ -406,10 +415,6 @@ export const analyzeImageForOption = async (
   }
 
   try {
-    const finalPrompt = systemPrompt && systemPrompt.trim()
-      ? `System Instruction: ${systemPrompt.trim()}\n\n${prompt}`
-      : prompt;
-
     const response = await ai.models.generateContent({
       model: ANALYSIS_MODEL,
       contents: {
@@ -420,13 +425,13 @@ export const analyzeImageForOption = async (
               mimeType: mimeType,
             },
           },
-          { text: finalPrompt }
+          { text: prompt }
         ]
       },
-      config: {
+      config: withSystemInstruction({
         responseMimeType: "application/json",
         responseSchema: responseSchema
-      }
+      }, systemPrompt)
     });
 
     if (!response.text) throw new Error("No analysis result generated");
@@ -496,7 +501,7 @@ export const analyzeImageForCorrectionPrompt = async (
     `Aspect ratio: ${config.aspectRatio || 'N/A'}`,
   ].join('\n');
 
-  const prompt = prependSystemInstruction(`
+  const prompt = `
     You are auditing a generated image for correctness and usability.
 
     Tasks:
@@ -514,7 +519,7 @@ export const analyzeImageForCorrectionPrompt = async (
     - "fixPrompt": a specific, ready-to-run editing prompt for a high-quality image model.
     - In "fixPrompt", include: text correction instructions, factual correction instructions, label/annotation alignment, readability improvements.
     - Keep the image concept intact; do not introduce unrelated new content.
-  `.trim(), systemPrompt);
+  `.trim();
 
   try {
     const response = await ai.models.generateContent({
@@ -530,7 +535,7 @@ export const analyzeImageForCorrectionPrompt = async (
           { text: prompt }
         ]
       },
-      config: {
+      config: withSystemInstruction({
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -541,7 +546,7 @@ export const analyzeImageForCorrectionPrompt = async (
           },
           required: ["analysisSummary", "issues", "fixPrompt"]
         }
-      }
+      }, systemPrompt)
     });
 
     if (!response.text) throw new Error("No correction analysis generated");
@@ -595,19 +600,19 @@ export const expandPrompt = async (
     Current choices: Type=${typeLabel}, Style=${styleLabel}, Palette=${colors || 'cohesive palette'}, Aspect=${aspect}.
   `.trim();
 
-  // The user's own system prompt (from Settings) takes precedence so brand-voice
-  // or safety constraints aren't silently dropped when the magic-wand button is
-  // used. Expansion instructions follow as a second system message.
-  const parts: { text: string }[] = [];
-  if (userSystemPrompt && userSystemPrompt.trim()) {
-    parts.push({ text: `System Instruction: ${userSystemPrompt.trim()}` });
-  }
-  parts.push({ text: expansionInstructions });
-  parts.push({ text: `Original prompt: ${prompt}` });
-
+  // Pass the user's Settings > System Prompt via the SDK's dedicated
+  // `systemInstruction` field so it outranks the expansion task's own
+  // "return ONLY the brief" rule. The task-specific instructions stay in the
+  // prompt body where the model expects them.
   const response = await ai.models.generateContent({
     model: ANALYSIS_MODEL,
-    contents: { parts }
+    contents: {
+      parts: [
+        { text: expansionInstructions },
+        { text: `Original prompt: ${prompt}` }
+      ]
+    },
+    config: withSystemInstruction(undefined, userSystemPrompt)
   });
 
   if (!response.text) throw new Error("No expanded prompt generated");
