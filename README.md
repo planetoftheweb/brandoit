@@ -29,6 +29,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **⬇️ Unified downloads:** Single download menu on the main preview and in history for PNG, WebP, SVG, or HTML; download-all zips every generation mark; export selected tiles as a ZIP from Recent Generations.
 *   **🖼️ Thumbnail rail:** When a tile has multiple marks, browse and preview versions from a left rail without leaving the main viewport.
 *   **📄 Site footer:** Copyright plus quick links to the changelog and GitHub releases.
+*   **🛡️ Admin panel:** Claims-based admin role (Firebase Auth custom claims, not a hardcoded username) with a paginated user table — clear API keys, wipe system prompts, suspend / unsuspend accounts, promote or demote admins, and conservatively delete user data (Firestore + Storage + Auth). Suspended users are hard-blocked with a clear notice.
 
 ## Tech Stack
 

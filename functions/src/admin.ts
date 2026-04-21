@@ -58,9 +58,13 @@ export const setAdminRole = onCall(async (request) => {
     await admin.auth().setCustomUserClaims(targetUid, { admin: admin_ });
     logger.info(`setAdminRole: caller=${callerUid} target=${targetUid} admin=${admin_}`);
     return { ok: true, uid: targetUid, admin: admin_ };
-  } catch (err) {
-    logger.error("setAdminRole failed", err);
-    throw new HttpsError("internal", "Failed to update admin claim.");
+  } catch (err: any) {
+    // Surface the Firebase error code to the client so "internal" errors are
+    // actually actionable. Safe to expose: this code path is admin-gated.
+    const code = err?.code || err?.errorInfo?.code || 'unknown';
+    const message = err?.message || 'Failed to update admin claim.';
+    logger.error('setAdminRole failed', { code, message, err });
+    throw new HttpsError('internal', `Failed to update admin claim (${code}): ${message}`);
   }
 });
 

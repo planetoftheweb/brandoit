@@ -1,9 +1,9 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
-import { getFunctions } from "firebase/functions";
+import { getAuth, connectAuthEmulator } from "firebase/auth";
+import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { getStorage, connectStorageEmulator } from "firebase/storage";
+import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -40,4 +40,31 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
+
+// ---- Emulator wiring -------------------------------------------------------
+// When running `npm run dev` with VITE_USE_FIREBASE_EMULATORS=true, point the
+// SDK at the locally-running Firebase Emulator Suite (ports from firebase.json).
+// This lets the admin panel's Cloud Functions be exercised end-to-end without
+// deploying. Production builds ignore this block entirely.
+const useEmulators =
+  import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true' ||
+  import.meta.env.VITE_USE_FIREBASE_EMULATORS === '1';
+
+if (useEmulators && typeof window !== 'undefined') {
+  const host = '127.0.0.1';
+  try {
+    connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true });
+    connectFirestoreEmulator(db, host, 8080);
+    connectStorageEmulator(storage, host, 9199);
+    connectFunctionsEmulator(functions, host, 5001);
+    console.log(
+      '%cFirebase: using local emulators (Auth:9099, Firestore:8080, Storage:9199, Functions:5001)',
+      'color:#10b981;font-weight:bold;'
+    );
+  } catch (err) {
+    // HMR can reconnect on already-wired singletons — surface once but don't crash.
+    console.warn('Failed to connect one or more Firebase emulators:', err);
+  }
+}
+
 export default app;

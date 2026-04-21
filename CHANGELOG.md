@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-21
+### Added
+- **Admin panel** (`components/AdminPage.tsx`): paginated user table with client-side search, row-level action menu (clear API keys, wipe system prompt, suspend/unsuspend, promote/demote admin, delete account), inline destructive-action confirmations, and status/error banners matching the existing Settings page styling.
+- **Claims-based admin identity.** Admin privileges are now a Firebase Auth custom claim (`admin: true`) surfaced on `User.isAdmin`, read on every sign-in. The legacy `planetoftheweb` username is kept as a bootstrap fallback so the first admin can self-promote without a lockout; after that, admin is a real claim.
+- **Cloud Functions** (`functions/src/admin.ts`): `setAdminRole` and `deleteUserAccount` callables. `setAdminRole` is admin-gated with a one-time bootstrap path for `planetoftheweb`. `deleteUserAccount` performs conservative removal — Firestore `users/{uid}` + `history` subcollection, Storage `users/{uid}/*`, and the Auth record — and leaves team/catalog documents owned by that user intact.
+- **User suspension.** New `isDisabled` flag on user documents. Suspended users are hard-blocked at app start with a clear notice and a sign-out button; rules forbid them from doing anything until an admin re-enables the account.
+- **Sign-in auditing.** `authService` writes `lastSignInAt: serverTimestamp()` on every successful sign-in for admin-side visibility.
+- **Firebase project scaffolding.** `firebase.json`, `.firebaserc`, `firestore.indexes.json`, and a TypeScript `functions/` project (Node 20) so rules and functions can be versioned and deployed from the repo.
+- **Codified security rules.** `firestore.rules` and `storage.rules` now live in the repo with `isSignedIn()`, `isOwner(uid)`, `isAdmin()` helpers, per-collection scoping, and a default-deny tail.
+- **Local emulator wiring.** `services/firebase.ts` connects to the Firebase Emulator Suite (Auth 9099, Firestore 8080, Storage 9199, Functions 5001) when `VITE_USE_FIREBASE_EMULATORS=true`, so Cloud Functions can be exercised end-to-end without touching production.
+- Avatar menu gains an **Admin** entry (gated on `user.isAdmin` or the bootstrap username).
+
+### Changed
+- `services/structureSeeder.ts`, `services/batchGenerationService.ts`, `components/ControlPanel.tsx`, and `App.tsx` now check `user.isAdmin` first and fall back to the `planetoftheweb` username only as a legacy bridge.
+- `services/authService.ts` reads the admin claim from the ID token result on every auth state change and strips any `isAdmin` fields out of preferences before writing to Firestore, so claim state can never be spoofed from the client.
+- **Settings page** redesigned for clarity (`components/SettingsPage.tsx`): tidier sectioning, reliable per-provider API key persistence, and removal of the old custom toolbar label controls.
+- `setAdminRole` now surfaces the underlying Firebase Admin SDK error code and message in its `HttpsError`, so callers see actionable failures instead of a bare `internal`.
+- User system prompt is now passed through the Gemini SDK's native `systemInstruction` channel and also applied during prompt expansion, so one saved system prompt genuinely steers both generation and expansion.
+
+### Fixed
+- Firestore user-profile writes could fail when optional preference fields were `undefined`. All `undefined` values are now stripped before the write.
+- API keys could drop out of Settings state after a round-trip save; persistence is now provider-scoped and reliable across reloads.
+- Removed an unused custom toolbar labels pathway that was fighting the model-label UI and could leave stale labels in the toolbar.
+
 ## [0.1.3] - 2026-04-17
 ### Added
 - Batch generation: a single Generate click can now produce multiple variations in one go. Combine a numeric `QTY` (1–5 for regular users, unlimited for admins) with Midjourney-style brace expansion in the prompt, e.g. `A { red, blue } logo on { white, black }` — totals multiply across all brace groups.
