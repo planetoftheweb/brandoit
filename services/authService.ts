@@ -257,14 +257,26 @@ export const authService = {
         await checkUsernameUnique(data.username, userId);
       }
 
+      // Firestore rejects `undefined` values, so only write fields the caller
+      // actually provided. SettingsPage always passes the full triple, but
+      // `photoURL` is commonly undefined for accounts without an avatar.
+      const clean: Record<string, string> = {};
+      if (typeof data.name === 'string' && data.name.length > 0) clean.name = data.name;
+      if (typeof data.username === 'string' && data.username.length > 0) clean.username = data.username;
+      if (typeof data.photoURL === 'string' && data.photoURL.length > 0) clean.photoURL = data.photoURL;
+
       const userRef = doc(db, "users", userId);
-      await updateDoc(userRef, data);
-      
-      // If name or photo changed, update Auth profile too
+      if (Object.keys(clean).length > 0) {
+        await updateDoc(userRef, clean);
+      }
+
+      // If name or photo changed, update Auth profile too. Passing undefined to
+      // updateProfile is safe (the SDK treats it as "no change") but we still
+      // fall back to the current value so we don't accidentally null anything.
       if (auth.currentUser && auth.currentUser.uid === userId) {
-        await updateProfile(auth.currentUser, { 
-            displayName: data.name || auth.currentUser.displayName,
-            photoURL: data.photoURL || auth.currentUser.photoURL
+        await updateProfile(auth.currentUser, {
+            displayName: clean.name ?? auth.currentUser.displayName ?? undefined,
+            photoURL: clean.photoURL ?? auth.currentUser.photoURL ?? undefined
         });
       }
     } catch (error: any) {
