@@ -42,6 +42,14 @@ service cloud.firestore {
       }
     }
 
+    // ---- Collection-group rule for admin usage-stats dashboard ----------
+    // collectionGroup('history') queries evaluate against this wildcard path
+    // (NOT the nested /users/{uid}/history rule above). Admin-only; owner-
+    // scoped reads still flow through the nested rule with the specific uid.
+    match /{path=**}/history/{docId} {
+      allow read: if isAdmin();
+    }
+
     // ---- Shared catalog collections --------------------------------------
     // Readable to any signed-in user. Writes require sign-in; authorship is
     // enforced by the client (authorId == request.auth.uid). Admins override.

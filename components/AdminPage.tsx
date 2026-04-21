@@ -17,6 +17,7 @@ import {
   MoreHorizontal,
   Crown,
   ChevronRight,
+  BarChart3,
 } from 'lucide-react';
 import { User } from '../types';
 import {
@@ -24,6 +25,9 @@ import {
   AdminUserRow,
   ListUsersPage,
 } from '../services/adminService';
+import { StatsPage } from './StatsPage';
+
+type AdminTab = 'users' | 'stats';
 
 interface AdminPageProps {
   onBack: () => void;
@@ -78,6 +82,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
   const [actionInFlight, setActionInFlight] = useState<string | null>(null);
   const [banner, setBanner] = useState<Banner>(null);
   const [bootstrapClaiming, setBootstrapClaiming] = useState(false);
+  const [activeTab, setActiveTab] = useState<AdminTab>('users');
 
   const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowMenuRef = useRef<HTMLDivElement | null>(null);
@@ -419,6 +424,36 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
           </div>
         </div>
 
+        {/* Tab switcher */}
+        <div className="mb-6 inline-flex items-center rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab('users')}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'users'
+                ? 'bg-brand-teal text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+            }`}
+            aria-pressed={activeTab === 'users'}
+          >
+            <Users size={14} />
+            Users
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('stats')}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'stats'
+                ? 'bg-brand-teal text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+            }`}
+            aria-pressed={activeTab === 'stats'}
+          >
+            <BarChart3 size={14} />
+            Stats
+          </button>
+        </div>
+
         {/* Bootstrap banner: visible only when planetoftheweb doesn't have the claim yet */}
         {showBootstrapBanner && (
           <div className="mb-6 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-4 flex items-start gap-3">
@@ -444,6 +479,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
           </div>
         )}
 
+        {activeTab === 'stats' && <StatsPage />}
+
+        {activeTab === 'users' && (
         <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-hidden">
           {/* Header row */}
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 p-4 border-b border-gray-200 dark:border-[#30363d]">
@@ -598,6 +636,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Confirm modal */}
