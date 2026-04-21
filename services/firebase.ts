@@ -4,6 +4,11 @@ import { getAuth, connectAuthEmulator } from "firebase/auth";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getStorage, connectStorageEmulator } from "firebase/storage";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
+import {
+  getAnalytics,
+  isSupported as isAnalyticsSupported,
+  type Analytics,
+} from "firebase/analytics";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -49,6 +54,34 @@ export const functions = getFunctions(app);
 const useEmulators =
   import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true' ||
   import.meta.env.VITE_USE_FIREBASE_EMULATORS === '1';
+
+// ---- Google Analytics (GA4) ------------------------------------------------
+// Firebase Analytics is only wired up when:
+//   1. We're running in a browser (isSupported returns false in Node/tests).
+//   2. We have a measurementId in the config.
+//   3. We're NOT pointing at local emulators (keeps dev traffic out of prod GA).
+// `getAnalytics(app)` is what actually loads gtag.js under the hood and starts
+// sending page_view hits to the stream configured by measurementId. Without
+// this call the measurementId in firebaseConfig is inert.
+export let analytics: Analytics | null = null;
+if (
+  typeof window !== 'undefined' &&
+  firebaseConfig.measurementId &&
+  !useEmulators
+) {
+  isAnalyticsSupported()
+    .then((supported) => {
+      if (supported) {
+        analytics = getAnalytics(app);
+        console.log(`Firebase Analytics initialized (${firebaseConfig.measurementId})`);
+      } else {
+        console.info('Firebase Analytics not supported in this environment; skipping.');
+      }
+    })
+    .catch((err) => {
+      console.warn('Firebase Analytics init failed:', err);
+    });
+}
 
 if (useEmulators && typeof window !== 'undefined') {
   const host = '127.0.0.1';
