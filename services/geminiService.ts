@@ -565,7 +565,8 @@ export const expandPrompt = async (
   prompt: string,
   config: GenerationConfig,
   context: { brandColors: BrandColor[]; visualStyles: VisualStyle[]; graphicTypes: GraphicType[]; aspectRatios: GraphicType[] },
-  customApiKey?: string
+  customApiKey?: string,
+  userSystemPrompt?: string
 ): Promise<string> => {
   const ai = getAiClient(customApiKey);
 
@@ -577,7 +578,7 @@ export const expandPrompt = async (
   const colors = palette ? `${palette.name}: ${palette.colors.join(', ')}` : '';
   const aspect = (context as any).aspectRatios?.find((a: any) => a.value === config.aspectRatio)?.label || config.aspectRatio;
 
-  const systemPrompt = `
+  const expansionInstructions = `
     You expand short text prompts into rich, creative, and visual image prompts.
     Include and amplify:
     - Topic and clear subject focus
@@ -594,14 +595,19 @@ export const expandPrompt = async (
     Current choices: Type=${typeLabel}, Style=${styleLabel}, Palette=${colors || 'cohesive palette'}, Aspect=${aspect}.
   `.trim();
 
+  // The user's own system prompt (from Settings) takes precedence so brand-voice
+  // or safety constraints aren't silently dropped when the magic-wand button is
+  // used. Expansion instructions follow as a second system message.
+  const parts: { text: string }[] = [];
+  if (userSystemPrompt && userSystemPrompt.trim()) {
+    parts.push({ text: `System Instruction: ${userSystemPrompt.trim()}` });
+  }
+  parts.push({ text: expansionInstructions });
+  parts.push({ text: `Original prompt: ${prompt}` });
+
   const response = await ai.models.generateContent({
     model: ANALYSIS_MODEL,
-    contents: {
-      parts: [
-        { text: systemPrompt },
-        { text: `Original prompt: ${prompt}` }
-      ]
-    }
+    contents: { parts }
   });
 
   if (!response.text) throw new Error("No expanded prompt generated");

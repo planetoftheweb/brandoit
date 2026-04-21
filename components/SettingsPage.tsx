@@ -459,7 +459,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   placeholder="Optional instruction sent with every generation/refinement (e.g., brand voice, safety constraints)."
                 />
                 <p className="text-xs text-slate-500">
-                  This text is prepended as a system instruction to generation, refinement, and brand analysis requests.
+                  Prepended as a system instruction to every AI request: generation, refinement, prompt expansion, and brand/image analysis.
                 </p>
               </div>
             </div>

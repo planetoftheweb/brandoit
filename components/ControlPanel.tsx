@@ -518,7 +518,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         (activeModel === 'gemini' || activeModel === 'gemini-3.1-flash-image-preview' || activeModel === 'gemini-svg'
           ? user?.preferences?.apiKeys?.gemini || user?.preferences?.geminiApiKey
           : user?.preferences?.geminiApiKey);
-      const expanded = await expandPrompt(config.prompt, config, { ...options, aspectRatios: options.aspectRatios as any }, customKey);
+      const expanded = await expandPrompt(
+        config.prompt,
+        config,
+        { ...options, aspectRatios: options.aspectRatios as any },
+        customKey,
+        user?.preferences?.systemPrompt
+      );
       setConfig(prev => ({ ...prev, prompt: expanded }));
     } catch (err) {
       console.error("Failed to expand prompt:", err);
