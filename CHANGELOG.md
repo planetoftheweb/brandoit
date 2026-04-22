@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-22
+### Changed
+- **Toolbar redesigned as a tiered responsive menu bar.** Replaced the previous bordered-button toolbar (`components/ControlPanel.tsx`) with a ghost menu-style row that adapts across three breakpoints:
+  - `< lg` (1024px): icon-only, 44×44 tap targets, label surfaced via tooltip.
+  - `lg+`: icon + truncated label (≤100px, label still truncates cleanly).
+  - `xl+` (1280px): icon + stacked SUBLABEL/label + chevron.
+  - `2xl+` (1536px): adds the color-palette preview strip under Colors.
+  Reset and Upload actions adopted the same ghost treatment with a vertical separator between the config and action groups so the grouping is obvious without borders.
+- `Download all` inside a generation-tile viewer is now scoped to **that tile only** (all marks/versions in the current `Generation`) instead of the full history gallery (`components/ImageDisplay.tsx`). The label now reads "Download all in this tile" to match the scope.
+
+### Fixed
+- **Toolbar dropdowns no longer get clipped.** The toolbar container had `overflow-x-auto`, which per CSS spec implicitly sets `overflow-y: auto` as well — silently chopping off every absolute-positioned dropdown panel as soon as it rendered. Removed the overflow wrapper, pushed the text tier from `md` to `lg` so 768–1023px stays icon-only (no overflow possible), and kept `flex-wrap` as a final safety net.
+- Resolved several regressions introduced while iterating on the toolbar: uneven vertical padding, tiny mobile icons, single-row scroll clipping, and dropdown panels that visually appeared then vanished on click.
+
 ## [0.5.0] - 2026-04-21
 ### Added
 - **Cross-model comparison workflow with an inline swipe slider.** Users can now select multiple models for one generation run and compare results directly in the main preview surface (no cramped modal), with an A/B slider (`components/JuxtaposeSlider.tsx`) and side-by-side export options.
