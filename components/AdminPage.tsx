@@ -18,6 +18,10 @@ import {
   Crown,
   ChevronRight,
   BarChart3,
+  Mail,
+  AtSign,
+  CalendarPlus,
+  Cpu,
 } from 'lucide-react';
 import { User } from '../types';
 import {
@@ -44,30 +48,120 @@ type ConfirmableAction =
 
 type Banner = { kind: 'success' | 'error'; message: string } | null;
 
-const formatTimestamp = (value: any): string => {
-  if (!value) return '—';
+const coerceToMs = (value: any): number | null => {
+  if (value == null) return null;
+  if (typeof value === 'number') return value;
   if (typeof value === 'string') {
-    try {
-      return new Date(value).toLocaleString();
-    } catch {
-      return value;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.seconds === 'number') return value.seconds * 1000;
+    if (typeof value.toDate === 'function') {
+      try {
+        return value.toDate().getTime();
+      } catch {
+        return null;
+      }
     }
   }
-  if (typeof value === 'number') {
-    return new Date(value).toLocaleString();
+  return null;
+};
+
+const formatTimestamp = (value: any): string => {
+  const ms = coerceToMs(value);
+  if (ms == null) return '—';
+  return new Date(ms).toLocaleString();
+};
+
+const formatShortDate = (value: any): string => {
+  const ms = coerceToMs(value);
+  if (ms == null) return '—';
+  const d = new Date(ms);
+  return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}, ${d.getFullYear()}`;
+};
+
+const formatRelative = (value: any): string => {
+  const ms = coerceToMs(value);
+  if (ms == null) return 'Never';
+  const diff = Date.now() - ms;
+  if (diff < 0) return 'Just now';
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const month = 30 * day;
+  const year = 365 * day;
+  if (diff < minute) return 'Just now';
+  if (diff < hour) {
+    const n = Math.floor(diff / minute);
+    return `${n} min${n === 1 ? '' : 's'} ago`;
   }
-  // Firestore Timestamp shape
-  if (typeof value.seconds === 'number') {
-    return new Date(value.seconds * 1000).toLocaleString();
+  if (diff < day) {
+    const n = Math.floor(diff / hour);
+    return `${n} hour${n === 1 ? '' : 's'} ago`;
   }
-  if (typeof value.toDate === 'function') {
-    try {
-      return value.toDate().toLocaleString();
-    } catch {
-      return '—';
-    }
+  if (diff < month) {
+    const n = Math.floor(diff / day);
+    return `${n} day${n === 1 ? '' : 's'} ago`;
   }
-  return '—';
+  if (diff < year) {
+    const n = Math.floor(diff / month);
+    return `${n} month${n === 1 ? '' : 's'} ago`;
+  }
+  const n = Math.floor(diff / year);
+  return `${n} year${n === 1 ? '' : 's'} ago`;
+};
+
+const MODEL_LABELS: Record<string, string> = {
+  gemini: 'Nano Banana Pro',
+  'gemini-3.1-flash-image-preview': 'Nano Banana 2',
+  'gemini-svg': 'Gemini SVG',
+  'openai-2': 'GPT Image 2',
+  'openai-mini': 'GPT Image Mini',
+  openai: 'GPT Image 1.5'
+};
+
+const modelLabel = (id?: string) => (id ? MODEL_LABELS[id] || id : 'No model set');
+
+/** Hover tooltip with consistent styling across the status icons. */
+const Tooltip: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <span className="relative group/tip inline-flex items-center">
+    {children}
+    <span className="pointer-events-none absolute bottom-full mb-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip:opacity-100 transition-opacity z-20">
+      {label}
+    </span>
+  </span>
+);
+
+/** Circular icon pill used as the status icons. ~44px to meet touch targets. */
+const StatusIcon: React.FC<{
+  label: string;
+  icon: React.ElementType;
+  active: boolean;
+  tone?: 'teal' | 'amber' | 'red' | 'slate';
+}> = ({ label, icon: Icon, active, tone = 'teal' }) => {
+  const activeTone =
+    tone === 'amber'
+      ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+      : tone === 'red'
+        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800'
+        : tone === 'slate'
+          ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
+          : 'bg-brand-teal/15 text-brand-teal border-brand-teal/30';
+  const dimTone =
+    'bg-transparent text-slate-300 dark:text-slate-600 border-slate-200 dark:border-[#30363d]';
+  return (
+    <Tooltip label={label}>
+      <span
+        className={`inline-flex items-center justify-center w-10 h-10 rounded-full border transition-colors ${
+          active ? activeTone : dimTone
+        }`}
+        aria-label={label}
+      >
+        <Icon size={18} />
+      </span>
+    </Tooltip>
+  );
 };
 
 export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => {
@@ -83,6 +177,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
   const [banner, setBanner] = useState<Banner>(null);
   const [bootstrapClaiming, setBootstrapClaiming] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRowExpanded = (uid: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  };
 
   const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowMenuRef = useRef<HTMLDivElement | null>(null);
@@ -513,23 +617,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-[#0d1117] text-slate-500 uppercase text-[11px] tracking-wider">
                 <tr>
-                  <th className="text-left font-semibold px-4 py-3">Email</th>
-                  <th className="text-left font-semibold px-4 py-3">Name</th>
-                  <th className="text-left font-semibold px-4 py-3">Username</th>
-                  <th className="text-left font-semibold px-4 py-3">Created</th>
-                  <th className="text-left font-semibold px-4 py-3">Last sign-in</th>
-                  <th className="text-left font-semibold px-4 py-3">Model</th>
-                  <th className="text-center font-semibold px-4 py-3">Gemini</th>
-                  <th className="text-center font-semibold px-4 py-3">OpenAI</th>
-                  <th className="text-center font-semibold px-4 py-3">Admin</th>
-                  <th className="text-center font-semibold px-4 py-3">Disabled</th>
-                  <th className="text-right font-semibold px-4 py-3">Actions</th>
+                  <th className="text-left font-semibold px-4 py-3">User</th>
+                  <th className="text-left font-semibold px-4 py-3">Last seen</th>
+                  <th className="text-left font-semibold px-4 py-3">Status</th>
+                  <th className="text-right font-semibold px-4 py-3 sticky right-0 bg-gray-50 dark:bg-[#0d1117] shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.08)] dark:shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.5)]">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-[#21262d]">
                 {isLoading && rows.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={4} className="px-4 py-12 text-center text-slate-500">
                       <Loader2 size={20} className="inline animate-spin mr-2" />
                       Loading users…
                     </td>
@@ -538,85 +637,152 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
 
                 {!isLoading && filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={4} className="px-4 py-12 text-center text-slate-500">
                       No users match your search.
                     </td>
                   </tr>
                 )}
 
-                {filteredRows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="hover:bg-gray-50 dark:hover:bg-[#0f141c] transition-colors"
-                  >
-                    <td className="px-4 py-3 font-medium text-slate-900 dark:text-white whitespace-nowrap">
-                      {row.email || '—'}
-                      {row.id === currentUser.id && (
-                        <span className="ml-2 inline-flex items-center rounded bg-brand-teal/10 text-brand-teal px-1.5 py-0.5 text-[10px] font-semibold uppercase">
-                          You
-                        </span>
+                {filteredRows.map((row) => {
+                  const isExpanded = expandedRows.has(row.id);
+                  const displayName = row.name || row.email || row.username || row.id;
+                  const lastSignInFull = formatTimestamp(row.lastSignInAt);
+                  const lastSignInRelative = formatRelative(row.lastSignInAt);
+                  const createdFull = formatTimestamp(row.createdAt);
+                  const createdShort = formatShortDate(row.createdAt);
+                  const model = modelLabel(row.selectedModel);
+                  return (
+                    <React.Fragment key={row.id}>
+                      <tr className="group hover:bg-gray-50 dark:hover:bg-[#0f141c] transition-colors align-middle">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => toggleRowExpanded(row.id)}
+                            className="inline-flex items-center gap-2 text-left"
+                            aria-expanded={isExpanded}
+                            aria-label={`Toggle details for ${displayName}`}
+                          >
+                            <ChevronRight
+                              size={16}
+                              className={`text-slate-400 transition-transform ${
+                                isExpanded ? 'rotate-90 text-brand-teal' : ''
+                              }`}
+                            />
+                            <span className="font-medium text-slate-900 dark:text-white">
+                              {displayName}
+                            </span>
+                            {row.id === currentUser.id && (
+                              <span className="ml-1 inline-flex items-center rounded bg-brand-teal/10 text-brand-teal px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                                You
+                              </span>
+                            )}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 whitespace-nowrap" title={lastSignInFull}>
+                          <span className="relative group/cell inline-block">
+                            {lastSignInRelative}
+                            {row.lastSignInAt != null && (
+                              <span className="pointer-events-none absolute bottom-full mb-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/cell:opacity-100 transition-opacity z-20">
+                                {lastSignInFull}
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <StatusIcon
+                              label={`Model: ${model}`}
+                              icon={Cpu}
+                              active={Boolean(row.selectedModel)}
+                              tone="teal"
+                            />
+                            <StatusIcon
+                              label={row.hasGeminiKey ? 'Gemini API key configured' : 'No Gemini key'}
+                              icon={Key}
+                              active={row.hasGeminiKey}
+                              tone="teal"
+                            />
+                            <StatusIcon
+                              label={row.hasOpenAIKey ? 'OpenAI API key configured' : 'No OpenAI key'}
+                              icon={Sparkles}
+                              active={row.hasOpenAIKey}
+                              tone="teal"
+                            />
+                            <StatusIcon
+                              label={row.isAdmin ? 'Admin' : 'Not an admin'}
+                              icon={Crown}
+                              active={row.isAdmin}
+                              tone="amber"
+                            />
+                            <StatusIcon
+                              label={row.isDisabled ? 'Suspended' : 'Active'}
+                              icon={row.isDisabled ? Lock : Unlock}
+                              active={row.isDisabled}
+                              tone="red"
+                            />
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right relative sticky right-0 bg-white dark:bg-[#161b22] group-hover:bg-gray-50 dark:group-hover:bg-[#0f141c] shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.08)] dark:shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.5)]">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenRowMenu((prev) => (prev === row.id ? null : row.id))
+                            }
+                            className="inline-flex items-center justify-center w-11 h-11 rounded-lg border border-gray-200 dark:border-[#30363d] hover:border-brand-teal bg-white dark:bg-[#0d1117] hover:bg-gray-100 dark:hover:bg-[#21262d] text-slate-600 dark:text-slate-300 hover:text-brand-teal transition-colors"
+                            aria-label={`Actions for ${row.email || row.username || row.id}`}
+                            aria-haspopup="menu"
+                            aria-expanded={openRowMenu === row.id}
+                            title="Actions"
+                          >
+                            <MoreHorizontal size={18} />
+                          </button>
+                          {openRowMenu === row.id && renderRowMenu(row)}
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="bg-gray-50/60 dark:bg-[#0d1117]/60">
+                          <td colSpan={4} className="px-4 pt-1 pb-4">
+                            <dl className="ml-6 grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-3 text-sm">
+                              <div className="flex items-start gap-2">
+                                <AtSign size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                                <div>
+                                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                    Username
+                                  </dt>
+                                  <dd className="text-slate-800 dark:text-slate-100">
+                                    {row.username ? <code>{row.username}</code> : '—'}
+                                  </dd>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <Mail size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                                <div>
+                                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                    Email
+                                  </dt>
+                                  <dd className="text-slate-800 dark:text-slate-100 break-all">
+                                    {row.email || '—'}
+                                  </dd>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <CalendarPlus size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                                <div>
+                                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                    Created
+                                  </dt>
+                                  <dd className="text-slate-800 dark:text-slate-100" title={createdFull}>
+                                    {createdShort}
+                                  </dd>
+                                </div>
+                              </div>
+                            </dl>
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{row.name || '—'}</td>
-                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">
-                      {row.username ? <code>{row.username}</code> : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatTimestamp(row.createdAt)}</td>
-                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatTimestamp(row.lastSignInAt)}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{row.selectedModel || '—'}</td>
-                    <td className="px-4 py-3 text-center">
-                      {row.hasGeminiKey ? (
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" aria-label="Gemini key configured">
-                          <CheckCircle size={14} />
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {row.hasOpenAIKey ? (
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" aria-label="OpenAI key configured">
-                          <CheckCircle size={14} />
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {row.isAdmin ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[11px] font-semibold uppercase">
-                          <Crown size={10} /> Admin
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {row.isDisabled ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-[11px] font-semibold uppercase">
-                          <Lock size={10} /> Off
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right relative">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setOpenRowMenu((prev) => (prev === row.id ? null : row.id))
-                        }
-                        className="inline-flex items-center justify-center w-11 h-11 rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d] text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
-                        aria-label={`Actions for ${row.email || row.username || row.id}`}
-                        aria-haspopup="menu"
-                        aria-expanded={openRowMenu === row.id}
-                      >
-                        <MoreHorizontal size={16} />
-                      </button>
-                      {openRowMenu === row.id && renderRowMenu(row)}
-                    </td>
-                  </tr>
-                ))}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

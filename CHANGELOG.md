@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-21
+### Added
+- **GPT Image 2 and GPT Image Mini** are now available as first-class models. The previous single "GPT Image" entry is split into three tiers in `SUPPORTED_MODELS`:
+  - `openai-2` → **GPT Image 2** (`gpt-image-2`) — OpenAI's flagship image model with 2K/4K resolutions and aspect ratios from 3:1 to 1:3.
+  - `openai-mini` → **GPT Image Mini** (`gpt-image-1-mini`) — budget tier.
+  - `openai` → **GPT Image 1.5** (`gpt-image-1.5`) — retained for backwards compatibility with existing user preferences.
+  All three share a single `apiKeys.openai` slot, so existing keys keep working without re-entry.
+- **Quality control for OpenAI models.** New toolbar dropdown (visible only when `openai-2` or `openai-mini` is selected) with `Auto` / `Low` / `Medium` / `High`. Persisted per-user as `settings.openaiImageQuality` via `UserSettings`, and passed through to both generation and refinement calls. `gpt-image-1.5` ignores this parameter (it doesn't support quality).
+- **Expanded aspect ratios for GPT Image 2.** New `OPENAI_2_ALLOWED_ASPECT_RATIOS` adds `16:9`, `9:16`, `3:1` (banner), and `1:3` (skyscraper) on top of the legacy three. Concrete pixel sizes (e.g. `2048x2048` for 2K square, `2304x768` for 3:1) are picked to satisfy OpenAI's constraints (edges multiples of 16, long:short ≤ 3:1).
+- **Admin users table redesign.** The 11-column table is collapsed to a scannable 4-column layout:
+  - **User** — display name with a rotating chevron that expands an inline details panel showing username, email, and created date (with hover-for-full-timestamp on the shortened date).
+  - **Last seen** — relative time (`2 days ago`, `3 months ago`, `Never`) with a hover popover showing the exact timestamp.
+  - **Status** — row of five 40×40 circular icon pills with hover tooltips for model, Gemini key, OpenAI key, admin role, and suspension state. Active pills are tinted (teal / amber / red); inactive are ghost-dim.
+  - **Actions** — sticky to the right edge with a visible bordered `⋯` button so it's always in view regardless of horizontal scroll.
+
+### Changed
+- `services/openaiService.ts` signature is now `generateOpenAIImage(prompt, config, apiKey, { modelId, quality, systemPrompt })`. `modelId` maps UI ids (`openai-2` / `openai-mini` / `openai`) to OpenAI API model names, and `quality` is only sent to models that actually accept it.
+- `getApiKeyForModel` in `App.tsx` now routes all three OpenAI ids to `apiKeys.openai` — no schema change, no re-entry required.
+- Settings page description for the OpenAI API key now reads "Used by GPT Image 2, GPT Image Mini, and GPT Image 1.5" so the shared-key behaviour is obvious.
+- `services/aspectRatioService.ts` splits the OpenAI allowed-ratio logic by model id so `openai-2` gets the expanded set while `openai` and `openai-mini` stay pinned to the legacy three.
+- Model labels updated across `ControlPanel`, `ImageDisplay`, `RecentGenerations`, and the admin stats service: `openai-2` → "GPT Image 2", `openai-mini` → "GPT Image Mini", `openai` → "GPT Image 1.5".
+- Admin action button is now a bordered pill (`w-11 h-11`), meeting the 44×44 touch-target rule and making the previously-ghosted `⋯` actually discoverable.
+
 ## [0.3.0] - 2026-04-21
 ### Added
 - **Admin usage-stats dashboard.** New `Stats` tab on the Admin page with live metrics aggregated directly from Firestore:

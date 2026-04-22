@@ -16,7 +16,7 @@ import {
   formatDuration,
   getModelSecondsPerGen,
 } from '../services/timeEstimationService';
-import { 
+import {
   Palette, 
   PenTool, 
   Layout, 
@@ -42,7 +42,8 @@ import {
   RotateCcw,
   Play,
   Pause,
-  MousePointer2
+  MousePointer2,
+  Gauge
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 
@@ -69,6 +70,8 @@ interface ControlPanelProps {
   selectedModel: string;
   onResetToDefaults: () => void;
   onModelChange: (modelId: string) => void;
+  openaiQuality?: 'low' | 'medium' | 'high' | 'auto';
+  onOpenAIQualityChange?: (quality: 'low' | 'medium' | 'high' | 'auto') => void;
 }
 
 // Modal Component
@@ -446,7 +449,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   user,
   selectedModel,
   onResetToDefaults,
-  onModelChange
+  onModelChange,
+  openaiQuality = 'auto',
+  onOpenAIQualityChange
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1153,7 +1158,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana Pro',
     'gemini-3.1-flash-image-preview': 'Nano Banana 2',
-    openai: 'GPT Image',
+    'openai-2': 'GPT Image 2',
+    'openai-mini': 'GPT Image Mini',
+    openai: 'GPT Image 1.5',
     'gemini-svg': 'Gemini SVG'
   };
   const modelLabel =
@@ -1368,9 +1375,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   <div className="w-full text-left p-3 text-[11px] text-slate-500 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117]">
                     {isSvgModel
                       ? 'SVG: all ratios available (mapped to viewBox).'
-                      : selectedModel === 'openai'
-                        ? 'Showing only ratios GPT Image outputs natively.'
-                        : 'Showing only ratios Nano Banana models support natively.'}
+                      : selectedModel === 'openai-2'
+                        ? 'Showing ratios GPT Image 2 supports (incl. 2K/4K & 3:1).'
+                        : selectedModel === 'openai' || selectedModel === 'openai-mini'
+                          ? 'Showing only ratios GPT Image outputs natively.'
+                          : 'Showing only ratios Nano Banana models support natively.'}
                   </div>
                 </div>
               )}
@@ -1405,6 +1414,48 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Quality (OpenAI models only — gpt-image-1.5 ignores this but is harmless) */}
+            {(selectedModel === 'openai-2' || selectedModel === 'openai-mini') && onOpenAIQualityChange && (
+              <div className="relative">
+                <DropdownButton
+                  icon={Gauge}
+                  subLabel="Quality"
+                  label={
+                    openaiQuality === 'auto'
+                      ? 'Auto'
+                      : openaiQuality.charAt(0).toUpperCase() + openaiQuality.slice(1)
+                  }
+                  isActive={activeDropdown === 'quality'}
+                  onClick={() => toggleDropdown('quality')}
+                />
+                {activeDropdown === 'quality' && (
+                  <div className="absolute top-full left-0 mt-2 w-56 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+                    {([
+                      { id: 'auto' as const, label: 'Auto', desc: 'Model picks the best' },
+                      { id: 'low' as const, label: 'Low', desc: 'Fastest, cheapest' },
+                      { id: 'medium' as const, label: 'Medium', desc: 'Balanced' },
+                      { id: 'high' as const, label: 'High', desc: 'Best detail, slower' }
+                    ]).map((q) => (
+                      <button
+                        key={q.id}
+                        onClick={() => {
+                          onOpenAIQualityChange(q.id);
+                          setActiveDropdown(null);
+                        }}
+                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${openaiQuality === q.id ? 'text-brand-teal font-semibold' : 'text-slate-700 dark:text-slate-200'}`}
+                      >
+                        <Gauge size={14} className="text-brand-teal" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">{q.label}</span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{q.desc}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="relative group">
               <button

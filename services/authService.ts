@@ -67,6 +67,7 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
     if (s.defaultAspectRatio) settingsClean.defaultAspectRatio = s.defaultAspectRatio;
     if (s.confirmDeleteHistory !== undefined) settingsClean.confirmDeleteHistory = s.confirmDeleteHistory;
     if (s.confirmDeleteCurrent !== undefined) settingsClean.confirmDeleteCurrent = s.confirmDeleteCurrent;
+    if (s.openaiImageQuality) settingsClean.openaiImageQuality = s.openaiImageQuality;
     if (Object.keys(settingsClean).length > 0) clean.settings = settingsClean;
   }
 
@@ -95,7 +96,8 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
       defaultColorSchemeId: savedPrefs.settings?.defaultColorSchemeId,
       defaultAspectRatio: savedPrefs.settings?.defaultAspectRatio,
       confirmDeleteHistory: savedPrefs.settings?.confirmDeleteHistory ?? true,
-      confirmDeleteCurrent: savedPrefs.settings?.confirmDeleteCurrent ?? true
+      confirmDeleteCurrent: savedPrefs.settings?.confirmDeleteCurrent ?? true,
+      openaiImageQuality: savedPrefs.settings?.openaiImageQuality
     },
   };
 };

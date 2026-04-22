@@ -15,13 +15,26 @@ export const GEMINI_ALLOWED_ASPECT_RATIOS = [
   '21:9'
 ] as const;
 
-// OpenAI gpt-image only produces 3 pixel sizes:
+// gpt-image-1.5 and gpt-image-1-mini only produce 3 pixel sizes:
 //   1024x1024 (1:1), 1024x1536 (2:3), 1536x1024 (3:2)
 // Every other ratio silently maps to one of these, so only expose the real outputs.
 export const OPENAI_ALLOWED_ASPECT_RATIOS = [
   '1:1',
   '2:3',
   '3:2'
+] as const;
+
+// gpt-image-2 supports a much wider set. We enumerate the headline ratios we
+// offer in the UI; openaiService picks concrete pixel sizes that satisfy
+// OpenAI's constraints (edges multiples of 16, long:short <= 3:1).
+export const OPENAI_2_ALLOWED_ASPECT_RATIOS = [
+  '1:1',
+  '2:3',
+  '3:2',
+  '9:16',
+  '16:9',
+  '1:3',
+  '3:1'
 ] as const;
 
 const GEMINI_LABELS: Record<string, string> = {
@@ -41,6 +54,16 @@ const OPENAI_LABELS: Record<string, string> = {
   '1:1': 'Square (1:1)',
   '2:3': 'Portrait (2:3)',
   '3:2': 'Landscape (3:2)'
+};
+
+const OPENAI_2_LABELS: Record<string, string> = {
+  '1:1': 'Square (1:1)',
+  '2:3': 'Portrait (2:3)',
+  '3:2': 'Landscape (3:2)',
+  '9:16': 'Tall (9:16)',
+  '16:9': 'Widescreen (16:9)',
+  '1:3': 'Skyscraper (1:3)',
+  '3:1': 'Banner (3:1)'
 };
 
 export const normalizeAspectRatio = (value?: string): string => {
@@ -172,7 +195,11 @@ export const getAspectRatiosForModel = (
     return buildFilteredRatios(GEMINI_ALLOWED_ASPECT_RATIOS, GEMINI_LABELS, source);
   }
 
-  if (modelId === 'openai') {
+  if (modelId === 'openai-2') {
+    return buildFilteredRatios(OPENAI_2_ALLOWED_ASPECT_RATIOS, OPENAI_2_LABELS, source);
+  }
+
+  if (modelId === 'openai' || modelId === 'openai-mini') {
     return buildFilteredRatios(OPENAI_ALLOWED_ASPECT_RATIOS, OPENAI_LABELS, source);
   }
 

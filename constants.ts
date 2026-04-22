@@ -140,9 +140,21 @@ export const SUPPORTED_MODELS = [
     format: 'raster' as const
   },
   {
+    id: 'openai-2',
+    name: 'GPT Image 2',
+    description: 'OpenAI gpt-image-2 \u2014 flagship image model (2K/4K, wide ratios)',
+    format: 'raster' as const
+  },
+  {
+    id: 'openai-mini',
+    name: 'GPT Image Mini',
+    description: 'OpenAI gpt-image-1-mini \u2014 budget-tier image model',
+    format: 'raster' as const
+  },
+  {
     id: 'openai',
-    name: 'GPT Image',
-    description: 'OpenAI gpt-image model',
+    name: 'GPT Image 1.5',
+    description: 'OpenAI gpt-image-1.5 \u2014 previous-generation image model',
     format: 'raster' as const
   },
   {

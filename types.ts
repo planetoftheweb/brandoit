@@ -116,6 +116,11 @@ export interface UserSettings {
   defaultAspectRatio?: string;
   confirmDeleteHistory?: boolean;
   confirmDeleteCurrent?: boolean;
+  /**
+   * OpenAI GPT Image quality setting: 'low' | 'medium' | 'high' | 'auto'.
+   * Only consumed by gpt-image-2 and gpt-image-1-mini; gpt-image-1.5 ignores it.
+   */
+  openaiImageQuality?: 'low' | 'medium' | 'high' | 'auto';
 }
 
 export interface User {

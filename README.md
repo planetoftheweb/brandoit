@@ -20,7 +20,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **✨ Prompt Expansion:** One-click prompt enhancement using AI to generate detailed visual descriptions from simple text.
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
 *   **⚙️ Full Settings Management:** dedicated page for managing API keys, profile settings, and application preferences.
-*   **🔑 BYOK (Bring Your Own Key):** Multi-model keys for Google Gemini and OpenAI GPT-Image 1.5 with per-model labels you can customize in settings.
+*   **🔑 BYOK (Bring Your Own Key):** Multi-model keys for Google Gemini and OpenAI. A single OpenAI key drives three tiers — **GPT Image 2** (flagship, 2K/4K, 3:1 & 1:3 ratios), **GPT Image Mini** (budget), and **GPT Image 1.5** (legacy) — with a per-model **Quality** control (Auto / Low / Medium / High).
 *   **🧠 Refinement Workspace:** Per-image refine model + target size controls, built-in correction analysis prompt generator, and style-reference fallback for difficult recompositions.
 *   **🧬 Versioned Iteration:** Mark-based generation/refinement history with restore, per-refinement deletion, and per-version aspect-ratio tracking so follow-up edits keep the correct size.
 *   **📝 Better Prompt Editing:** Compact refine textbox with optional full-screen prompt editor and keyboard submit shortcut (`Cmd/Ctrl + Enter`).
@@ -29,7 +29,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **⬇️ Unified downloads:** Single download menu on the main preview and in history for PNG, WebP, SVG, or HTML; download-all zips every generation mark; export selected tiles as a ZIP from Recent Generations.
 *   **🖼️ Thumbnail rail:** When a tile has multiple marks, browse and preview versions from a left rail without leaving the main viewport.
 *   **📄 Site footer:** Copyright plus quick links to the changelog and GitHub releases.
-*   **🛡️ Admin panel:** Claims-based admin role (Firebase Auth custom claims, not a hardcoded username) with a paginated user table — clear API keys, wipe system prompts, suspend / unsuspend accounts, promote or demote admins, and conservatively delete user data (Firestore + Storage + Auth). Suspended users are hard-blocked with a clear notice.
+*   **🛡️ Admin panel:** Claims-based admin role (Firebase Auth custom claims, not a hardcoded username) with a compact, information-dense user table — expandable rows for full profile details, icon-based status pills (model, keys, admin, suspension) with hover tooltips, relative "last seen" times, and a sticky action column for clear API keys, wipe system prompts, suspend / unsuspend accounts, promote or demote admins, and conservatively delete user data (Firestore + Storage + Auth). Suspended users are hard-blocked with a clear notice.
 *   **📊 Admin usage stats:** Live dashboard with total images generated, refinements, active users, signups/day and images/day for the last 30 days, breakdowns by model / graphic type / visual style / aspect ratio, and a top-users leaderboard — aggregated directly from Firestore with one `collectionGroup('history')` query.
 
 ## Tech Stack
@@ -40,7 +40,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   **Authentication:** Email/Password & Profile Management
     *   **Firestore:** Real-time NoSQL Database (Normalized Structure)
     *   **Storage:** Profile photos & Asset storage
-*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`, `gemini-2.5-flash`) and OpenAI GPT-Image 1.5
+*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`, `gemini-2.5-flash`) and OpenAI (`gpt-image-2`, `gpt-image-1-mini`, `gpt-image-1.5`)
 *   **Icons:** Lucide React
 *   **Font:** Mona Sans & Inter
 

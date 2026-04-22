@@ -63,7 +63,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   // the user already has any per-model override saved, so existing data is
   // never hidden without explanation.
   const hasPerModelOverride = Object.entries(apiKeys).some(
-    ([key, value]) => key !== 'gemini' && key !== 'openai' && !!value
+    ([key, value]) =>
+      key !== 'gemini' &&
+      key !== 'openai' &&
+      key !== 'openai-2' &&
+      key !== 'openai-mini' &&
+      !!value
   );
   const [showOverrides, setShowOverrides] = useState<boolean>(hasPerModelOverride);
 
@@ -87,7 +92,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setSystemPrompt(user.preferences.systemPrompt || '');
     setShowOverrides(
       Object.entries(keys).some(
-        ([modelId, value]) => modelId !== 'gemini' && modelId !== 'openai' && !!value
+        ([modelId, value]) =>
+          modelId !== 'gemini' &&
+          modelId !== 'openai' &&
+          modelId !== 'openai-2' &&
+          modelId !== 'openai-mini' &&
+          !!value
       )
     );
     loadTeams();
@@ -186,14 +196,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     {
       keyId: 'openai',
       label: 'OpenAI API Key',
-      description: 'Used by GPT Image.',
+      description: 'Used by GPT Image 2, GPT Image Mini, and GPT Image 1.5.',
       placeholder: 'sk-...',
       helpText: 'Create one at platform.openai.com/api-keys.'
     }
   ];
 
   const OVERRIDE_MODELS = SUPPORTED_MODELS.filter(
-    (model) => model.id !== 'gemini' && model.id !== 'openai'
+    (model) =>
+      model.id !== 'gemini' &&
+      model.id !== 'openai' &&
+      model.id !== 'openai-2' &&
+      model.id !== 'openai-mini'
   );
 
   const loadTeams = async () => {
@@ -636,11 +650,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       searchable
                     />
                     <p className="text-xs text-slate-500 mt-1">
-                      {selectedModel === 'openai'
-                        ? 'Showing only ratios GPT Image outputs natively.'
-                        : selectedModel === 'gemini-svg'
-                          ? 'SVG: all ratios available (mapped to viewBox).'
-                          : 'Showing only ratios Nano Banana models support natively.'}
+                      {selectedModel === 'openai-2'
+                        ? 'GPT Image 2: supports 2K/4K and ratios from 3:1 to 1:3.'
+                        : selectedModel === 'openai' || selectedModel === 'openai-mini'
+                          ? 'Showing only ratios GPT Image outputs natively.'
+                          : selectedModel === 'gemini-svg'
+                            ? 'SVG: all ratios available (mapped to viewBox).'
+                            : 'Showing only ratios Nano Banana models support natively.'}
                     </p>
                   </div>
                 </div>

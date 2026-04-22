@@ -470,6 +470,10 @@ const App: React.FC = () => {
       if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
       if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
     }
+    // All OpenAI-family models share one OpenAI API key slot.
+    if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
+      if (user.preferences.apiKeys?.openai) return user.preferences.apiKeys.openai;
+    }
     return undefined;
   };
 
@@ -737,9 +741,17 @@ const App: React.FC = () => {
         let result;
         if (selectedModel === 'gemini-svg') {
           result = await generateSvg(jobConfig, context, customKey, user?.preferences.systemPrompt);
-        } else if (selectedModel === 'openai') {
+        } else if (
+          selectedModel === 'openai' ||
+          selectedModel === 'openai-2' ||
+          selectedModel === 'openai-mini'
+        ) {
           if (!customKey) throw new Error('OpenAI API key is required for image generation.');
-          result = await generateOpenAIImage(structuredPrompt, jobConfig, customKey, user?.preferences.systemPrompt);
+          result = await generateOpenAIImage(structuredPrompt, jobConfig, customKey, {
+            modelId: selectedModel,
+            quality: user?.preferences.settings?.openaiImageQuality || 'auto',
+            systemPrompt: user?.preferences.systemPrompt
+          });
         } else {
           result = await generateGraphic(jobConfig, context, customKey, user?.preferences.systemPrompt, selectedModel);
         }
@@ -879,10 +891,18 @@ const App: React.FC = () => {
       if (selectedModel === 'gemini-svg') {
         const svgCode = currentVersion.svgCode || '';
         result = await refineSvg(svgCode, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
-      } else if (selectedModel === 'openai') {
+      } else if (
+        selectedModel === 'openai' ||
+        selectedModel === 'openai-2' ||
+        selectedModel === 'openai-mini'
+      ) {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
         const refinementRequest = `${structuredPrompt}\nRefinement: ${refinementText}`;
-        result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, user?.preferences.systemPrompt);
+        result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, {
+          modelId: selectedModel,
+          quality: user?.preferences.settings?.openaiImageQuality || 'auto',
+          systemPrompt: user?.preferences.systemPrompt
+        });
       } else {
         result = await refineGraphic(
           currentImage,
@@ -1465,6 +1485,23 @@ const App: React.FC = () => {
     authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   };
 
+  const handleOpenAIQualityChange = (quality: 'low' | 'medium' | 'high' | 'auto') => {
+    if (!user) return;
+    const nextSettings = {
+      ...(user.preferences.settings || { contributeByDefault: false }),
+      openaiImageQuality: quality
+    };
+    const updatedUser = {
+      ...user,
+      preferences: {
+        ...user.preferences,
+        settings: nextSettings
+      }
+    };
+    setUser(updatedUser);
+    authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
+  };
+
   // Suspended-account hard block. A signed-in user with `isDisabled === true`
   // is stopped here before any studio, history, catalog, settings, or admin UI
   // can render. Only a sign-out action is exposed.
@@ -1702,6 +1739,8 @@ const App: React.FC = () => {
             selectedModel={selectedModel}
             onResetToDefaults={handleResetToPreferenceDefaults}
             onModelChange={handleModelChange}
+            openaiQuality={user?.preferences.settings?.openaiImageQuality || 'auto'}
+            onOpenAIQualityChange={user ? handleOpenAIQualityChange : undefined}
           />
 
           {/* Main Content Area */}

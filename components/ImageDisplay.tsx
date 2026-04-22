@@ -134,7 +134,9 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana Pro',
     'gemini-3.1-flash-image-preview': 'Nano Banana 2',
-    openai: 'GPT Image',
+    'openai-2': 'GPT Image 2',
+    'openai-mini': 'GPT Image Mini',
+    openai: 'GPT Image 1.5',
     'gemini-svg': 'Gemini SVG'
   };
 

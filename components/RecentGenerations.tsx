@@ -177,7 +177,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   };
 
   const getModelLabel = (modelId?: string) => {
-    if (modelId === 'openai') return 'GPT Image';
+    if (modelId === 'openai-2') return 'GPT Image 2';
+    if (modelId === 'openai-mini') return 'GPT Image Mini';
+    if (modelId === 'openai') return 'GPT Image 1.5';
     if (modelId === 'gemini-svg') return 'Gemini SVG';
     if (modelId === 'gemini-3.1-flash-image-preview') return 'Nano Banana 2';
     return 'Nano Banana Pro';
