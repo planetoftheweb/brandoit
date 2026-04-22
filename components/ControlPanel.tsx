@@ -1156,34 +1156,70 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
-  const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => (
-    <button
-      onClick={onClick}
-      className={`h-full px-3 lg:px-4 py-2 border rounded-lg flex items-center gap-2 transition-all min-w-[120px] md:min-w-[150px] lg:min-w-[170px] 2xl:min-w-[190px] justify-between group ${
-        isActive 
-          ? 'bg-gray-100 dark:bg-[#1c2128] border-brand-teal text-brand-teal dark:text-brand-teal' 
-          : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
-      }`}
-    >
-      <div className="flex items-center gap-2.5 overflow-hidden text-left w-full">
-        <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
-        <div className="flex flex-col flex-1 min-w-0">
-          <span className="text-[11px] uppercase font-bold text-brand-teal leading-none mb-0.5 hidden sm:block">{subLabel}</span>
-          {typeof label === 'string' || typeof label === 'number'
-            ? <span className="truncate text-base font-semibold text-brand-teal">{label}</span>
-            : <div className="min-w-0 text-brand-teal">{label}</div>}
+  const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => {
+    // Menu-style item (no per-button border). Tiered responsive layout:
+    //   - base  (< md): icon-only, 44x44 tap target, comfortable 20px icon
+    //   - md+  (>=768): icon + single-line label (label truncates)
+    //   - xl+ (>=1280): icon + stacked SUBLABEL/label + chevron
+    //   - 2xl+(>=1536): adds the color-scheme preview strip underneath
+    // Uniform h-11 at every tier so vertical rhythm never jumps.
+    const titleText =
+      subLabel && (typeof label === 'string' || typeof label === 'number')
+        ? `${subLabel}: ${label}`
+        : typeof subLabel === 'string'
+          ? subLabel
+          : undefined;
+    return (
+      <button
+        onClick={onClick}
+        title={titleText}
+        aria-label={titleText}
+        className={`h-11 rounded-md flex items-center transition-colors group shrink-0
+          w-11 justify-center p-0
+          md:w-auto md:justify-start md:px-2.5 md:gap-2
+          xl:px-3 xl:gap-2.5
+          ${
+            isActive
+              ? 'bg-brand-teal/10 text-brand-teal dark:text-brand-teal'
+              : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#1c2128]'
+          }`}
+      >
+        <Icon
+          size={20}
+          className={`shrink-0 ${
+            isActive ? 'text-brand-teal' : 'text-slate-500 dark:text-slate-400 group-hover:text-brand-teal'
+          }`}
+        />
+        <div className="hidden md:flex flex-col flex-1 min-w-0 text-left">
+          <span className="hidden xl:block text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider leading-none mb-0.5">
+            {subLabel}
+          </span>
+          {typeof label === 'string' || typeof label === 'number' ? (
+            <span className={`truncate font-semibold text-sm xl:text-[15px] max-w-[84px] lg:max-w-[120px] xl:max-w-none ${
+              isActive ? 'text-brand-teal' : 'text-slate-700 dark:text-slate-100 group-hover:text-brand-teal'
+            }`}>{label}</span>
+          ) : (
+            <div className={`min-w-0 truncate text-sm xl:text-[15px] max-w-[84px] lg:max-w-[120px] xl:max-w-none ${
+              isActive ? 'text-brand-teal' : 'text-slate-700 dark:text-slate-100 group-hover:text-brand-teal'
+            }`}>{label}</div>
+          )}
           {colors && colors.length > 0 && (
-             <div className="flex h-1 mt-1 rounded-sm overflow-hidden ring-1 ring-black/5 dark:ring-white/10 opacity-80">
-               {colors.map((hex: string, i: number) => (
-                 <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
-               ))}
-             </div>
+            <div className="hidden 2xl:flex h-[3px] mt-1 rounded-sm overflow-hidden ring-1 ring-black/5 dark:ring-white/10 opacity-90">
+              {colors.map((hex: string, i: number) => (
+                <div key={i} className="flex-1 h-full" style={{ backgroundColor: hex }} />
+              ))}
+            </div>
           )}
         </div>
-      </div>
-      <ChevronDown size={14} className={`transition-transform duration-200 text-slate-500 ml-2 ${isActive ? 'rotate-180 text-brand-teal dark:text-brand-teal' : ''}`} />
-    </button>
-  );
+        <ChevronDown
+          size={14}
+          className={`hidden xl:block shrink-0 ml-0.5 transition-transform duration-200 text-slate-400 dark:text-slate-500 ${
+            isActive ? 'rotate-180 text-brand-teal' : ''
+          }`}
+        />
+      </button>
+    );
+  };
 
   const currentType = options.graphicTypes.find(t => t.id === config.graphicTypeId);
   const isSvgModel = SUPPORTED_MODELS.find(m => m.id === selectedModel)?.format === 'vector';
@@ -1284,8 +1320,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] p-4 transition-colors duration-200" ref={containerRef}>
         <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
           
-          {/* 1. Toolbar Controls */}
-          <div className="flex flex-wrap items-center justify-center gap-2 lg:gap-3 2xl:gap-4 w-full">
+          {/* 1. Toolbar Controls — single-row menu bar.
+              Outer wrapper centers content; inner wrapper is an inline-flex
+              that expands to its content but caps at max-w-full so it can
+              scroll horizontally without pushing items off both sides when
+              justified. */}
+          <div className="w-full flex justify-center">
+          <div className="inline-flex flex-nowrap items-center gap-0.5 md:gap-1 xl:gap-1.5 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             
             {/* Graphic Type */}
             <div className="relative">
@@ -1589,17 +1630,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
             )}
 
-            <div className="relative group">
+            {/* Vertical separator between config menu and actions */}
+            <div className="h-6 w-px bg-gray-200 dark:bg-[#30363d] shrink-0 mx-1" aria-hidden="true"></div>
+
+            <div className="relative group shrink-0">
               <button
                 type="button"
                 onClick={() => {
                   setActiveDropdown(null);
                   onResetToDefaults();
                 }}
-                className="h-10 w-10 flex items-center justify-center border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] hover:bg-gray-50 dark:hover:bg-[#161b22] text-slate-600 dark:text-slate-300 rounded-lg transition-all"
+                className="h-11 w-11 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-[#1c2128] text-slate-500 dark:text-slate-400 hover:text-brand-teal transition-colors"
                 title="Reset toolbar to preference defaults"
               >
-                <RotateCcw size={16} className="text-brand-teal dark:text-brand-teal" />
+                <RotateCcw size={20} />
                 <span className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10">
                   Reset defaults
                 </span>
@@ -1607,36 +1651,32 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </div>
 
             {user && (
-              <>
-                <div className="h-8 w-px bg-gray-200 dark:bg-[#30363d] mx-1 hidden sm:block"></div>
-
-                {/* Upload Button - icon only with hover label */}
-                 <div className="relative group">
-                   <input 
-                     type="file" 
-                     ref={fileInputRef} 
-                     className="hidden" 
-                     accept="image/*,application/pdf"
-                     onChange={handleFileChange}
-                   />
-                   <button
-                     onClick={() => fileInputRef.current?.click()}
-                     disabled={isAnalyzing}
-                     className="h-10 w-10 flex items-center justify-center border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] hover:bg-gray-50 dark:hover:bg-[#161b22] text-slate-600 dark:text-slate-300 rounded-lg transition-all"
-                     title="Upload Brand Guidelines (PDF or Image)"
-                   >
-                      {isAnalyzing ? (
-                        <Loader2 size={16} className="animate-spin text-brand-teal dark:text-brand-teal" />
-                      ) : (
-                        <UploadCloud size={16} className="text-brand-teal dark:text-brand-teal" />
-                      )}
-                      <span className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                        Upload brand
-                      </span>
-                   </button>
-                 </div>
-              </>
+              <div className="relative group shrink-0">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept="image/*,application/pdf"
+                  onChange={handleFileChange}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isAnalyzing}
+                  className="h-11 w-11 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-[#1c2128] text-slate-500 dark:text-slate-400 hover:text-brand-teal transition-colors disabled:opacity-50"
+                  title="Upload Brand Guidelines (PDF or Image)"
+                >
+                  {isAnalyzing ? (
+                    <Loader2 size={20} className="animate-spin text-brand-teal" />
+                  ) : (
+                    <UploadCloud size={20} />
+                  )}
+                  <span className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                    Upload brand
+                  </span>
+                </button>
+              </div>
             )}
+          </div>
           </div>
 
           {/* 2. Prompt Input Area */}

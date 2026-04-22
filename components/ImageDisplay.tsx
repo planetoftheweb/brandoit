@@ -1285,8 +1285,11 @@ ${version.svgCode}
               <DownloadMenu
                 mode="this-and-all"
                 currentGeneration={generation}
-                allGenerations={history}
-                allLabel={history.length > 0 ? `Download all (${history.length})` : undefined}
+                // In the main tile viewer, "Download all" should scope to the
+                // current tile only (all marks/versions inside this generation),
+                // not the entire history gallery.
+                allGenerations={[generation]}
+                allLabel="Download all in this tile"
                 triggerClassName="group/btn bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition inline-flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
                 triggerTitle="Download"
                 icon={<Download size={18} />}
