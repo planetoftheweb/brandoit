@@ -79,6 +79,7 @@ const normalizeVersion = (
     svgCode: version.svgCode,
     refinementPrompt: version.refinementPrompt,
     parentVersionId: version.parentVersionId,
+    modelId: version.modelId,
   };
 };
 
@@ -122,6 +123,7 @@ const normalizeGeneration = (input: Partial<Generation>): Generation => {
     modelId: input.modelId || 'gemini',
     versions: safeVersions,
     currentVersionIndex,
+    comparisonBatchId: input.comparisonBatchId,
   };
 };
 
@@ -294,7 +296,8 @@ const hydrateGenerationFromRemote = (docId: string, data: any): Generation => {
     config: data.config || EMPTY_CONFIG,
     modelId: data.modelId || 'gemini',
     versions: Array.isArray(data.versions) ? data.versions : [],
-    currentVersionIndex: data.currentVersionIndex
+    currentVersionIndex: data.currentVersionIndex,
+    comparisonBatchId: data.comparisonBatchId,
   });
 };
 
@@ -332,7 +335,8 @@ export const createVersionFromImage = async (
   type: 'generation' | 'refinement',
   refinementPrompt?: string,
   parentVersionId?: string,
-  aspectRatio?: string
+  aspectRatio?: string,
+  modelId?: string
 ): Promise<GenerationVersion> => {
   const isSvg = image.mimeType === 'image/svg+xml';
   const id = `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -351,6 +355,7 @@ export const createVersionFromImage = async (
       svgCode: image.svgCode,
       refinementPrompt,
       parentVersionId,
+      modelId,
     };
   }
 
@@ -367,15 +372,21 @@ export const createVersionFromImage = async (
     aspectRatio,
     refinementPrompt,
     parentVersionId,
+    modelId,
   };
 };
 
 export const createGeneration = async (
   image: GeneratedImage,
   config: GenerationConfig,
-  modelId: string
+  modelId: string,
+  comparisonBatchId?: string
 ): Promise<Generation> => {
-  const version = await createVersionFromImage(image, 1, 'generation', undefined, undefined, config.aspectRatio);
+  // First version inherits the Generation's primary model. For comparison
+  // tiles, subsequent versions added by App.tsx will pass their own modelId.
+  const version = await createVersionFromImage(
+    image, 1, 'generation', undefined, undefined, config.aspectRatio, modelId
+  );
   return {
     id: generateId(),
     createdAt: Date.now(),
@@ -383,6 +394,7 @@ export const createGeneration = async (
     modelId,
     versions: [version],
     currentVersionIndex: 0,
+    comparisonBatchId,
   };
 };
 

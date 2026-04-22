@@ -1,12 +1,22 @@
 import React from 'react';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square } from 'lucide-react';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getLatestVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { DownloadMenu } from './DownloadMenu';
+
+interface RecentGenerationsMarkRef {
+  generationId: string;
+  versionId: string;
+  imageUrl: string;
+  mimeType: string;
+  modelId: string;
+  markLabel: string;
+  aspectRatio?: string;
+}
 
 interface RecentGenerationsProps {
   history: Generation[];
@@ -18,13 +28,22 @@ interface RecentGenerationsProps {
     graphicTypes: GraphicType[];
     aspectRatios: AspectRatioOption[];
   };
+  /** True when the app is in compare-pick mode — tile clicks should pick marks. */
+  isComparePicking?: boolean;
+  /** Pick the latest mark of a tile as an A/B for comparison. */
+  onPickMark?: (ref: RecentGenerationsMarkRef) => void;
+  /** Batch ids for currently-picked A/B marks, used to render "picked" badge. */
+  pickedMarkIds?: { a?: string; b?: string };
 }
 
 export const RecentGenerations: React.FC<RecentGenerationsProps> = ({ 
   history, 
   onSelect,
   onDelete,
-  options
+  options,
+  isComparePicking,
+  onPickMark,
+  pickedMarkIds
 }) => {
   const [copyLoadingId, setCopyLoadingId] = React.useState<string | null>(null);
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
@@ -300,15 +319,41 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         {history.map((gen) => {
           const latestVersion = getLatestVersion(gen);
           const versionCount = gen.versions.length;
+          const batchId = gen.comparisonBatchId;
+          // New behavior: a comparison tile keeps every model's marks inside
+          // itself, so we detect "compare" by counting distinct per-version
+          // models within the tile. Legacy behavior (one tile per model with a
+          // shared batchId) is still handled below as a fallback so old
+          // history items keep their badge.
+          const distinctTileModelIds = Array.from(
+            new Set(gen.versions.map((v) => v.modelId).filter(Boolean) as string[])
+          );
+          const isInTileComparison = distinctTileModelIds.length > 1;
+          const legacyBatchSiblings = batchId
+            ? history.filter((g) => g.comparisonBatchId === batchId).length
+            : 0;
+          const showCompareBadge = isInTileComparison || legacyBatchSiblings > 1;
+          const compareCount = isInTileComparison
+            ? distinctTileModelIds.length
+            : legacyBatchSiblings;
+          const compareLabel = isInTileComparison
+            ? `${compareCount} models`
+            : `${compareCount}`;
+          const isPickedSide: 'A' | 'B' | null =
+            pickedMarkIds?.a && pickedMarkIds.a === `${gen.id}|${latestVersion.id}` ? 'A' :
+            pickedMarkIds?.b && pickedMarkIds.b === `${gen.id}|${latestVersion.id}` ? 'B' : null;
 
           return (
             <div 
               key={gen.id} 
               className={`group relative bg-white dark:bg-[#161b22] border rounded-xl overflow-visible shadow-sm hover:shadow-lg transition-all ${
-                selectionMode && selectedIds.includes(gen.id)
-                  ? 'border-brand-teal ring-2 ring-brand-teal/50 dark:ring-brand-teal/40'
-                  : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal'
+                isPickedSide
+                  ? 'border-amber-400 ring-2 ring-amber-400/40'
+                  : selectionMode && selectedIds.includes(gen.id)
+                    ? 'border-brand-teal ring-2 ring-brand-teal/50 dark:ring-brand-teal/40'
+                    : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal'
               }`}
+              data-comparison-batch={batchId || undefined}
             >
               {selectionMode && (
                 <div className="absolute top-2 left-2 z-20">
@@ -331,6 +376,28 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 <div className={`absolute top-2 z-10 ${selectionMode ? 'left-14' : 'left-2'}`}>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/90 text-white shadow-sm">
                     {latestVersion.label}
+                  </span>
+                </div>
+              )}
+              {showCompareBadge && (
+                <div
+                  className={`absolute z-10 ${versionCount > 1 ? 'top-8' : 'top-2'} ${selectionMode ? 'left-14' : 'left-2'}`}
+                  title={
+                    isInTileComparison
+                      ? `Comparison tile — ${distinctTileModelIds.map((id) => getModelLabel(id)).join(' vs ')}`
+                      : `Part of a comparison run with ${legacyBatchSiblings} tiles`
+                  }
+                >
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-teal/90 text-white shadow-sm">
+                    <GitCompare size={10} />
+                    Compare · {compareLabel}
+                  </span>
+                </div>
+              )}
+              {isPickedSide && (
+                <div className="absolute top-2 right-2 z-20 pointer-events-none">
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-400 text-[11px] font-bold text-slate-900 shadow">
+                    {isPickedSide}
                   </span>
                 </div>
               )}
@@ -465,9 +532,25 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 )}
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={(event) => {
                     if (selectionMode) {
                       toggleSelect(gen.id);
+                      return;
+                    }
+                    if (onPickMark && (event.shiftKey || isComparePicking)) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onPickMark({
+                        generationId: gen.id,
+                        versionId: latestVersion.id,
+                        imageUrl: latestVersion.imageUrl,
+                        mimeType: latestVersion.mimeType,
+                        // Per-version model wins for mixed-model tiles so the
+                        // slider labels the right side correctly.
+                        modelId: latestVersion.modelId || gen.modelId,
+                        markLabel: latestVersion.label,
+                        aspectRatio: latestVersion.aspectRatio || gen.config.aspectRatio,
+                      });
                       return;
                     }
                     onSelect(gen);
@@ -476,9 +559,11 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   className={
                     selectionMode
                       ? 'absolute inset-0 bg-black/25 flex items-center justify-center opacity-100 transition-colors'
-                      : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100'
+                      : isComparePicking
+                        ? 'absolute inset-0 bg-black/0 hover:bg-brand-teal/30 transition-colors flex items-center justify-center'
+                        : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100'
                   }
-                  aria-label={selectionMode ? 'Toggle selection' : 'Restore generation'}
+                  aria-label={selectionMode ? 'Toggle selection' : isComparePicking ? 'Pick this tile to compare' : 'Restore generation'}
                 >
                   <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
                     {selectionMode ? (
@@ -507,9 +592,20 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                     {getLabel(gen.config.visualStyleId, options.visualStyles)}
                   </span>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
-                    {getModelLabel(gen.modelId)}
-                  </span>
+                  {isInTileComparison ? (
+                    distinctTileModelIds.map((modelId) => (
+                      <span
+                        key={modelId}
+                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40"
+                      >
+                        {getModelLabel(modelId)}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
+                      {getModelLabel(gen.modelId)}
+                    </span>
+                  )}
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
                     {formatTimestamp(gen.createdAt)}
                   </span>

@@ -1,15 +1,32 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2 } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCurrentVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { webpToPngBlob } from '../services/imageConversionService';
 import { sanitizeSvg } from '../services/svgService';
-import { SUPPORTED_MODELS } from '../constants';
+import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
 import { normalizeAspectRatio } from '../services/aspectRatioService';
 import { RichSelect, RichSelectOption } from './RichSelect';
 import { DownloadMenu } from './DownloadMenu';
+import { JuxtaposeSlider } from './JuxtaposeSlider';
+
+export interface ImageDisplayMarkRef {
+  generationId: string;
+  versionId: string;
+  imageUrl: string;
+  mimeType: string;
+  modelId: string;
+  markLabel: string;
+  aspectRatio?: string;
+}
+
+export interface ImageDisplayComparisonState {
+  mode: 'idle' | 'picking';
+  a: ImageDisplayMarkRef | null;
+  b: ImageDisplayMarkRef | null;
+}
 
 interface ImageDisplayProps {
   generation: Generation | null;
@@ -31,6 +48,10 @@ interface ImageDisplayProps {
     aspectRatios: AspectRatioOption[];
   };
   history?: Generation[];
+  comparisonState?: ImageDisplayComparisonState;
+  onEnterComparePicker?: (seed?: ImageDisplayMarkRef) => void;
+  onExitComparePicker?: () => void;
+  onPickMark?: (ref: ImageDisplayMarkRef) => void;
 }
 
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
@@ -47,8 +68,63 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onModelChange,
   resizeAspectRatios,
   options,
-  history = []
+  history = [],
+  comparisonState,
+  onEnterComparePicker,
+  onExitComparePicker,
+  onPickMark,
 }) => {
+  const isCompareMode = comparisonState?.mode === 'picking';
+  const comparisonA = comparisonState?.a || null;
+  const comparisonB = comparisonState?.b || null;
+  const isComparing = !!(comparisonA && comparisonB);
+  const handleMarkActivate = (
+    event: React.MouseEvent,
+    ref: ImageDisplayMarkRef,
+    onNormalClick: () => void
+  ) => {
+    if (onPickMark && (event.shiftKey || isCompareMode)) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Shift-click should feel like "compare this against what I'm currently
+      // looking at". If we're not already in compare mode and a committed
+      // mark exists, seed A with the committed mark and immediately use the
+      // shift-clicked mark as B.
+      const isSameMark = (a: ImageDisplayMarkRef, b: ImageDisplayMarkRef) =>
+        a.generationId === b.generationId && a.versionId === b.versionId;
+      if (
+        event.shiftKey &&
+        !isCompareMode &&
+        !isComparing &&
+        currentMarkRef &&
+        !isSameMark(currentMarkRef, ref)
+      ) {
+        onPickMark(currentMarkRef);
+      }
+      onPickMark(ref);
+      return;
+    }
+    onNormalClick();
+    // First-run discoverability nudge: the compare feature is otherwise easy
+    // to miss. Flash a small hint when a thumbnail is normal-clicked so the
+    // user learns the shift-click shortcut. Suppressed while already picking
+    // or while a comparison is already on screen.
+    if (onPickMark && !isCompareMode && !isComparing) {
+      if (compareHintTimerRef.current) {
+        window.clearTimeout(compareHintTimerRef.current);
+      }
+      setCompareHintVisible(true);
+      compareHintTimerRef.current = window.setTimeout(() => {
+        setCompareHintVisible(false);
+        compareHintTimerRef.current = null;
+      }, 4000);
+    }
+  };
+  const isMarkPicked = (genId: string, verId: string): 'a' | 'b' | null => {
+    if (comparisonA && comparisonA.generationId === genId && comparisonA.versionId === verId) return 'a';
+    if (comparisonB && comparisonB.generationId === genId && comparisonB.versionId === verId) return 'b';
+    return null;
+  };
   const [refinementInput, setRefinementInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [noticeTimer, setNoticeTimer] = useState<number | null>(null);
@@ -70,11 +146,36 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   // popover. Rendered at the rail-outer level so it can escape the inner
   // scroller's overflow clip without needing position: fixed.
   const [popoverTop, setPopoverTop] = useState<number>(0);
+  // Ephemeral "shift-click another to compare" hint shown for ~4s after the
+  // user clicks a thumbnail normally. Resets every time a new thumbnail is
+  // clicked. Intentionally suppressed while already in compare-picker mode.
+  const [compareHintVisible, setCompareHintVisible] = useState(false);
+  const compareHintTimerRef = useRef<number | null>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const railInnerRef = useRef<HTMLDivElement>(null);
 
   const version = generation ? getCurrentVersion(generation) : null;
   const isSvg = version?.mimeType === 'image/svg+xml';
+
+  // Turn the currently-committed version into a MarkRef so the Compare button
+  // can hand it off as the pre-seeded "A" side. Users enter compare mode
+  // while already looking at a specific mark, so it's almost always the thing
+  // they want to be one half of the comparison.
+  const currentMarkRef: ImageDisplayMarkRef | null = generation && version
+    ? {
+        generationId: generation.id,
+        versionId: version.id,
+        imageUrl: version.imageUrl,
+        mimeType: version.mimeType,
+        modelId: version.modelId || generation.modelId,
+        markLabel: version.label,
+        aspectRatio: version.aspectRatio || generation.config.aspectRatio,
+      }
+    : null;
+  const handleEnterCompareFromButton = () => {
+    if (!onEnterComparePicker) return;
+    onEnterComparePicker(currentMarkRef || undefined);
+  };
 
   useEffect(() => {
     return () => {
@@ -96,6 +197,16 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   useEffect(() => {
     setHoveredVersionIdx(null);
   }, [generation?.id]);
+
+  // Clear any pending compare-hint timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (compareHintTimerRef.current) {
+        window.clearTimeout(compareHintTimerRef.current);
+        compareHintTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -139,11 +250,43 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     openai: 'GPT Image 1.5',
     'gemini-svg': 'Gemini SVG'
   };
+  // Compact labels used in the thumbnail rail chip and tight UI surfaces
+  // where the full marketing name would wrap or get clipped.
+  const modelShortLabelMap: Record<string, string> = {
+    gemini: 'Nano Pro',
+    'gemini-3.1-flash-image-preview': 'Nano 2',
+    'openai-2': 'GPT 2',
+    'openai-mini': 'GPT Mini',
+    openai: 'GPT 1.5',
+    'gemini-svg': 'SVG'
+  };
 
   const getLabel = (id: string | undefined, list: any[]) => {
     if (!id) return '';
     const item = list.find((i: any) => i.id === id || i.value === id);
     return item?.name || item?.label || id;
+  };
+
+  /**
+   * Returns CSS-ready dimensions for the thumbnail hover preview so it shows
+   * the *actual* shape of the generated image instead of a black-letterboxed
+   * square. Landscape/wide ratios render at full width; portrait/tall ratios
+   * are width-clamped so the popover doesn't get absurdly tall.
+   */
+  const getHoverPreviewStyle = (ratioStr?: string | null): React.CSSProperties => {
+    const MAX_W = 320;
+    const MAX_H = 360;
+    const parsed = /^(\d+(?:\.\d+)?)[:xX](\d+(?:\.\d+)?)$/.exec(String(ratioStr || '').trim());
+    if (!parsed) return { width: MAX_W, aspectRatio: '1 / 1' };
+    const w = parseFloat(parsed[1]);
+    const h = parseFloat(parsed[2]);
+    if (!w || !h) return { width: MAX_W, aspectRatio: '1 / 1' };
+    const r = w / h;
+    const heightIfFullW = MAX_W / r;
+    if (heightIfFullW <= MAX_H) {
+      return { width: MAX_W, aspectRatio: `${w} / ${h}` };
+    }
+    return { width: Math.round(MAX_H * r), aspectRatio: `${w} / ${h}` };
   };
 
   const getColors = (id: string | undefined) => {
@@ -463,9 +606,24 @@ ${version.svgCode}
   const refineModelOptions = SUPPORTED_MODELS.filter((model) =>
     isSvg ? true : model.format !== 'vector'
   );
-  const safeRefineModelId = refineModelOptions.some((model) => model.id === selectedModel)
-    ? selectedModel
-    : refineModelOptions[0]?.id || selectedModel;
+  // Default the refine model to whichever model produced the active version.
+  // For comparison tiles this means switching between marks made by Nano
+  // Banana Pro vs GPT Image 2 also flips the refine dropdown to that model,
+  // which is what users intuitively want ("refine THIS image"). Falls back
+  // to the existing selection or the tile's primary model if nothing matches.
+  const versionModelId = version?.modelId;
+  const tileModelId = generation?.modelId;
+  const preferredRefineModelId = (() => {
+    if (versionModelId && refineModelOptions.some((m) => m.id === versionModelId)) {
+      return versionModelId;
+    }
+    if (refineModelOptions.some((m) => m.id === selectedModel)) return selectedModel;
+    if (tileModelId && refineModelOptions.some((m) => m.id === tileModelId)) {
+      return tileModelId;
+    }
+    return refineModelOptions[0]?.id || selectedModel;
+  })();
+  const safeRefineModelId = preferredRefineModelId;
 
   useEffect(() => {
     if (!generation || !version) return;
@@ -508,6 +666,13 @@ ${version.svgCode}
 
   const cfg = generation.config;
   const hasMultipleVersions = generation.versions.length > 1;
+  // True when this tile holds versions from more than one model (i.e. a
+  // comparison run). Triggers the per-thumb model chip + mixed-model badge
+  // in the details panel.
+  const distinctVersionModels = new Set(
+    generation.versions.map((v) => v.modelId).filter(Boolean) as string[]
+  );
+  const hasMixedModels = distinctVersionModels.size > 1;
   const resizeSourceAspectRatio = normalizeAspectRatio(version.aspectRatio || generation.config.aspectRatio || '');
   const resizeSourceLabel = getLabel(resizeSourceAspectRatio, resizeAspectRatios) || resizeSourceAspectRatio;
   const resizeAspectLabel = getLabel(resizeAspectRatio, resizeAspectRatios) || resizeAspectRatio;
@@ -519,7 +684,8 @@ ${version.svgCode}
   const refineModelSelectOptions: RichSelectOption[] = refineModelOptions.map((model) => ({
     value: model.id,
     label: modelLabelMap[model.id] || model.name,
-    description: model.description
+    description: model.description,
+    group: model.group
   }));
   const resizeTargetOptions = resizeAspectRatios.reduce<RichSelectOption[]>((acc, ratio) => {
     const normalizedValue = normalizeAspectRatio(ratio.value);
@@ -535,19 +701,20 @@ ${version.svgCode}
     return acc;
   }, []);
 
-  const ActionButton = ({ onClick, title, children, tooltip, variant = 'default' }: {
+  const ActionButton = ({ onClick, title, children, tooltip, variant = 'default', className: extraClass }: {
     onClick: () => void;
     title: string;
     children: React.ReactNode;
     tooltip: string;
     variant?: 'default' | 'danger';
+    className?: string;
   }) => (
     <button 
       onClick={onClick}
       className={`group/btn ${variant === 'danger'
         ? 'bg-white/85 dark:bg-[#2b1c1c]/85 border border-red-200/80 dark:border-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-600 hover:border-red-600 hover:text-white'
         : 'bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white'
-      } p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative`}
+      } p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative ${extraClass || ''}`}
       title={title}
     >
       {children}
@@ -631,12 +798,41 @@ ${version.svgCode}
         </div>
       )}
 
+      {isCompareMode && (
+        <div className="mx-4 md:mx-8 mt-2 px-3 py-2 rounded-lg border border-brand-teal/40 bg-brand-teal/10 text-brand-teal text-sm font-medium flex items-center justify-between gap-3 animate-in fade-in duration-150">
+          <span className="inline-flex items-center gap-2">
+            <GitCompare size={15} />
+            {comparisonA
+              ? 'Pick the second mark to compare'
+              : 'Pick two marks to compare — click any thumbnail in the rail or a tile below'}
+          </span>
+          {onExitComparePicker && (
+            <button
+              type="button"
+              onClick={onExitComparePicker}
+              className="text-[11px] uppercase tracking-wider font-bold text-brand-teal/80 hover:text-brand-teal underline-offset-2 hover:underline"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Main Viewport — the thumbnail rail (when multiple versions exist)
           lives inside the same centered row as the image card so its height
           tracks the image, not the full viewport. This avoids a tall,
           mostly-empty rail when there are only a handful of marks. */}
       <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center min-h-0">
-        <div className="flex items-stretch gap-3 max-w-full max-h-full">
+        {/* Keep a concrete row width so compare mode can't shrink-wrap around
+            the slider surface. Without `w-full`, this row can collapse to the
+            intrinsic width of its children (`rail + constrained slider`). */}
+        <div
+          className={`w-full min-w-0 flex items-stretch gap-3 max-h-full ${
+            hasMultipleVersions
+              ? 'mx-auto max-w-[calc(80rem+124px+0.75rem)]'
+              : 'justify-center'
+          }`}
+        >
 
           {/* Thumbnail rail — outer div has no intrinsic height (its scroller
               is absolutely positioned out of flow), so `items-stretch` above
@@ -652,10 +848,56 @@ ${version.svgCode}
                 role="listbox"
                 aria-label="Generation versions"
               >
+                {/* Persistent "Compare" affordance at the top of the rail.
+                    Clicking toggles compare-picker mode so users who don't
+                    realize the hidden toolbar button or the shift-click
+                    shortcut exist still have a visible path to the slider.
+                    Sticky so it stays anchored while scrolling long rails. */}
+                {onEnterComparePicker && onExitComparePicker && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isCompareMode || isComparing) {
+                        onExitComparePicker();
+                      } else {
+                        handleEnterCompareFromButton();
+                      }
+                    }}
+                    title={
+                      isCompareMode
+                        ? 'Cancel — exit compare mode'
+                        : isComparing
+                          ? 'Close the comparison viewer'
+                          : 'Open compare: click two marks (or Shift-click to pick without toggling)'
+                    }
+                    className={`sticky top-0 z-10 -mx-2 -mt-2 mb-1 px-2 py-1.5 flex items-center gap-1.5 justify-center text-[11px] font-bold uppercase tracking-wider border-b transition-colors ${
+                      isCompareMode || isComparing
+                        ? 'bg-brand-teal text-white border-brand-teal hover:bg-brand-teal/90'
+                        : 'bg-gray-100 dark:bg-[#161b22] text-slate-600 dark:text-slate-300 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal/10 hover:text-brand-teal hover:border-brand-teal/40'
+                    }`}
+                  >
+                    <GitCompare size={12} />
+                    {isCompareMode ? 'Cancel' : isComparing ? 'Close' : 'Compare'}
+                  </button>
+                )}
                 {generation.versions.map((v, idx) => {
                   const isCommitted = idx === generation.currentVersionIndex;
                   const isHovered = idx === hoveredVersionIdx;
                   const isSvgThumb = v.mimeType === 'image/svg+xml';
+                  const pickSide = isMarkPicked(generation.id, v.id);
+                  // Per-version model wins over the tile's primary model so
+                  // comparison runs (mixed-model tiles) pick the right model
+                  // for the slider label / refine fan-out.
+                  const thumbModelId = v.modelId || generation.modelId;
+                  const markRef: ImageDisplayMarkRef = {
+                    generationId: generation.id,
+                    versionId: v.id,
+                    imageUrl: v.imageUrl,
+                    mimeType: v.mimeType,
+                    modelId: thumbModelId,
+                    markLabel: v.label,
+                    aspectRatio: v.aspectRatio || generation.config.aspectRatio,
+                  };
                   const handleEnter: React.MouseEventHandler<HTMLButtonElement> = (event) => {
                     setHoveredVersionIdx(idx);
                     const btn = event.currentTarget;
@@ -686,13 +928,17 @@ ${version.svgCode}
                       onMouseEnter={handleEnter}
                       onFocus={handleFocus}
                       onBlur={() => setHoveredVersionIdx((prev) => (prev === idx ? null : prev))}
-                      onClick={() => onVersionChange(idx)}
+                      onClick={(event) => handleMarkActivate(event, markRef, () => onVersionChange(idx))}
                       className={`relative shrink-0 w-full aspect-square rounded-md overflow-hidden border transition-all ${
-                        isCommitted
-                          ? 'border-brand-teal ring-2 ring-brand-teal/30'
-                          : isHovered
-                            ? 'border-brand-teal/70'
-                            : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal/40'
+                        pickSide
+                          ? 'border-2 border-amber-400 ring-2 ring-amber-400/50 ring-offset-2 ring-offset-gray-50 dark:ring-offset-[#0d1117]'
+                          : isCompareMode
+                            ? 'border-dashed border-brand-teal/60 hover:border-brand-teal'
+                            : isCommitted
+                              ? 'border-[3px] border-brand-teal ring-2 ring-brand-teal/50 ring-offset-2 ring-offset-gray-50 dark:ring-offset-[#0d1117] shadow-lg shadow-brand-teal/20'
+                              : isHovered
+                                ? 'border-brand-teal/70'
+                                : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal/40'
                       }`}
                     >
                       {isSvgThumb && v.svgCode ? (
@@ -710,10 +956,50 @@ ${version.svgCode}
                       ) : (
                         <div className="w-full h-full bg-gray-100 dark:bg-[#161b22]" />
                       )}
+                      {pickSide && (
+                        <span className="absolute top-1 left-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-400 text-[10px] font-bold text-slate-900 shadow">
+                          {pickSide.toUpperCase()}
+                        </span>
+                      )}
+                      {isCommitted && !pickSide && (
+                        <span
+                          aria-hidden="true"
+                          className="absolute top-1 right-1 inline-flex items-center justify-center w-2.5 h-2.5 rounded-full bg-brand-teal shadow ring-2 ring-white dark:ring-[#0d1117]"
+                          title="Currently shown"
+                        />
+                      )}
+                      {hasMixedModels && thumbModelId && (
+                        <span
+                          className="absolute bottom-1 left-1 right-1 inline-flex items-center justify-center px-1 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-black/70 text-white shadow truncate"
+                          title={modelLabelMap[thumbModelId] || thumbModelId}
+                        >
+                          {modelShortLabelMap[thumbModelId] || modelLabelMap[thumbModelId] || thumbModelId}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
               </div>
+
+              {/* Ephemeral "shift-click another to compare" hint. Pops up for
+                  ~4s after a normal thumbnail click so users discover the
+                  compare shortcut without a modal/onboarding flow. Anchored
+                  to the bottom of the rail so it never overlaps thumbs. */}
+              {compareHintVisible && onPickMark && !isCompareMode && !isComparing && (
+                <div
+                  className="pointer-events-none absolute left-full ml-3 bottom-2 z-20 animate-in fade-in slide-in-from-left-2 duration-200"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="px-3 py-2 rounded-lg bg-slate-900 dark:bg-[#161b22] text-white text-xs font-medium shadow-lg border border-slate-800 dark:border-[#30363d] whitespace-nowrap flex items-center gap-2">
+                    <GitCompare size={13} className="text-brand-teal" />
+                    <span>
+                      <span className="text-brand-teal font-bold">Shift-click</span>{' '}
+                      another thumbnail to compare
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Floating hover/focus preview — rendered at the rail-outer
                   level so the inner scroller's overflow clip can't eat it.
@@ -723,14 +1009,21 @@ ${version.svgCode}
                 const v = generation.versions[hoveredVersionIdx];
                 const isCommitted = hoveredVersionIdx === generation.currentVersionIndex;
                 const isSvgThumb = v.mimeType === 'image/svg+xml';
+                const previewStyle = getHoverPreviewStyle(v.aspectRatio || generation.config.aspectRatio);
                 return (
                   <div
                     className="pointer-events-none absolute left-full ml-3 -translate-y-1/2 z-30 animate-in fade-in zoom-in-95 duration-150"
                     style={{ top: popoverTop }}
                     aria-hidden="true"
                   >
-                    <div className="w-[280px] bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg shadow-2xl overflow-hidden">
-                      <div className="aspect-square bg-gray-50 dark:bg-[#0d1117] flex items-center justify-center">
+                    <div
+                      className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg shadow-2xl overflow-hidden"
+                      style={{ width: previewStyle.width }}
+                    >
+                      <div
+                        className="bg-gray-50 dark:bg-[#0d1117] flex items-center justify-center"
+                        style={{ aspectRatio: previewStyle.aspectRatio }}
+                      >
                         {isSvgThumb && v.svgCode ? (
                           <div
                             className="w-full h-full bg-white flex items-center justify-center p-3 [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
@@ -740,7 +1033,7 @@ ${version.svgCode}
                           <img
                             src={v.imageUrl}
                             alt=""
-                            className="max-w-full max-h-full object-contain"
+                            className="w-full h-full object-contain"
                           />
                         ) : null}
                       </div>
@@ -759,14 +1052,63 @@ ${version.svgCode}
             </div>
           )}
 
-          <div className={`relative group ${isSvg ? 'w-full max-w-5xl' : 'max-w-full max-h-full'}`}>
+          {/* Keep preview + rail as one centered block. Using `flex-1` here
+              stretches the preview column across all remaining width, which
+              makes `items-start` look like a global left align and
+              `items-center` create a big gap from the rail. */}
+          <div className="min-w-0 w-full max-w-7xl flex flex-col items-center">
+            {/* Comparison header lives OUTSIDE the shadow card so the card itself
+                stays dedicated to the image surface. The old layout nested the
+                header + an inner p-4 wrapper INSIDE the card, which robbed the
+                slider of a meaningful chunk of its own footprint. */}
+            {isComparing && comparisonA && comparisonB && (
+              <div className="mb-3 w-full flex items-center justify-between gap-3 flex-wrap">
+                <div className="inline-flex items-center gap-2 text-sm font-semibold text-brand-teal min-w-0 flex-wrap">
+                  <GitCompare size={16} />
+                  <span>Comparing</span>
+                  <span className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs truncate max-w-[280px]">
+                    {modelLabelMap[comparisonA.modelId] || comparisonA.modelId} · {comparisonA.markLabel}
+                  </span>
+                  <span className="text-slate-400">vs</span>
+                  <span className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs truncate max-w-[280px]">
+                    {modelLabelMap[comparisonB.modelId] || comparisonB.modelId} · {comparisonB.markLabel}
+                  </span>
+                </div>
+                {onExitComparePicker && (
+                  <button
+                    type="button"
+                    onClick={onExitComparePicker}
+                    title="Close the comparison viewer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 bg-gray-100 dark:bg-[#21262d] hover:bg-gray-200 dark:hover:bg-[#30363d] transition-colors border border-gray-200 dark:border-[#30363d]"
+                  >
+                    <X size={14} />
+                    Close comparison
+                  </button>
+                )}
+              </div>
+            )}
+
+          <div className={`relative group ${isSvg || isComparing ? 'w-full' : 'max-w-full max-h-full'}`}>
           <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-visible border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
 
-            {/* Main viewport renders only the committed version. The
-                thumbnail rail's hover popover provides the sneak-peek; a
-                click commits the mark and swaps the large preview. */}
-            {isSvg && version.svgCode ? (
+            {/* Main viewport renders the committed version — OR, when two
+                marks have been picked for comparison, the Juxtapose slider
+                fills the same shadow card directly (no inner padding, no
+                embedded header) so it gets the same footprint as the plain
+                preview. */}
+            {isComparing && comparisonA && comparisonB ? (
+              <JuxtaposeSlider
+                imageA={comparisonA.imageUrl}
+                imageB={comparisonB.imageUrl}
+                labelA={`${modelLabelMap[comparisonA.modelId] || comparisonA.modelId} · ${comparisonA.markLabel}`}
+                labelB={`${modelLabelMap[comparisonB.modelId] || comparisonB.modelId} · ${comparisonB.markLabel}`}
+                aspectRatio={comparisonA.aspectRatio || comparisonB.aspectRatio}
+                maxHeight="78vh"
+                toolbarOverlay
+                className="block"
+              />
+            ) : isSvg && version.svgCode ? (
               <div
                 ref={svgContainerRef}
                 onClick={handleSvgContainerClick}
@@ -818,8 +1160,11 @@ ${version.svgCode}
                       </span>
                     ) : null;
                   })()}
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/15 text-brand-teal border border-brand-teal/50">
-                    {modelLabelMap[generation.modelId || 'gemini'] || 'Model'}
+                  <span
+                    className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/15 text-brand-teal border border-brand-teal/50"
+                    title={hasMixedModels ? 'Model that produced this version' : undefined}
+                  >
+                    {modelLabelMap[version.modelId || generation.modelId || 'gemini'] || 'Model'}
                   </span>
                   {isSvg && cfg?.svgMode && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-purple-500/15 text-purple-400 border border-purple-500/50 capitalize">
@@ -865,8 +1210,32 @@ ${version.svgCode}
             </div>
           )}
             
-            {/* Action buttons (top right) */}
-            <div className="absolute top-4 right-4 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Action buttons (top right). Hidden while the inline
+                comparison slider is active — they target a single version
+                (download, refine, info, etc.) which doesn't apply to the
+                two-up view, and their absolute position was overlapping the
+                slider's own Close / Swap / Side-by-side controls. */}
+            <div
+              className={`absolute top-4 right-4 flex items-center gap-3 transition-opacity ${
+                isComparing
+                  ? 'opacity-0 pointer-events-none'
+                  : 'opacity-0 group-hover:opacity-100'
+              }`}
+            >
+              {onEnterComparePicker && onExitComparePicker && (
+                <ActionButton
+                  onClick={() => {
+                    if (isCompareMode) onExitComparePicker();
+                    else handleEnterCompareFromButton();
+                  }}
+                  title="Click two marks to open a before/after slider (or Shift-click any mark)"
+                  tooltip={isCompareMode ? 'Cancel compare' : 'Compare'}
+                  className={isCompareMode ? 'text-brand-teal' : undefined}
+                >
+                  <GitCompare size={18} />
+                </ActionButton>
+              )}
+
               {/* Info toggle */}
               <ActionButton
                 onClick={() => setInfoVisible(v => !v)}
@@ -932,6 +1301,7 @@ ${version.svgCode}
                 </ActionButton>
               )}
             </div>
+          </div>
           </div>
         </div>
       </div>
@@ -1013,6 +1383,8 @@ ${version.svgCode}
                 disabled={isRefining || isResizingCanvas}
                 buttonClassName="rounded-xl"
                 menuClassName="max-w-[22rem] z-[220]"
+                groupOrder={[...MODEL_GROUP_ORDER]}
+                hideOptionDescriptions
               />
             </div>
             <div className="min-w-[170px] flex-1">

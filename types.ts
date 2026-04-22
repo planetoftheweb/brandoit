@@ -80,6 +80,15 @@ export interface GenerationVersion {
 
   refinementPrompt?: string;
   parentVersionId?: string;
+
+  /**
+   * Which model produced this specific version. Optional for backward compat
+   * with legacy single-model history items (the parent Generation.modelId
+   * applies in that case). For comparison tiles where multiple models share
+   * one Generation, this is what tells the UI which chip / refine-default /
+   * slider-label to use per mark.
+   */
+  modelId?: string;
 }
 
 export interface Generation {
@@ -89,6 +98,14 @@ export interface Generation {
   modelId: string;
   versions: GenerationVersion[];
   currentVersionIndex: number;
+
+  /**
+   * Shared tag linking tiles produced by a single multi-model Generate click
+   * (e.g. "Nano Banana Pro vs GPT Image 2 from the same prompt"). Absent on
+   * normal single-model generations. Used only for grouping/badging in the UI;
+   * comparisons themselves are not persisted.
+   */
+  comparisonBatchId?: string;
 }
 
 export interface BrandGuidelinesAnalysis {

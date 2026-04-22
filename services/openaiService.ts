@@ -2,6 +2,97 @@ import { GenerationConfig, GeneratedImage } from '../types';
 
 export type OpenAIImageQuality = 'low' | 'medium' | 'high' | 'auto';
 
+/**
+ * Error thrown when OpenAI's /v1/images/generations endpoint rejects a call.
+ * Includes structured fields so the batch runner can:
+ *   - decide whether to retry / back off (transient, e.g. rate-limit)
+ *   - decide whether to short-circuit (fatal, e.g. billing hard limit)
+ *   - surface a clean human-readable message (not the raw JSON body)
+ */
+export class OpenAIGenerationError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly errorType?: string;
+  /**
+   * True when no amount of retrying will help this batch (billing cap hit,
+   * quota exhausted, API key invalid, etc). The batch runner uses this flag
+   * to stop taking new jobs for this model instead of failing every queued
+   * call with the same message.
+   */
+  readonly fatal: boolean;
+
+  constructor(opts: {
+    message: string;
+    status?: number;
+    code?: string;
+    errorType?: string;
+    fatal?: boolean;
+  }) {
+    super(opts.message);
+    this.name = 'OpenAIGenerationError';
+    this.status = opts.status;
+    this.code = opts.code;
+    this.errorType = opts.errorType;
+    this.fatal = !!opts.fatal;
+  }
+}
+
+/**
+ * Map OpenAI error codes/types to a short user-facing message and a `fatal`
+ * flag. Falls back to OpenAI's own message if we don't have a friendlier one.
+ */
+const describeOpenAIError = (
+  status: number,
+  code: string | undefined,
+  errorType: string | undefined,
+  rawMessage: string
+): { message: string; fatal: boolean } => {
+  const c = (code || '').toLowerCase();
+  const t = (errorType || '').toLowerCase();
+
+  if (c === 'billing_hard_limit_reached' || t === 'billing_limit_user_error') {
+    return {
+      message:
+        'OpenAI billing hard limit reached. Raise the monthly limit in your OpenAI dashboard (Settings → Limits) and try again.',
+      fatal: true
+    };
+  }
+  if (c === 'insufficient_quota' || t === 'insufficient_quota') {
+    return {
+      message:
+        'Your OpenAI account has no remaining quota. Add a payment method or raise your budget in the OpenAI dashboard.',
+      fatal: true
+    };
+  }
+  if (c === 'invalid_api_key' || status === 401) {
+    return {
+      message: 'OpenAI rejected the API key. Check or rotate it in Settings → API keys.',
+      fatal: true
+    };
+  }
+  if (status === 403) {
+    return {
+      message:
+        'OpenAI refused this request (403). The account or key may not have access to this model.',
+      fatal: true
+    };
+  }
+  if (c === 'rate_limit_exceeded' || status === 429) {
+    // Retryable — the batch runner already has cooldown handling for 429.
+    return { message: 'OpenAI rate limit hit — slow down and retry.', fatal: false };
+  }
+  if (c === 'content_policy_violation' || c === 'moderation_blocked') {
+    return {
+      message: 'OpenAI blocked this prompt (content policy). Adjust wording and retry.',
+      fatal: false
+    };
+  }
+  return {
+    message: rawMessage || `OpenAI request failed (HTTP ${status}).`,
+    fatal: false
+  };
+};
+
 // Map our UI model IDs to OpenAI API model identifiers.
 // Everything under this OpenAI family shares one API key slot (`apiKeys.openai`).
 const API_MODEL_BY_UI_ID: Record<string, string> = {
@@ -105,8 +196,29 @@ export const generateOpenAIImage = async (
   });
 
   if (!response.ok) {
+    // OpenAI almost always returns JSON on error; fall back to raw text only
+    // if parsing fails (proxies, HTML error pages, etc).
     const errText = await response.text();
-    throw new Error(`OpenAI image generation failed: ${errText}`);
+    let code: string | undefined;
+    let errorType: string | undefined;
+    let rawMessage = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      const errObj = parsed?.error || parsed;
+      code = errObj?.code || undefined;
+      errorType = errObj?.type || undefined;
+      rawMessage = errObj?.message || errText;
+    } catch {
+      // Not JSON — keep errText as the raw message.
+    }
+    const { message, fatal } = describeOpenAIError(response.status, code, errorType, rawMessage);
+    throw new OpenAIGenerationError({
+      message,
+      status: response.status,
+      code,
+      errorType,
+      fatal
+    });
   }
 
   const json = await response.json();

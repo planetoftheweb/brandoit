@@ -4,7 +4,7 @@ import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Lo
 import { uploadProfileImage } from '../services/imageService';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
-import { SUPPORTED_MODELS } from '../constants';
+import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel } from '../services/aspectRatioService';
 import { RichSelect } from './RichSelect';
 
@@ -172,7 +172,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     [modelAspectRatios]
   );
   const modelOptions = useMemo(
-    () => SUPPORTED_MODELS.map(model => ({ value: model.id, label: model.name, description: model.description })),
+    () =>
+      SUPPORTED_MODELS.map((model) => ({
+        value: model.id,
+        label: model.name,
+        description: model.description,
+        group: model.group
+      })),
     []
   );
 
@@ -648,6 +654,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       icon={Sparkles}
                       subLabel="Model"
                       searchable
+                      groupOrder={[...MODEL_GROUP_ORDER]}
+                      hideOptionDescriptions
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       {selectedModel === 'openai-2'

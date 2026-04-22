@@ -131,39 +131,47 @@ export const SUPPORTED_MODELS = [
     id: 'gemini',
     name: 'Nano Banana Pro',
     description: 'Gemini 3 Pro Image Preview',
-    format: 'raster' as const
+    format: 'raster' as const,
+    group: 'Gemini' as const
   },
   {
     id: 'gemini-3.1-flash-image-preview',
     name: 'Nano Banana 2',
     description: 'Gemini 3.1 Flash Image Preview',
-    format: 'raster' as const
-  },
-  {
-    id: 'openai-2',
-    name: 'GPT Image 2',
-    description: 'OpenAI gpt-image-2 \u2014 flagship image model (2K/4K, wide ratios)',
-    format: 'raster' as const
-  },
-  {
-    id: 'openai-mini',
-    name: 'GPT Image Mini',
-    description: 'OpenAI gpt-image-1-mini \u2014 budget-tier image model',
-    format: 'raster' as const
-  },
-  {
-    id: 'openai',
-    name: 'GPT Image 1.5',
-    description: 'OpenAI gpt-image-1.5 \u2014 previous-generation image model',
-    format: 'raster' as const
+    format: 'raster' as const,
+    group: 'Gemini' as const
   },
   {
     id: 'gemini-svg',
     name: 'Gemini SVG',
     description: 'Gemini 3.1 Pro \u2014 SVG vector graphics',
-    format: 'vector' as const
+    format: 'vector' as const,
+    group: 'Gemini' as const
+  },
+  {
+    id: 'openai-2',
+    name: 'GPT Image 2',
+    description: 'OpenAI gpt-image-2 \u2014 flagship image model (2K/4K, wide ratios)',
+    format: 'raster' as const,
+    group: 'OpenAI' as const
+  },
+  {
+    id: 'openai-mini',
+    name: 'GPT Image Mini',
+    description: 'OpenAI gpt-image-1-mini \u2014 budget-tier image model',
+    format: 'raster' as const,
+    group: 'OpenAI' as const
+  },
+  {
+    id: 'openai',
+    name: 'GPT Image 1.5',
+    description: 'OpenAI gpt-image-1.5 \u2014 previous-generation image model',
+    format: 'raster' as const,
+    group: 'OpenAI' as const
   }
 ];
+
+export const MODEL_GROUP_ORDER = ['Gemini', 'OpenAI'] as const;
 
 export const ASPECT_RATIOS: AspectRatioOption[] = [
   { label: 'Square (1:1)', value: '1:1', icon: Frame },

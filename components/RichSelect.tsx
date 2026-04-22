@@ -26,6 +26,7 @@ interface RichSelectProps {
   className?: string;
   buttonClassName?: string;
   menuClassName?: string;
+  hideOptionDescriptions?: boolean;
 }
 
 export const RichSelect: React.FC<RichSelectProps> = ({
@@ -43,7 +44,8 @@ export const RichSelect: React.FC<RichSelectProps> = ({
   compact = false,
   className = '',
   buttonClassName = '',
-  menuClassName = ''
+  menuClassName = '',
+  hideOptionDescriptions = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -285,48 +287,53 @@ export const RichSelect: React.FC<RichSelectProps> = ({
           )}
 
           <div className="overflow-y-auto custom-scrollbar p-1" style={{ maxHeight: menuListMaxHeight }}>
-            {groupedOptions.map(group => (
-              <div key={group.key || 'ungrouped'} className="mb-1">
-                {group.label && (
-                  <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-gray-50 dark:bg-[#161b22] sticky top-0 z-[1] border-b border-gray-100 dark:border-[#30363d]">
-                    {group.label}
-                  </div>
-                )}
-                {group.options.map(option => {
-                  const selected = option.value === value;
-                  const ItemIcon = option.icon;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => handleSelect(option.value)}
-                      className={`w-full text-left px-3 py-2 rounded-md transition-colors flex items-start justify-between gap-2 ${
-                        selected
-                          ? 'bg-brand-teal/10 text-brand-teal'
-                          : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
-                      }`}
-                    >
-                      <span className="min-w-0 flex items-start gap-2.5">
-                        {ItemIcon && (
-                          <ItemIcon size={14} className={`shrink-0 mt-0.5 ${selected ? 'text-brand-teal' : 'text-slate-500'}`} />
-                        )}
-                        <span className="min-w-0">
-                          <span className={`block break-words whitespace-normal leading-tight ${compact ? 'text-xs' : 'text-[13px]'} ${selected ? 'font-semibold' : 'font-medium'}`}>
-                            {option.label}
-                          </span>
-                          {option.description && (
-                            <span className="block whitespace-normal break-words leading-tight text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                              {option.description}
-                            </span>
+            {groupedOptions.map(group => {
+              const hasGroupLabel = Boolean(group.label);
+              const optionPaddingLeft = hasGroupLabel ? 'pl-6' : 'pl-3';
+              return (
+                <div key={group.key || 'ungrouped'} className="mb-1">
+                  {hasGroupLabel && (
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-gray-50 dark:bg-[#161b22] sticky top-0 z-[1] border-b border-gray-100 dark:border-[#30363d]">
+                      {group.label}
+                    </div>
+                  )}
+                  {group.options.map(option => {
+                    const selected = option.value === value;
+                    const ItemIcon = option.icon;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleSelect(option.value)}
+                        title={hideOptionDescriptions && option.description ? option.description : undefined}
+                        className={`w-full text-left ${optionPaddingLeft} pr-3 py-2 rounded-md transition-colors flex items-start justify-between gap-2 ${
+                          selected
+                            ? 'bg-brand-teal/10 text-brand-teal'
+                            : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                        }`}
+                      >
+                        <span className="min-w-0 flex items-start gap-2.5">
+                          {ItemIcon && (
+                            <ItemIcon size={14} className={`shrink-0 mt-0.5 ${selected ? 'text-brand-teal' : 'text-slate-500'}`} />
                           )}
+                          <span className="min-w-0">
+                            <span className={`block break-words whitespace-normal leading-tight ${compact ? 'text-[13px]' : 'text-sm'} ${selected ? 'font-semibold' : 'font-medium'}`}>
+                              {option.label}
+                            </span>
+                            {!hideOptionDescriptions && option.description && (
+                              <span className="block whitespace-normal break-words leading-tight text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                {option.description}
+                              </span>
+                            )}
+                          </span>
                         </span>
-                      </span>
-                      {selected && <Check size={14} className="shrink-0 mt-0.5 text-brand-teal" />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+                        {selected && <Check size={14} className="shrink-0 mt-0.5 text-brand-teal" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
             {filteredOptions.length === 0 && (
               <div className="p-4 text-center text-xs text-slate-500">
                 No options found.

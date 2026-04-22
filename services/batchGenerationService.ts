@@ -19,6 +19,15 @@ export interface BatchError {
   jobId: string;
   prompt: string;
   message: string;
+  /**
+   * True for errors that will certainly recur for every remaining job in the
+   * same batch (e.g. billing hard-limit, invalid API key, insufficient quota).
+   * The batch runner uses this to stop taking new jobs; callers may use it to
+   * surface a different UI treatment.
+   */
+  fatal?: boolean;
+  /** Upstream provider error code when available, e.g. 'billing_hard_limit_reached'. */
+  code?: string;
 }
 
 export interface BatchProgress {
@@ -29,6 +38,7 @@ export interface BatchProgress {
   errors: BatchError[];
   latest?: Generation;
   currentPrompts: string[];
+  currentJobs: Array<{ jobId: string; prompt: string }>;
 }
 
 export interface BatchResult {
@@ -38,6 +48,12 @@ export interface BatchResult {
   errors: BatchError[];
   generations: Generation[];
   lastGeneration?: Generation;
+  /**
+   * Populated when the batch stopped early because a fatal provider error
+   * (billing cap, invalid key, quota) was encountered. Remaining queued jobs
+   * were NOT attempted in that case.
+   */
+  fatalError?: BatchError;
 }
 
 /**
@@ -53,11 +69,16 @@ const isRateLimitError = (err: unknown): boolean => {
   return /\b429\b|rate.?limit|quota|too many requests/i.test(message);
 };
 
-const toBatchError = (job: BatchJob, err: unknown): BatchError => ({
-  jobId: job.id,
-  prompt: job.prompt,
-  message: err instanceof Error ? err.message : String(err ?? "Unknown error"),
-});
+const toBatchError = (job: BatchJob, err: unknown): BatchError => {
+  const anyErr = err as any;
+  return {
+    jobId: job.id,
+    prompt: job.prompt,
+    message: err instanceof Error ? err.message : String(err ?? "Unknown error"),
+    fatal: anyErr?.fatal === true || undefined,
+    code: typeof anyErr?.code === "string" ? anyErr.code : undefined,
+  };
+};
 
 export const buildJobs = (
   prompts: string[],
@@ -115,6 +136,8 @@ export const runBatchGenerations = async ({
     generations: [] as Generation[],
     latest: undefined as Generation | undefined,
     currentPrompts: [] as string[],
+    currentJobs: [] as Array<{ jobId: string; prompt: string }>,
+    fatalError: undefined as BatchError | undefined,
   };
 
   const emit = () => {
@@ -127,6 +150,7 @@ export const runBatchGenerations = async ({
       errors: [...state.errors],
       latest: state.latest,
       currentPrompts: [...state.currentPrompts],
+      currentJobs: [...state.currentJobs],
     });
   };
 
@@ -147,6 +171,10 @@ export const runBatchGenerations = async ({
   let cursor = 0;
   const take = (): BatchJob | undefined => {
     if (signal?.aborted) return undefined;
+    // Short-circuit: once a fatal provider error (billing cap, invalid key,
+    // quota exhausted) is recorded, stop handing out remaining jobs instead
+    // of failing every one of them with the same message.
+    if (state.fatalError) return undefined;
     if (cursor >= jobs.length) return undefined;
     const job = jobs[cursor];
     cursor += 1;
@@ -157,6 +185,7 @@ export const runBatchGenerations = async ({
     for (let job = take(); job; job = take()) {
       state.inFlight += 1;
       state.currentPrompts = [...state.currentPrompts, job.prompt];
+      state.currentJobs = [...state.currentJobs, { jobId: job.id, prompt: job.prompt }];
       emit();
       try {
         const generation = await runOne(job);
@@ -165,7 +194,11 @@ export const runBatchGenerations = async ({
         state.completed += 1;
       } catch (err) {
         state.failed += 1;
-        state.errors.push(toBatchError(job, err));
+        const batchErr = toBatchError(job, err);
+        state.errors.push(batchErr);
+        if (batchErr.fatal && !state.fatalError) {
+          state.fatalError = batchErr;
+        }
         if (isRateLimitError(err) && rateLimitCooldownMs > 0) {
           await sleep(rateLimitCooldownMs);
         }
@@ -178,6 +211,7 @@ export const runBatchGenerations = async ({
             return arr.indexOf(prompt) !== index;
           }
         );
+        state.currentJobs = state.currentJobs.filter((entry) => entry.jobId !== job!.id);
         emit();
       }
     }
@@ -197,6 +231,7 @@ export const runBatchGenerations = async ({
     errors: state.errors,
     generations: state.generations,
     lastGeneration: state.latest,
+    fatalError: state.fatalError,
   };
   return result;
 };

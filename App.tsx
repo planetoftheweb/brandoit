@@ -43,7 +43,6 @@ import {
   DEFAULT_BATCH_CONCURRENCY,
 } from './services/batchGenerationService';
 import {
-  estimateRemainingSeconds,
   formatDuration,
   getModelSecondsPerGen,
   recordModelDuration,
@@ -85,11 +84,49 @@ interface ToolbarSelectionCache {
   graphicTypeId?: string;
   aspectRatio?: string;
   selectedModel?: string;
+  openaiImageQuality?: 'low' | 'medium' | 'high' | 'auto';
+}
+
+type OpenAIImageQuality = 'low' | 'medium' | 'high' | 'auto';
+const OPENAI_QUALITY_SET = new Set<OpenAIImageQuality>(['low', 'medium', 'high', 'auto']);
+
+/**
+ * Reference to a single mark (version) in the app's history, used as A/B
+ * selection for the comparison slider. We snapshot `imageUrl` / `mimeType` at
+ * pick-time so the slider keeps working even if the originating tile scrolls
+ * out of view or is otherwise unmounted.
+ */
+export interface MarkRef {
+  generationId: string;
+  versionId: string;
+  imageUrl: string;
+  mimeType: string;
+  modelId: string;
+  markLabel: string;
+  aspectRatio?: string;
+}
+
+interface BatchModelProgressSummary {
+  total: number;
+  completed: number;
+  failed: number;
+  inFlight: number;
+}
+
+interface BatchVisualBar {
+  key: string;
+  modelId: string;
+  prompt: string;
+  phase: 'active' | 'exiting';
 }
 
 const TOOLBAR_SELECTION_KEY_PREFIX = 'brandoit_toolbar_selection_v1';
 const TOOLBAR_SELECTION_LAST_KEY = `${TOOLBAR_SELECTION_KEY_PREFIX}:last`;
 const MODEL_ID_SET = new Set(SUPPORTED_MODELS.map(model => model.id));
+const MODEL_NAME_BY_ID: Record<string, string> = SUPPORTED_MODELS.reduce<Record<string, string>>((acc, model) => {
+  acc[model.id] = model.name;
+  return acc;
+}, {});
 
 const GITHUB_REPO_BASE = 'https://github.com/planetoftheweb/brandoit';
 const GITHUB_CHANGELOG_URL = `${GITHUB_REPO_BASE}/blob/main/CHANGELOG.md`;
@@ -109,6 +146,12 @@ const normalizeToolbarSelection = (value: unknown): ToolbarSelectionCache | null
   if (typeof source.aspectRatio === 'string') normalized.aspectRatio = source.aspectRatio;
   if (typeof source.selectedModel === 'string' && MODEL_ID_SET.has(source.selectedModel)) {
     normalized.selectedModel = source.selectedModel;
+  }
+  if (
+    typeof source.openaiImageQuality === 'string' &&
+    OPENAI_QUALITY_SET.has(source.openaiImageQuality as OpenAIImageQuality)
+  ) {
+    normalized.openaiImageQuality = source.openaiImageQuality as OpenAIImageQuality;
   }
 
   return Object.keys(normalized).length > 0 ? normalized : null;
@@ -214,7 +257,9 @@ const App: React.FC = () => {
   const [guestSelectedModel, setGuestSelectedModel] = useState<string>(() => {
     const cachedSelection = readToolbarSelection() || readLastToolbarSelection();
     const cachedModel = cachedSelection?.selectedModel;
-    return cachedModel && MODEL_ID_SET.has(cachedModel) ? cachedModel : 'gemini';
+    return cachedModel && MODEL_ID_SET.has(cachedModel)
+      ? cachedModel
+      : 'gemini-3.1-flash-image-preview';
   });
   const [hasHydratedToolbarState, setHasHydratedToolbarState] = useState(false);
 
@@ -224,6 +269,9 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [batchModelProgress, setBatchModelProgress] = useState<Record<string, BatchModelProgressSummary>>({});
+  const [activeBatchModelIds, setActiveBatchModelIds] = useState<string[]>([]);
+  const [batchVisualBars, setBatchVisualBars] = useState<BatchVisualBar[]>([]);
   // Wall-clock start of the active batch, used to compute elapsed/remaining in
   // the progress banner. Null when no batch is running.
   const [batchStartedAt, setBatchStartedAt] = useState<number | null>(null);
@@ -233,6 +281,8 @@ const App: React.FC = () => {
   // Abort controller for the active batch. Captured in a ref so the Stop
   // button can reach it without re-rendering handleGenerate's closure.
   const batchAbortRef = useRef<AbortController | null>(null);
+  const batchModelJobsRef = useRef<Record<string, Map<string, string>>>({});
+  const batchVisualBarTimersRef = useRef<Record<string, number>>({});
   const [isBatchStopping, setIsBatchStopping] = useState(false);
 
   // Analysis Modal State
@@ -261,20 +311,36 @@ const App: React.FC = () => {
     setGraphicTypes(resources.graphicTypes);
     setAspectRatios(resources.aspectRatios);
 
+    // Prefer any user-specific cache first; for signed-out visits also fall
+    // back to the "last" guest cache so a returning visitor doesn't lose
+    // their picks. A cross-account signed-in view should NOT leak defaults
+    // from the prior account, which is why the activeUser branch stays
+    // scoped to that user's key.
     const cachedSelection = activeUser
-      ? readToolbarSelection(activeUser.id)
+      ? (readToolbarSelection(activeUser.id) || readLastToolbarSelection())
       : (readToolbarSelection() || readLastToolbarSelection());
     const settings = activeUser?.preferences.settings;
     const selectedModelForDefaults =
       cachedSelection?.selectedModel ||
       activeUser?.preferences.selectedModel ||
       (!activeUser ? guestSelectedModel : undefined) ||
-      'gemini';
+      // Default model for fresh accounts: Nano Banana 2 (Gemini 3.1 Flash).
+      // Chosen because it's the fast Gemini option — users can upgrade to
+      // Pro or switch to GPT from the model dropdown.
+      'gemini-3.1-flash-image-preview';
     if (!activeUser && selectedModelForDefaults !== guestSelectedModel) {
       setGuestSelectedModel(selectedModelForDefaults);
     }
     const modelAspectRatios = getAspectRatiosForModel(selectedModelForDefaults, resources.aspectRatios);
     const preferredAspectRatio = cachedSelection?.aspectRatio || settings?.defaultAspectRatio;
+
+    // Code-level fallbacks for brand-new users with no cache and no saved
+    // defaults yet. Uses canonical constant IDs; if the ID isn't in the
+    // user's resource list (e.g. they removed 'hand-drawn') pickResourceId
+    // degrades to items[0].
+    const DEFAULT_GRAPHIC_TYPE_ID = 'infographic';
+    const DEFAULT_VISUAL_STYLE_ID = 'hand-drawn';
+    const DEFAULT_ASPECT_RATIO = '16:9';
 
     setConfig(prev => ({
       ...prev,
@@ -286,18 +352,18 @@ const App: React.FC = () => {
       visualStyleId: pickResourceId(
         resources.visualStyles,
         cachedSelection?.visualStyleId || settings?.defaultVisualStyleId,
-        prev.visualStyleId
+        prev.visualStyleId || DEFAULT_VISUAL_STYLE_ID
       ),
       graphicTypeId: pickResourceId(
         resources.graphicTypes,
         cachedSelection?.graphicTypeId || settings?.defaultGraphicTypeId,
-        prev.graphicTypeId
+        prev.graphicTypeId || DEFAULT_GRAPHIC_TYPE_ID
       ),
       aspectRatio: preferredAspectRatio
         ? getSafeAspectRatioForModel(selectedModelForDefaults, preferredAspectRatio, resources.aspectRatios)
         : getSafeAspectRatioForModel(
             selectedModelForDefaults,
-            prev.aspectRatio || modelAspectRatios[0]?.value || '',
+            prev.aspectRatio || DEFAULT_ASPECT_RATIO || modelAspectRatios[0]?.value || '',
             resources.aspectRatios
           )
     }));
@@ -426,6 +492,82 @@ const App: React.FC = () => {
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
   const selectedModel = user?.preferences.selectedModel || guestSelectedModel;
 
+  // Multi-model "compare" selection. When length > 1, handleGenerate fans the
+  // batch out across every selected model, tagging every produced history tile
+  // with a shared comparisonBatchId. Single-model generation is the default
+  // and leaves this at [selectedModel].
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([selectedModel]);
+
+  useEffect(() => {
+    setSelectedModelIds((prev) => {
+      if (prev.length <= 1) return [selectedModel];
+      if (!prev.includes(selectedModel)) return [selectedModel, ...prev];
+      return prev;
+    });
+  }, [selectedModel]);
+
+  // --- Comparison (Juxtapose) state machine -------------------------------
+  // Picks up to two marks from anywhere in the app (thumbnail rail, current
+  // viewport, or Recent Generations tile). Once two are selected we render
+  // either an inline or full-screen JuxtaposeSlider. Intentionally live-only
+  // — nothing about the comparison itself is persisted.
+  const [comparisonState, setComparisonState] = useState<{
+    mode: 'idle' | 'picking';
+    a: MarkRef | null;
+    b: MarkRef | null;
+  }>({ mode: 'idle', a: null, b: null });
+
+  // `seed` lets callers pre-populate slot A when entering picker mode. This is
+  // the common case coming from the main viewport: a thumbnail is already
+  // committed, and the user just wants to pick a second mark to compare it
+  // against. Without seeding, users had to redundantly click the already-
+  // selected thumb to make it A, then click the second to make it B.
+  const enterComparePickerMode = (seed?: MarkRef) => {
+    setComparisonState((prev) => {
+      if (prev.mode === 'picking') {
+        // Already picking. Seed A if it's still empty so a late-arriving
+        // default (e.g. viewport committing after mode flip) doesn't get
+        // dropped, but leave user-chosen marks alone.
+        if (seed && !prev.a && !prev.b) return { ...prev, a: seed };
+        return prev;
+      }
+      return { mode: 'picking', a: seed || null, b: null };
+    });
+  };
+  const exitComparePickerMode = () => {
+    setComparisonState({ mode: 'idle', a: null, b: null });
+  };
+  const pickMarkForComparison = (ref: MarkRef) => {
+    setComparisonState((prev) => {
+      const isSameMark = (x: MarkRef | null) =>
+        !!x && x.generationId === ref.generationId && x.versionId === ref.versionId;
+      if (isSameMark(prev.a)) {
+        return { ...prev, a: prev.b, b: null, mode: 'picking' };
+      }
+      if (isSameMark(prev.b)) {
+        return { ...prev, b: null, mode: 'picking' };
+      }
+      if (!prev.a) {
+        return { ...prev, a: ref, mode: 'picking' };
+      }
+      if (!prev.b) {
+        return { mode: 'idle', a: prev.a, b: ref };
+      }
+      // Both already set — replace B with the new pick and re-open the slider.
+      return { mode: 'idle', a: prev.a, b: ref };
+    });
+  };
+
+  // Escape exits picker mode.
+  useEffect(() => {
+    if (comparisonState.mode !== 'picking') return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') exitComparePickerMode();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [comparisonState.mode]);
+
   useEffect(() => {
     setConfig(prev => {
       const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, prev.aspectRatio, aspectRatios);
@@ -442,7 +584,8 @@ const App: React.FC = () => {
         visualStyleId: config.visualStyleId,
         graphicTypeId: config.graphicTypeId,
         aspectRatio: config.aspectRatio,
-        selectedModel
+        selectedModel,
+        openaiImageQuality: user?.preferences.settings?.openaiImageQuality
       },
       user?.id
     );
@@ -453,7 +596,57 @@ const App: React.FC = () => {
     config.graphicTypeId,
     config.aspectRatio,
     selectedModel,
+    user?.preferences.settings?.openaiImageQuality,
     user?.id
+  ]);
+
+  // Auto-promote the current toolbar selection to the user's persistent
+  // Firestore defaults so a fresh browser / private window / new device
+  // restores the same look-and-feel. The localStorage cache above handles
+  // the zero-latency hydrate; this backs it with durable server state so
+  // "I don't think it's remembering my preferences" never happens.
+  // Only runs once hydration is complete so we don't echo stale '' values
+  // back into Firestore during the initial clear-then-load cycle.
+  useEffect(() => {
+    if (!user || !hasHydratedToolbarState) return;
+    const existingSettings = user.preferences.settings || { contributeByDefault: false };
+    const nextDefaults = {
+      defaultGraphicTypeId: config.graphicTypeId || undefined,
+      defaultVisualStyleId: config.visualStyleId || undefined,
+      defaultColorSchemeId: config.colorSchemeId || undefined,
+      defaultAspectRatio: config.aspectRatio || undefined,
+    };
+    const defaultsChanged =
+      nextDefaults.defaultGraphicTypeId !== existingSettings.defaultGraphicTypeId ||
+      nextDefaults.defaultVisualStyleId !== existingSettings.defaultVisualStyleId ||
+      nextDefaults.defaultColorSchemeId !== existingSettings.defaultColorSchemeId ||
+      nextDefaults.defaultAspectRatio !== existingSettings.defaultAspectRatio;
+    const modelChanged = selectedModel !== user.preferences.selectedModel;
+    if (!defaultsChanged && !modelChanged) return;
+
+    setUser(prev =>
+      prev
+        ? {
+            ...prev,
+            preferences: {
+              ...prev.preferences,
+              selectedModel,
+              settings: {
+                ...existingSettings,
+                ...nextDefaults,
+              },
+            },
+          }
+        : prev
+    );
+  }, [
+    hasHydratedToolbarState,
+    user?.id,
+    config.colorSchemeId,
+    config.visualStyleId,
+    config.graphicTypeId,
+    config.aspectRatio,
+    selectedModel,
   ]);
 
   const getApiKeyForModel = (modelId: string): string | undefined => {
@@ -521,6 +714,13 @@ const App: React.FC = () => {
     }, 1000);
     return () => window.clearInterval(interval);
   }, [batchProgress, batchStartedAt]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      batchVisualBarTimersRef.current = {};
+    };
+  }, []);
 
   const executeDeleteHistory = async (generationId: string) => {
     if (user) {
@@ -685,13 +885,73 @@ const App: React.FC = () => {
     controller.abort();
   };
 
+  const reconcileBatchVisualBars = (
+    modelId: string,
+    currentJobs: Array<{ jobId: string; prompt: string }>
+  ) => {
+    const prevMap = batchModelJobsRef.current[modelId] || new Map<string, string>();
+    const nextMap = new Map<string, string>(currentJobs.map((job) => [job.jobId, job.prompt]));
+    batchModelJobsRef.current[modelId] = nextMap;
+
+    const added: Array<{ jobId: string; prompt: string }> = [];
+    const removedKeys: string[] = [];
+
+    nextMap.forEach((prompt, jobId) => {
+      if (!prevMap.has(jobId)) added.push({ jobId, prompt });
+    });
+    prevMap.forEach((_prompt, jobId) => {
+      if (!nextMap.has(jobId)) removedKeys.push(`${modelId}:${jobId}`);
+    });
+
+    if (added.length > 0) {
+      setBatchVisualBars((prev) => {
+        const existingKeys = new Set(prev.map((item) => item.key));
+        const additions = added
+          .map(({ jobId, prompt }) => ({
+            key: `${modelId}:${jobId}`,
+            modelId,
+            prompt,
+            phase: 'active' as const,
+          }))
+          .filter((item) => !existingKeys.has(item.key));
+        return additions.length > 0 ? [...prev, ...additions] : prev;
+      });
+    }
+
+    if (removedKeys.length > 0) {
+      setBatchVisualBars((prev) =>
+        prev.map((item) =>
+          removedKeys.includes(item.key) ? { ...item, phase: 'exiting' } : item
+        )
+      );
+      removedKeys.forEach((key) => {
+        const existing = batchVisualBarTimersRef.current[key];
+        if (existing) window.clearTimeout(existing);
+        batchVisualBarTimersRef.current[key] = window.setTimeout(() => {
+          setBatchVisualBars((prev) => prev.filter((item) => item.key !== key));
+          delete batchVisualBarTimersRef.current[key];
+        }, 850);
+      });
+    }
+  };
+
   const handleGenerate = async (count: number = 1) => {
+    // Fresh generations should always leave compare mode. Keeping an old
+    // A/B selection active while new tiles are being produced is confusing,
+    // because the viewport appears "stuck" on a stale comparison.
+    setComparisonState({ mode: 'idle', a: null, b: null });
     setIsGenerating(true);
     setError(null);
     setBatchProgress(null);
     setBatchStartedAt(Date.now());
     setBatchClockTick(0);
     setIsBatchStopping(false);
+    setBatchModelProgress({});
+    setActiveBatchModelIds([]);
+    setBatchVisualBars([]);
+    Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+    batchVisualBarTimersRef.current = {};
+    batchModelJobsRef.current = {};
     const abortController = new AbortController();
     batchAbortRef.current = abortController;
     try {
@@ -700,128 +960,243 @@ const App: React.FC = () => {
         throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to start generating.');
       }
 
-      const customKey = getActiveApiKey();
-      if (!customKey) {
+      const modelIdsToRun = selectedModelIds.length > 0 ? selectedModelIds : [selectedModel];
+      // Verify every selected model has an API key wired up before we start.
+      const missingKeys = modelIdsToRun.filter((id) => !getApiKeyForModel(id));
+      if (missingKeys.length > 0) {
         setSettingsMode(true);
-        throw new Error('Add your API key in Settings before generating. Free accounts use BYOK keys.');
+        throw new Error(
+          missingKeys.length === modelIdsToRun.length
+            ? 'Add your API key in Settings before generating. Free accounts use BYOK keys.'
+            : `Missing API key(s) for: ${missingKeys.join(', ')}. Add them in Settings or deselect those models.`
+        );
       }
 
-      const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
-      const safeConfig = safeAspectRatio === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatio };
-      if (safeAspectRatio !== config.aspectRatio) {
-        setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
+      const safeAspectRatioPrimary = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, aspectRatios);
+      const safeConfig = safeAspectRatioPrimary === config.aspectRatio ? config : { ...config, aspectRatio: safeAspectRatioPrimary };
+      if (safeAspectRatioPrimary !== config.aspectRatio) {
+        setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatioPrimary }));
       }
 
       const { prompts } = expandPromptPermutations(safeConfig.prompt || '');
       const safeCount = Math.max(1, Math.floor(count || 1));
-      const totalRuns = prompts.length * safeCount;
+      const perModelRuns = prompts.length * safeCount;
+      const totalRuns = perModelRuns * modelIdsToRun.length;
+      setActiveBatchModelIds(modelIdsToRun);
+      setBatchModelProgress(
+        modelIdsToRun.reduce<Record<string, BatchModelProgressSummary>>((acc, modelId) => {
+          acc[modelId] = {
+            total: perModelRuns,
+            completed: 0,
+            failed: 0,
+            inFlight: 0,
+          };
+          return acc;
+        }, {})
+      );
       const cap = batchCapFor(user);
       if (Number.isFinite(cap) && totalRuns > cap) {
         throw new Error(
-          `Batch would run ${totalRuns} generation${totalRuns === 1 ? '' : 's'} (limit ${cap}). Reduce the variations count or brace options.`
+          `Batch would run ${totalRuns} generation${totalRuns === 1 ? '' : 's'} (limit ${cap}). Reduce variations, brace options, or selected models.`
         );
       }
 
-      // Consolidate the entire batch — every brace variation AND every copy
-      // — onto a single Generation so the whole submit becomes one history
-      // tile with Mark I, Mark II, Mark III, … instead of sprawling across N
-      // tiles. Each version carries its own expanded prompt in
-      // `refinementPrompt` so the per-mark prompt is never lost.
-      let batchGeneration: Generation | null = null;
-      // Single persistence queue so "decide + save/update" is serialized.
-      // API calls still run in parallel; only the Firestore write path is
-      // sequenced to avoid create-vs-update races and mark-number collisions.
-      let persistQueue: Promise<Generation | null> = Promise.resolve(null);
+      // Comparison batch id — only stamped when running more than one model.
+      // It still acts as a "this tile is a multi-model comparison run" marker
+      // for UI chrome (badge in Recent Generations), even though all marks now
+      // live in a single Generation tile rather than across siblings.
+      const comparisonBatchId =
+        modelIdsToRun.length > 1
+          ? `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+          : undefined;
 
-      const runOne = async (job: BatchJob): Promise<Generation> => {
-        const jobConfig: GenerationConfig = { ...safeConfig, prompt: job.prompt };
-        const structuredPrompt = buildStructuredPrompt(jobConfig);
+      // Shared across ALL models in this Generate click. We want one tile that
+      // holds every mark from every selected model so the user can compare
+      // them side-by-side with the slider, instead of two sibling tiles.
+      // Persistence is serialised through `persistQueue` so concurrent workers
+      // don't race when appending versions or saving to Firestore.
+      let sharedBatchGeneration: Generation | null = null;
+      let sharedPersistQueue: Promise<Generation | null> = Promise.resolve(null);
+      const primaryModelId = modelIdsToRun[0];
 
-        const jobStart = performance.now();
-        let result;
-        if (selectedModel === 'gemini-svg') {
-          result = await generateSvg(jobConfig, context, customKey, user?.preferences.systemPrompt);
-        } else if (
-          selectedModel === 'openai' ||
-          selectedModel === 'openai-2' ||
-          selectedModel === 'openai-mini'
-        ) {
-          if (!customKey) throw new Error('OpenAI API key is required for image generation.');
-          result = await generateOpenAIImage(structuredPrompt, jobConfig, customKey, {
-            modelId: selectedModel,
-            quality: user?.preferences.settings?.openaiImageQuality || 'auto',
-            systemPrompt: user?.preferences.systemPrompt
-          });
-        } else {
-          result = await generateGraphic(jobConfig, context, customKey, user?.preferences.systemPrompt, selectedModel);
-        }
-        // Feed the rolling per-model duration estimator so future batches
-        // get a more accurate time preview.
-        recordModelDuration(selectedModel, performance.now() - jobStart);
-
-        const prev = persistQueue;
-        const next: Promise<Generation> = prev.then(async () => {
-          if (!batchGeneration) {
-            // First successful job of the batch → seed Mark I. Use this job's
-            // expanded prompt as the tile-level config.prompt so the tile
-            // shows something concrete rather than the raw brace template.
-            const generation = await createGeneration(result, { ...jobConfig }, selectedModel);
-            batchGeneration = generation;
-            await historyService.saveGeneration(user, generation);
-            return generation;
-          }
-
-          // Append this job as the next Mark on the shared batch Generation.
-          const nextNumber = batchGeneration.versions.length + 1;
-          const newVersion = await createVersionFromImage(
-            result,
-            nextNumber,
-            'generation',
-            job.prompt,
-            batchGeneration.versions[batchGeneration.currentVersionIndex]?.id,
-            jobConfig.aspectRatio
-          );
-          const updated: Generation = {
-            ...batchGeneration,
-            versions: [...batchGeneration.versions, newVersion],
-            // Advance to the newest mark so the viewer keeps showing "latest".
-            currentVersionIndex: batchGeneration.versions.length,
-          };
-          batchGeneration = updated;
-          await historyService.updateGeneration(user, updated);
-          return updated;
-        });
-
-        persistQueue = next;
-        return next;
+      // Aggregate progress across all per-model batches. Models run in
+      // parallel (see Promise.all below), so we can't just add a running
+      // total — progress events from different models arrive interleaved.
+      // Instead, each model reports its own latest BatchProgress into
+      // `perModelProgress` and we re-sum across all known models on every
+      // event. Single-source-of-truth and concurrency-safe.
+      const perModelProgress: Record<string, BatchProgress> = {};
+      const aggregate = {
+        errors: [] as BatchError[],
+        generations: [] as Generation[],
+        lastGeneration: undefined as Generation | undefined,
+        fatalError: undefined as BatchError | undefined,
+        /** Which model hit the fatal error (surfaced in the banner copy). */
+        fatalErrorModelId: undefined as string | undefined,
       };
 
-      const batchResult = await runBatchGenerations({
-        prompts,
-        copiesPerPrompt: safeCount,
-        concurrency: DEFAULT_BATCH_CONCURRENCY,
-        signal: abortController.signal,
-        runOne,
-        onProgress: (progress) => {
-          setBatchProgress(progress);
-          if (progress.latest) {
-            const latest = progress.latest;
-            setCurrentGeneration(latest);
-            setHistory((prev) => {
-              // When a batch appends a new mark, the Generation's id stays the
-              // same — replace the existing tile so the mark count/thumbnail
-              // stay current rather than leaving a stale snapshot behind.
-              const idx = prev.findIndex((g) => g.id === latest.id);
-              if (idx >= 0) {
-                const nextHistory = [...prev];
-                nextHistory[idx] = latest;
-                return nextHistory;
-              }
-              return [latest, ...prev];
+      const summarizeAcrossModels = (latest?: Generation): BatchProgress => {
+        const entries = Object.values(perModelProgress);
+        const completed = entries.reduce((acc, p) => acc + p.completed, 0);
+        const failed = entries.reduce((acc, p) => acc + p.failed, 0);
+        const inFlight = entries.reduce((acc, p) => acc + p.inFlight, 0);
+        const errors = entries.flatMap((p) => p.errors);
+        const currentPrompts = entries.flatMap((p) => p.currentPrompts);
+        return {
+          total: totalRuns,
+          completed,
+          failed,
+          inFlight,
+          errors,
+          latest: latest || aggregate.lastGeneration,
+          currentPrompts,
+        };
+      };
+
+      const runBatchForModel = async (modelId: string) => {
+        const modelKey = getApiKeyForModel(modelId);
+        if (!modelKey) throw new Error(`Missing API key for ${modelId}.`);
+        // Per-model aspect-ratio coercion: GPT Image 2 supports wider ratios
+        // than GPT Image 1.5, Gemini models support different ones, etc.
+        const safeAspectRatioForModel = getSafeAspectRatioForModel(modelId, safeConfig.aspectRatio, aspectRatios);
+        const modelSafeConfig = safeAspectRatioForModel === safeConfig.aspectRatio
+          ? safeConfig
+          : { ...safeConfig, aspectRatio: safeAspectRatioForModel };
+
+        const runOne = async (job: BatchJob): Promise<Generation> => {
+          const jobConfig: GenerationConfig = { ...modelSafeConfig, prompt: job.prompt };
+          const structuredPrompt = buildStructuredPrompt(jobConfig);
+
+          const jobStart = performance.now();
+          let result;
+          if (modelId === 'gemini-svg') {
+            result = await generateSvg(jobConfig, context, modelKey, user?.preferences.systemPrompt);
+          } else if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
+            result = await generateOpenAIImage(structuredPrompt, jobConfig, modelKey, {
+              modelId,
+              quality: user?.preferences.settings?.openaiImageQuality || 'auto',
+              systemPrompt: user?.preferences.systemPrompt
             });
+          } else {
+            result = await generateGraphic(jobConfig, context, modelKey, user?.preferences.systemPrompt, modelId);
           }
+          recordModelDuration(modelId, performance.now() - jobStart);
+
+          // Append into the SHARED tile. The first version anywhere in the
+          // Generate click creates the Generation; everything afterwards
+          // becomes another version, regardless of which model produced it.
+          // The Generation's primary modelId stays as the first selected
+          // model; per-version `modelId` tracks which model made each mark.
+          const prev = sharedPersistQueue;
+          const next: Promise<Generation> = prev.then(async () => {
+            if (!sharedBatchGeneration) {
+              // The first version is created via createGeneration so the tile's
+              // top-level config/modelId is set. We use the *primary* model id
+              // for the Generation so the tile's overall identity stays stable
+              // even if the first job to finish was from a secondary model.
+              const generation = await createGeneration(
+                result,
+                { ...jobConfig },
+                primaryModelId,
+                comparisonBatchId
+              );
+              // Tag this first version with whichever model actually produced it.
+              if (generation.versions[0]) {
+                generation.versions[0].modelId = modelId;
+                generation.versions[0].aspectRatio = jobConfig.aspectRatio;
+              }
+              sharedBatchGeneration = generation;
+              await historyService.saveGeneration(user, generation);
+              return generation;
+            }
+            const nextNumber = sharedBatchGeneration.versions.length + 1;
+            const newVersion = await createVersionFromImage(
+              result,
+              nextNumber,
+              'generation',
+              job.prompt,
+              sharedBatchGeneration.versions[sharedBatchGeneration.currentVersionIndex]?.id,
+              jobConfig.aspectRatio,
+              modelId
+            );
+            const updated: Generation = {
+              ...sharedBatchGeneration,
+              versions: [...sharedBatchGeneration.versions, newVersion],
+              currentVersionIndex: sharedBatchGeneration.versions.length,
+            };
+            sharedBatchGeneration = updated;
+            await historyService.updateGeneration(user, updated);
+            return updated;
+          });
+
+          sharedPersistQueue = next;
+          return next;
+        };
+
+        const perModelResult = await runBatchGenerations({
+          prompts,
+          copiesPerPrompt: safeCount,
+          concurrency: DEFAULT_BATCH_CONCURRENCY,
+          signal: abortController.signal,
+          runOne,
+          onProgress: (progress) => {
+            // Store THIS model's latest snapshot, then recompute the cross-
+            // model summary. Because onProgress can fire concurrently from
+            // different models, we always re-sum from the shared map rather
+            // than accumulating deltas.
+            perModelProgress[modelId] = progress;
+            setBatchModelProgress((prev) => ({
+              ...prev,
+              [modelId]: {
+                total: perModelRuns,
+                completed: progress.completed,
+                failed: progress.failed,
+                inFlight: progress.inFlight,
+              }
+            }));
+            reconcileBatchVisualBars(modelId, progress.currentJobs || []);
+            const summary = summarizeAcrossModels(progress.latest);
+            setBatchProgress(summary);
+            if (progress.latest) {
+              const latest = progress.latest;
+              aggregate.lastGeneration = latest;
+              setCurrentGeneration(latest);
+              setHistory((prev) => {
+                const idx = prev.findIndex((g) => g.id === latest.id);
+                if (idx >= 0) {
+                  const nextHistory = [...prev];
+                  nextHistory[idx] = latest;
+                  return nextHistory;
+                }
+                return [latest, ...prev];
+              });
+            }
+          }
+        });
+
+        aggregate.errors.push(...perModelResult.errors);
+        aggregate.generations.push(...perModelResult.generations);
+        if (perModelResult.lastGeneration) aggregate.lastGeneration = perModelResult.lastGeneration;
+        if (perModelResult.fatalError && !aggregate.fatalError) {
+          aggregate.fatalError = perModelResult.fatalError;
+          aggregate.fatalErrorModelId = modelId;
         }
-      });
+        return perModelResult;
+      };
+
+      // Run all selected models in PARALLEL. Previously this was a sequential
+      // for-await loop, which meant a 2-model compare run waited for model A
+      // to finish before firing the first request for model B — so a user
+      // ever saw at most `DEFAULT_BATCH_CONCURRENCY` API calls in flight
+      // regardless of how many models they picked. With Promise.all, each
+      // model runs its own workers independently, giving N × concurrency
+      // total in-flight.
+      //
+      // Fatal-error short-circuiting still works: the per-model batch runner
+      // self-stops on billing/key/quota errors. Sibling models sharing the
+      // same API key will independently hit the same error and stop; we don't
+      // try to pre-cancel them because Promise.all starts them simultaneously.
+      await Promise.all(modelIdsToRun.map((modelId) => runBatchForModel(modelId)));
 
       try {
         const updatedHistory = await historyService.getHistory(user);
@@ -830,15 +1205,25 @@ const App: React.FC = () => {
         console.warn('History refresh after batch failed:', historyErr);
       }
 
+      const finalSummary = summarizeAcrossModels();
+      const totalCompleted = finalSummary.completed;
+      const totalFailed = finalSummary.failed;
+
       const wasAborted = abortController.signal.aborted;
       if (wasAborted) {
         setError(
-          `Stopped after ${batchResult.completed} of ${batchResult.total}. Kept the completed generation${batchResult.completed === 1 ? '' : 's'}.`
+          `Stopped after ${totalCompleted} of ${totalRuns}. Kept the completed generation${totalCompleted === 1 ? '' : 's'}.`
         );
-      } else if (batchResult.failed > 0) {
-        const sample = batchResult.errors[0]?.message;
+      } else if (aggregate.fatalError) {
+        // Provider refused further calls outright (billing / key / quota).
+        // Prefer the friendly fatal message over the generic "N failed" wording.
         setError(
-          `Completed ${batchResult.completed} of ${batchResult.total}. ${batchResult.failed} failed${sample ? `: ${sample}` : '.'}`
+          `${aggregate.fatalError.message} (Completed ${totalCompleted} of ${totalRuns}.)`
+        );
+      } else if (totalFailed > 0) {
+        const sample = aggregate.errors[0]?.message;
+        setError(
+          `Completed ${totalCompleted} of ${totalRuns}. ${totalFailed} failed${sample ? `: ${sample}` : '.'}`
         );
       }
     } catch (err: any) {
@@ -846,6 +1231,12 @@ const App: React.FC = () => {
     } finally {
       setIsGenerating(false);
       setBatchProgress(null);
+      setBatchModelProgress({});
+      setActiveBatchModelIds([]);
+      setBatchVisualBars([]);
+      Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      batchVisualBarTimersRef.current = {};
+      batchModelJobsRef.current = {};
       setBatchStartedAt(null);
       setIsBatchStopping(false);
       batchAbortRef.current = null;
@@ -1362,7 +1753,7 @@ const App: React.FC = () => {
     apiKeys?: { [modelId: string]: string }
   ) => {
     if (!user) return;
-    const nextSelectedModel = preferredModel || user.preferences.selectedModel || 'gemini';
+    const nextSelectedModel = preferredModel || user.preferences.selectedModel || 'gemini-3.1-flash-image-preview';
 
     // Use the apiKeys from SettingsPage as-is (it reflects the user's latest
     // edits, including deletions). Falling back to `user.preferences.apiKeys`
@@ -1741,6 +2132,8 @@ const App: React.FC = () => {
             onModelChange={handleModelChange}
             openaiQuality={user?.preferences.settings?.openaiImageQuality || 'auto'}
             onOpenAIQualityChange={user ? handleOpenAIQualityChange : undefined}
+            selectedModelIds={selectedModelIds}
+            onModelIdsChange={setSelectedModelIds}
           />
 
           {/* Main Content Area */}
@@ -1765,19 +2158,33 @@ const App: React.FC = () => {
               const doneCount = batchProgress.completed + batchProgress.failed;
               const elapsedMs = batchStartedAt ? Date.now() - batchStartedAt : 0;
               const elapsedLabel = formatDuration(elapsedMs / 1000);
-              const remainingSeconds = estimateRemainingSeconds({
-                total: batchProgress.total,
-                completed: batchProgress.completed,
-                failed: batchProgress.failed,
-                elapsedMs,
-                concurrency: DEFAULT_BATCH_CONCURRENCY,
-                secondsPerGen: getModelSecondsPerGen(selectedModel),
-              });
+              const modelIdsForEta = (activeBatchModelIds.length > 0 ? activeBatchModelIds : [selectedModel])
+                .filter((id, index, arr) => arr.indexOf(id) === index);
+              const remainingJobs = Math.max(0, batchProgress.total - doneCount);
+              let remainingSeconds = 0;
+              if (remainingJobs > 0 && elapsedMs > 0 && doneCount > 0) {
+                // Observed throughput across all completed jobs best reflects
+                // real wall-clock progress during multi-model parallel runs.
+                const observedJobsPerSecond = doneCount / Math.max(1, elapsedMs / 1000);
+                remainingSeconds = Math.round(remainingJobs / Math.max(0.01, observedJobsPerSecond));
+              } else if (remainingJobs > 0) {
+                const expectedJobsPerSecond = modelIdsForEta.reduce((sum, modelId) => {
+                  const secsPerGen = Math.max(1, getModelSecondsPerGen(modelId));
+                  return sum + (DEFAULT_BATCH_CONCURRENCY / secsPerGen);
+                }, 0);
+                remainingSeconds = Math.round(remainingJobs / Math.max(0.01, expectedJobsPerSecond));
+              }
               const remainingLabel = formatDuration(remainingSeconds);
               const inFlight = batchProgress.inFlight;
+              const modelChips = modelIdsForEta
+                .map((modelId) => ({
+                  modelId,
+                  stats: batchModelProgress[modelId],
+                }))
+                .filter(({ stats }) => !!stats);
               return (
                 <div
-                  className="absolute top-24 left-1/2 -translate-x-1/2 z-40 w-full max-w-md px-4"
+                  className="absolute top-24 left-1/2 -translate-x-1/2 z-40 w-full max-w-lg px-4"
                   role="status"
                   aria-live="polite"
                 >
@@ -1816,15 +2223,47 @@ const App: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                    <div className="mt-2 h-1.5 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-brand-teal transition-all duration-200"
-                        style={{
-                          width: `${Math.round(
-                            (doneCount / Math.max(1, batchProgress.total)) * 100
-                          )}%`
-                        }}
-                      />
+                    <div className="mt-2 space-y-1.5">
+                      {batchVisualBars.length > 0 ? (
+                        batchVisualBars.map((bar) => {
+                          const seed = bar.key.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+                          const activeWidth = 30 + (seed % 26); // 30-55%
+                          return (
+                            <div
+                              key={bar.key}
+                              className={`rounded-md border px-2.5 py-1.5 transition-all duration-700 ${
+                                bar.phase === 'active'
+                                  ? 'border-gray-200 dark:border-[#30363d] opacity-100'
+                                  : 'border-brand-teal/40 opacity-0 scale-[0.98]'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                <span className="truncate font-medium">
+                                  {MODEL_NAME_BY_ID[bar.modelId] || bar.modelId}
+                                </span>
+                                <span className="truncate text-right">{bar.prompt}</span>
+                              </div>
+                              <div className="mt-1.5 h-2 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full ${bar.phase === 'active' ? 'bg-brand-teal animate-pulse' : 'bg-brand-teal/70'} transition-all duration-700`}
+                                  style={{ width: `${bar.phase === 'active' ? activeWidth : 100}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="h-1.5 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-brand-teal transition-all duration-200"
+                            style={{
+                              width: `${Math.round(
+                                (doneCount / Math.max(1, batchProgress.total)) * 100
+                              )}%`
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                     <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                       <span>{elapsedLabel} elapsed</span>
@@ -1836,6 +2275,23 @@ const App: React.FC = () => {
                         <span>Finishing up…</span>
                       )}
                     </div>
+                    {modelChips.length > 1 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {modelChips.map(({ modelId, stats }) => (
+                          <span
+                            key={modelId}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-gray-200 dark:border-[#30363d] text-[10px] font-medium text-slate-600 dark:text-slate-300"
+                            title={`${MODEL_NAME_BY_ID[modelId] || modelId}: ${stats!.completed + stats!.failed}/${stats!.total} complete, ${stats!.inFlight} running`}
+                          >
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${stats!.inFlight > 0 ? 'bg-brand-teal animate-pulse' : 'bg-slate-400'}`} />
+                            {MODEL_NAME_BY_ID[modelId] || modelId}
+                            <span className="text-slate-400 dark:text-slate-500">
+                              {stats!.completed + stats!.failed}/{stats!.total}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -1857,14 +2313,24 @@ const App: React.FC = () => {
               resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
               options={context}
               history={history}
+              comparisonState={comparisonState}
+              onEnterComparePicker={enterComparePickerMode}
+              onExitComparePicker={exitComparePickerMode}
+              onPickMark={pickMarkForComparison}
             />
 
             {/* History Gallery */}
-            <RecentGenerations 
+            <RecentGenerations
               history={history}
               onSelect={handleRestoreFromHistory}
               onDelete={requestDeleteHistory}
               options={context}
+              isComparePicking={comparisonState.mode === 'picking'}
+              onPickMark={pickMarkForComparison}
+              pickedMarkIds={{
+                a: comparisonState.a ? `${comparisonState.a.generationId}|${comparisonState.a.versionId}` : undefined,
+                b: comparisonState.b ? `${comparisonState.b.generationId}|${comparisonState.b.versionId}` : undefined,
+              }}
             />
           </main>
         </>
@@ -2167,6 +2633,7 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+
     </div>
   );
 };

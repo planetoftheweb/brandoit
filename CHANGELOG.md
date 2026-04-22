@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-21
+### Added
+- **Cross-model comparison workflow with an inline swipe slider.** Users can now select multiple models for one generation run and compare results directly in the main preview surface (no cramped modal), with an A/B slider (`components/JuxtaposeSlider.tsx`) and side-by-side export options.
+- **Grouped model selector UX for Gemini and OpenAI families.** The model menu now organizes options by provider, supports shift-click compare-entry behavior, and surfaces clearer selected-state feedback for compare picks.
+- **Per-mark model identity across shared generation tiles.** Each generated version now carries its originating `modelId`, allowing mixed-model runs to remain grouped in one tile while keeping accurate model tags in previews/history and comparison picks.
+- **Per-job batch progress lanes.** Multi-generation runs now render one progress row per active generation job (with prompt + model context), instead of a single aggregate bar, and fade rows out as jobs finish.
+- **Toolbar preference durability upgrades.** Local toolbar cache now includes OpenAI image quality and improved fallback hydration for signed-out and returning sessions, so defaults persist more reliably between reloads.
+
+### Changed
+- Comparison mode now uses the existing viewport and thumbnail rail flow instead of a separate modal, with controls overlaid on the slider surface to preserve image real estate.
+- Shift-click compare behavior now treats the currently selected mark as A and the shift-clicked mark as B when entering compare, matching expected "compare this against current" intent.
+- Starting a new generation now exits compare mode immediately so the workspace returns to normal generation context.
+- Control bar spacing and sizing were rebalanced for larger screens (`components/ControlPanel.tsx`), improving legibility and reducing cramped dropdown/button layouts.
+- Multi-model batch ETA now reflects parallel wall-clock behavior using observed throughput and per-model concurrency assumptions.
+- OpenAI integration path expanded: model labels, quality routing, and aspect-ratio handling were aligned across controls, generation services, history, and settings views.
+
+### Fixed
+- Resolved repeated compare-layout regressions where the preview area could collapse or left-align when entering comparison mode.
+- Prevented top-right action buttons from covering compare controls while the slider is active.
+- Corrected compare-entry seeding so users no longer need to reselect the first mark after entering picker mode.
+- Improved per-job progress readability: larger metadata text and active bars no longer appear fully complete while generations are still in flight.
+- Improved persistence defaults for first-load preferences (model/type/style/colors/size/quality) so user-selected settings survive reloads and sync more consistently.
+
 ## [0.4.0] - 2026-04-21
 ### Added
 - **GPT Image 2 and GPT Image Mini** are now available as first-class models. The previous single "GPT Image" entry is split into three tiers in `SUPPORTED_MODELS`:

@@ -3,7 +3,7 @@ import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOpti
 import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
-import { SUPPORTED_MODELS } from '../constants';
+import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
 import { getAspectRatiosForModel } from '../services/aspectRatioService';
 import { expandPromptPermutations } from '../services/promptExpansionService';
 import {
@@ -43,7 +43,9 @@ import {
   Play,
   Pause,
   MousePointer2,
-  Gauge
+  Gauge,
+  GitCompare,
+  Check as CheckIcon
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 
@@ -72,6 +74,14 @@ interface ControlPanelProps {
   onModelChange: (modelId: string) => void;
   openaiQuality?: 'low' | 'medium' | 'high' | 'auto';
   onOpenAIQualityChange?: (quality: 'low' | 'medium' | 'high' | 'auto') => void;
+  /**
+   * Full set of models picked for the next Generate click. When length > 1,
+   * the app fans out the batch generation across every selected model and
+   * tags the results with a shared comparisonBatchId. Always equals
+   * [selectedModel] in single-select mode.
+   */
+  selectedModelIds?: string[];
+  onModelIdsChange?: (ids: string[]) => void;
 }
 
 // Modal Component
@@ -451,9 +461,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onResetToDefaults,
   onModelChange,
   openaiQuality = 'auto',
-  onOpenAIQualityChange
+  onOpenAIQualityChange,
+  selectedModelIds,
+  onModelIdsChange
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [compareModelsMode, setCompareModelsMode] = useState(false);
+  const effectiveSelectedModelIds = useMemo(() => {
+    if (selectedModelIds && selectedModelIds.length > 0) return selectedModelIds;
+    return [selectedModel];
+  }, [selectedModelIds, selectedModel]);
+  const isMultiModelActive = compareModelsMode && effectiveSelectedModelIds.length > 1;
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -489,16 +507,39 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   );
   const expandedPromptCount = expansion.prompts.length;
   const safeBatchCount = Math.max(1, Math.floor(batchCount || 1));
-  const totalBatchRuns = expandedPromptCount * safeBatchCount;
+  const perModelBatchRuns = expandedPromptCount * safeBatchCount;
+  const modelCount = isMultiModelActive ? effectiveSelectedModelIds.length : 1;
+  const totalBatchRuns = perModelBatchRuns * modelCount;
   const exceedsBatchCap = Number.isFinite(batchCap) && totalBatchRuns > batchCap;
   const durationEstimate = useMemo(
-    () =>
-      estimateBatchDuration({
-        total: totalBatchRuns,
+    () => {
+      // Sum per-model duration estimates so a compare run with a slow + fast
+      // model reflects true parallel wall-clock behavior.
+      if (isMultiModelActive) {
+        const totals = effectiveSelectedModelIds.map((id) =>
+          estimateBatchDuration({
+            total: perModelBatchRuns,
+            concurrency: DEFAULT_BATCH_CONCURRENCY,
+            secondsPerGen: getModelSecondsPerGen(id),
+          })
+        );
+        const totalSeconds = totals.reduce((maxSoFar, t) => Math.max(maxSoFar, t.totalSeconds), 0);
+        const aggregateParallelism = totals.reduce((sum, t) => sum + t.effectiveConcurrency, 0);
+        const effectiveConcurrency = Math.max(1, Math.min(aggregateParallelism, Math.max(1, totalBatchRuns)));
+        return {
+          totalSeconds,
+          // Display-only field; pick the slower model's baseline so labels stay conservative.
+          secondsPerGen: Math.max(...totals.map((t) => t.secondsPerGen)),
+          effectiveConcurrency,
+        };
+      }
+      return estimateBatchDuration({
+        total: perModelBatchRuns,
         concurrency: DEFAULT_BATCH_CONCURRENCY,
         secondsPerGen: getModelSecondsPerGen(selectedModel),
-      }),
-    [totalBatchRuns, selectedModel]
+      });
+    },
+    [perModelBatchRuns, selectedModel, isMultiModelActive, effectiveSelectedModelIds]
   );
   const estimatedLabel = formatDuration(durationEstimate.totalSeconds);
   const hasBatchInfo = !!config.prompt && (totalBatchRuns > 0 || expansion.hasBraces || exceedsBatchCap);
@@ -1118,7 +1159,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => (
     <button
       onClick={onClick}
-      className={`h-full px-3 py-2 border rounded-lg flex items-center gap-2 transition-all min-w-[120px] md:min-w-[150px] justify-between group ${
+      className={`h-full px-3 lg:px-4 py-2 border rounded-lg flex items-center gap-2 transition-all min-w-[120px] md:min-w-[150px] lg:min-w-[170px] 2xl:min-w-[190px] justify-between group ${
         isActive 
           ? 'bg-gray-100 dark:bg-[#1c2128] border-brand-teal text-brand-teal dark:text-brand-teal' 
           : 'bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 hover:bg-gray-50 dark:hover:bg-[#161b22]'
@@ -1128,7 +1169,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <Icon size={16} className={isActive ? "text-brand-teal dark:text-brand-teal" : "text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-400"} />
         <div className="flex flex-col flex-1 min-w-0">
           <span className="text-[11px] uppercase font-bold text-brand-teal leading-none mb-0.5 hidden sm:block">{subLabel}</span>
-          <span className="truncate text-base font-semibold text-brand-teal">{label}</span>
+          {typeof label === 'string' || typeof label === 'number'
+            ? <span className="truncate text-base font-semibold text-brand-teal">{label}</span>
+            : <div className="min-w-0 text-brand-teal">{label}</div>}
           {colors && colors.length > 0 && (
              <div className="flex h-1 mt-1 rounded-sm overflow-hidden ring-1 ring-black/5 dark:ring-white/10 opacity-80">
                {colors.map((hex: string, i: number) => (
@@ -1163,10 +1206,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     openai: 'GPT Image 1.5',
     'gemini-svg': 'Gemini SVG'
   };
-  const modelLabel =
-    modelLabelMap[selectedModel] ||
-    SUPPORTED_MODELS.find(m => m.id === selectedModel)?.name ||
-    'Model';
+  const getModelLabel = (id: string): string =>
+    modelLabelMap[id] || SUPPORTED_MODELS.find((m) => m.id === id)?.name || id || 'Model';
+  const modelLabel: React.ReactNode = (() => {
+    if (!isMultiModelActive) return getModelLabel(selectedModel);
+    const ids = effectiveSelectedModelIds;
+    if (ids.length === 0) return 'Model';
+    if (ids.length === 1) return getModelLabel(ids[0]);
+    return `${getModelLabel(ids[0])} +${ids.length - 1}`;
+  })();
 
   const inputClass = "w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg p-3.5 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600";
   const labelClass = "block text-xs md:text-sm font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1";
@@ -1234,10 +1282,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   return (
     <>
       <div className="sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] p-4 transition-colors duration-200" ref={containerRef}>
-        <div className="max-w-7xl mx-auto flex flex-col gap-4">
+        <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
           
           {/* 1. Toolbar Controls */}
-          <div className="flex flex-wrap items-center justify-center gap-2 w-full">
+          <div className="flex flex-wrap items-center justify-center gap-2 lg:gap-3 2xl:gap-4 w-full">
             
             {/* Graphic Type */}
             <div className="relative">
@@ -1394,23 +1442,107 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 onClick={() => toggleDropdown('model')} 
               />
               {activeDropdown === 'model' && (
-                <div className="absolute top-full left-0 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
-                  {SUPPORTED_MODELS.map(model => (
-                    <button
-                      key={model.id}
-                      onClick={() => {
-                        onModelChange(model.id);
-                        setActiveDropdown(null);
-                      }}
-                      className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${selectedModel === model.id ? 'text-brand-teal font-semibold' : 'text-slate-700 dark:text-slate-200'}`}
-                    >
-                      <Sparkles size={14} className="text-brand-teal" />
-                      <div className="flex flex-col">
-                        <span className="font-medium">{modelLabelMap[model.id] || model.name}</span>
-                        <span className="text-xs text-slate-500 dark:text-slate-400">{model.description}</span>
+                <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCompareModelsMode((prev) => {
+                        const next = !prev;
+                        if (!next && onModelIdsChange) {
+                          onModelIdsChange([selectedModel]);
+                        } else if (next && onModelIdsChange && (!selectedModelIds || selectedModelIds.length === 0)) {
+                          onModelIdsChange([selectedModel]);
+                        }
+                        return next;
+                      });
+                    }}
+                    title="Toggle multi-model generation. When two or more models are selected, each Generate click runs once per model and tags the results as a comparison batch."
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm font-medium border-b border-gray-100 dark:border-[#30363d] transition-colors ${
+                      compareModelsMode
+                        ? 'bg-brand-teal/10 text-brand-teal'
+                        : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <GitCompare size={15} className={compareModelsMode ? 'text-brand-teal' : 'text-slate-500'} />
+                      <span>Compare models</span>
+                    </span>
+                    <span className={`text-[11px] uppercase tracking-wider font-bold ${compareModelsMode ? 'text-brand-teal' : 'text-slate-400'}`}>
+                      {compareModelsMode ? 'On' : 'Off'}
+                    </span>
+                  </button>
+                  {MODEL_GROUP_ORDER.map((groupName) => {
+                    const groupModels = SUPPORTED_MODELS.filter((m) => m.group === groupName);
+                    if (groupModels.length === 0) return null;
+                    return (
+                      <div key={groupName}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-gray-50 dark:bg-[#0d1117] border-b border-gray-100 dark:border-[#30363d]">
+                          {groupName}
+                        </div>
+                        {groupModels.map((model) => {
+                          const isChecked = effectiveSelectedModelIds.includes(model.id);
+                          const isPrimary = selectedModel === model.id;
+                          return (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                if (compareModelsMode) {
+                                  if (!onModelIdsChange) return;
+                                  const currentIds = effectiveSelectedModelIds;
+                                  let nextIds: string[];
+                                  if (currentIds.includes(model.id)) {
+                                    nextIds = currentIds.filter((id) => id !== model.id);
+                                    if (nextIds.length === 0) {
+                                      // Never fully deselect — keep at least one model.
+                                      return;
+                                    }
+                                  } else {
+                                    nextIds = [...currentIds, model.id];
+                                  }
+                                  onModelIdsChange(nextIds);
+                                  if (!nextIds.includes(selectedModel)) {
+                                    onModelChange(nextIds[0]);
+                                  }
+                                } else {
+                                  onModelChange(model.id);
+                                  if (onModelIdsChange) onModelIdsChange([model.id]);
+                                  setActiveDropdown(null);
+                                }
+                              }}
+                              title={model.description}
+                              className={`w-full text-left pl-7 pr-3 py-2 text-[15px] flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${
+                                (compareModelsMode ? isChecked : isPrimary)
+                                  ? 'text-brand-teal font-semibold'
+                                  : 'text-slate-700 dark:text-slate-200'
+                              }`}
+                            >
+                              {compareModelsMode ? (
+                                <span
+                                  className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                                    isChecked
+                                      ? 'bg-brand-teal border-brand-teal text-white'
+                                      : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#0d1117]'
+                                  }`}
+                                >
+                                  {isChecked && <CheckIcon size={12} strokeWidth={3} />}
+                                </span>
+                              ) : (
+                                <Sparkles size={14} className="text-brand-teal shrink-0" />
+                              )}
+                              <span className="font-medium">{modelLabelMap[model.id] || model.name}</span>
+                            </button>
+                          );
+                        })}
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
+                  {compareModelsMode && (
+                    <div className="px-3 py-2 text-[11px] text-slate-500 dark:text-slate-400 bg-gray-50 dark:bg-[#0d1117] border-t border-gray-100 dark:border-[#30363d]">
+                      {effectiveSelectedModelIds.length < 2
+                        ? 'Pick a second model to compare.'
+                        : `Each Generate click will run ${effectiveSelectedModelIds.length} times — once per model.`}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1654,12 +1786,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 aria-live="polite"
               >
                 {exceedsBatchCap ? (
-                  `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count or brace options.`
+                  `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count, brace options, or selected models.`
                 ) : (
                   <>
                     {expansion.hasBraces
-                      ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
-                      : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
+                      ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                      : modelCount > 1
+                        ? `Will run ${totalBatchRuns} generations across ${modelCount} models.`
+                        : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
                     {totalBatchRuns > 0 && (
                       <span className="text-slate-400 dark:text-slate-500">
                         {' '}Est. ~{estimatedLabel}

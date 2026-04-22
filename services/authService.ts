@@ -27,8 +27,19 @@ const defaultPreferences: UserPreferences = {
   graphicTypes: GRAPHIC_TYPES,
   aspectRatios: ASPECT_RATIOS,
   apiKeys: {},
-  selectedModel: 'gemini',
-  settings: { contributeByDefault: false, confirmDeleteHistory: true, confirmDeleteCurrent: true }
+  // Default model for brand-new accounts: Nano Banana 2 (Gemini 3.1 Flash).
+  // App.loadResources / guestSelectedModel use the same id as their
+  // code-level fallback so the UI matches across guest + first-login.
+  selectedModel: 'gemini-3.1-flash-image-preview',
+  settings: {
+    contributeByDefault: false,
+    confirmDeleteHistory: true,
+    confirmDeleteCurrent: true,
+    defaultGraphicTypeId: 'infographic',
+    defaultVisualStyleId: 'hand-drawn',
+    defaultAspectRatio: '16:9',
+    openaiImageQuality: 'auto',
+  }
 };
 
 // Helper to remove non-serializable fields (like React components/icons) from preferences.
@@ -87,7 +98,7 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     aspectRatios: [],
     geminiApiKey: savedPrefs.geminiApiKey, // Legacy support
     apiKeys: savedPrefs.apiKeys || {},
-    selectedModel: savedPrefs.selectedModel || 'gemini',
+    selectedModel: savedPrefs.selectedModel || 'gemini-3.1-flash-image-preview',
     systemPrompt: savedPrefs.systemPrompt,
     settings: {
       contributeByDefault: savedPrefs.settings?.contributeByDefault ?? defaultPreferences.settings?.contributeByDefault ?? false,
