@@ -1157,12 +1157,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   };
 
   const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => {
-    // Menu-style item (no per-button border). Tiered responsive layout:
-    //   - base  (< md): icon-only, 44x44 tap target, comfortable 20px icon
-    //   - md+  (>=768): icon + single-line label (label truncates)
-    //   - xl+ (>=1280): icon + stacked SUBLABEL/label + chevron
-    //   - 2xl+(>=1536): adds the color-scheme preview strip underneath
-    // Uniform h-11 at every tier so vertical rhythm never jumps.
+    // Menu-style item (no per-button border). Three tiers driven by pure CSS:
+    //   - base  (< lg): icon-only 44x44 tap target (tooltip shows label)
+    //   - lg+  (>=1024): icon + truncated label
+    //   - xl+  (>=1280): icon + stacked SUBLABEL/label + chevron
+    //   - 2xl+ (>=1536): adds color-palette preview strip under label
+    // Text tier starts at `lg` (not `md`) so nothing overflows at tablet
+    // widths. The outer flex container uses flex-wrap as a final safety net.
     const titleText =
       subLabel && (typeof label === 'string' || typeof label === 'number')
         ? `${subLabel}: ${label}`
@@ -1176,7 +1177,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         aria-label={titleText}
         className={`h-11 rounded-md flex items-center transition-colors group shrink-0
           w-11 justify-center p-0
-          md:w-auto md:justify-start md:px-2.5 md:gap-2
+          lg:w-auto lg:justify-start lg:px-2.5 lg:gap-2
           xl:px-3 xl:gap-2.5
           ${
             isActive
@@ -1190,16 +1191,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             isActive ? 'text-brand-teal' : 'text-slate-500 dark:text-slate-400 group-hover:text-brand-teal'
           }`}
         />
-        <div className="hidden md:flex flex-col flex-1 min-w-0 text-left">
+        <div className="hidden lg:flex flex-col flex-1 min-w-0 text-left">
           <span className="hidden xl:block text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider leading-none mb-0.5">
             {subLabel}
           </span>
           {typeof label === 'string' || typeof label === 'number' ? (
-            <span className={`truncate font-semibold text-sm xl:text-[15px] max-w-[84px] lg:max-w-[120px] xl:max-w-none ${
+            <span className={`truncate font-semibold text-sm xl:text-[15px] max-w-[100px] xl:max-w-none ${
               isActive ? 'text-brand-teal' : 'text-slate-700 dark:text-slate-100 group-hover:text-brand-teal'
             }`}>{label}</span>
           ) : (
-            <div className={`min-w-0 truncate text-sm xl:text-[15px] max-w-[84px] lg:max-w-[120px] xl:max-w-none ${
+            <div className={`min-w-0 truncate text-sm xl:text-[15px] max-w-[100px] xl:max-w-none ${
               isActive ? 'text-brand-teal' : 'text-slate-700 dark:text-slate-100 group-hover:text-brand-teal'
             }`}>{label}</div>
           )}
@@ -1320,13 +1321,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] p-4 transition-colors duration-200" ref={containerRef}>
         <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
           
-          {/* 1. Toolbar Controls — single-row menu bar.
-              Outer wrapper centers content; inner wrapper is an inline-flex
-              that expands to its content but caps at max-w-full so it can
-              scroll horizontally without pushing items off both sides when
-              justified. */}
-          <div className="w-full flex justify-center">
-          <div className="inline-flex flex-nowrap items-center gap-0.5 md:gap-1 xl:gap-1.5 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {/* 1. Toolbar Controls — menu bar. No overflow clipping here because
+              dropdown panels are absolute children and must escape this box. */}
+          <div className="flex flex-wrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full">
             
             {/* Graphic Type */}
             <div className="relative">
@@ -1676,7 +1673,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
               </div>
             )}
-          </div>
           </div>
 
           {/* 2. Prompt Input Area */}
