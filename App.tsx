@@ -39,6 +39,7 @@ import {
   runBatchGenerations,
   batchCapFor,
   BatchJob,
+  BatchError,
   BatchProgress,
   DEFAULT_BATCH_CONCURRENCY,
 } from './services/batchGenerationService';
@@ -113,11 +114,30 @@ interface BatchModelProgressSummary {
   inFlight: number;
 }
 
-interface BatchVisualBar {
+interface ActiveGenerationCurrentJob {
   key: string;
   modelId: string;
   prompt: string;
-  phase: 'active' | 'exiting';
+}
+
+type ActiveGenerationJobStatus = 'running' | 'stopping' | 'completed' | 'failed' | 'stopped';
+
+interface ActiveGenerationJob {
+  id: string;
+  prompt: string;
+  modelIds: string[];
+  total: number;
+  completed: number;
+  failed: number;
+  inFlight: number;
+  startedAt: number;
+  finishedAt?: number;
+  status: ActiveGenerationJobStatus;
+  errors: BatchError[];
+  modelProgress: Record<string, BatchModelProgressSummary>;
+  currentJobs: ActiveGenerationCurrentJob[];
+  latest?: Generation;
+  message?: string;
 }
 
 const TOOLBAR_SELECTION_KEY_PREFIX = 'brandoit_toolbar_selection_v1';
@@ -268,22 +288,15 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
-  const [batchModelProgress, setBatchModelProgress] = useState<Record<string, BatchModelProgressSummary>>({});
-  const [activeBatchModelIds, setActiveBatchModelIds] = useState<string[]>([]);
-  const [batchVisualBars, setBatchVisualBars] = useState<BatchVisualBar[]>([]);
-  // Wall-clock start of the active batch, used to compute elapsed/remaining in
-  // the progress banner. Null when no batch is running.
-  const [batchStartedAt, setBatchStartedAt] = useState<number | null>(null);
-  // Ticks once per second while a batch is running so the banner's elapsed
-  // time stays live without re-rendering every sibling on each update.
+  const [activeGenerationJobs, setActiveGenerationJobs] = useState<ActiveGenerationJob[]>([]);
+  const hasRunningGenerationJobs = activeGenerationJobs.some((job) =>
+    job.status === 'running' || job.status === 'stopping'
+  );
+  // Ticks once per second while background generations are running so the
+  // monitor's elapsed/remaining labels stay live.
   const [batchClockTick, setBatchClockTick] = useState(0);
-  // Abort controller for the active batch. Captured in a ref so the Stop
-  // button can reach it without re-rendering handleGenerate's closure.
-  const batchAbortRef = useRef<AbortController | null>(null);
-  const batchModelJobsRef = useRef<Record<string, Map<string, string>>>({});
-  const batchVisualBarTimersRef = useRef<Record<string, number>>({});
-  const [isBatchStopping, setIsBatchStopping] = useState(false);
+  const generationJobAbortControllersRef = useRef<Record<string, AbortController>>({});
+  const generationJobDismissTimersRef = useRef<Record<string, number>>({});
 
   // Analysis Modal State
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
@@ -705,20 +718,22 @@ const App: React.FC = () => {
     authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   }, [user?.id, user?.preferences.apiKeys, user?.preferences.geminiApiKey, selectedModel, activeApiKey]);
 
-  // Keep the batch progress banner's elapsed/remaining display live by
-  // nudging a tick once per second while a batch is running.
+  // Keep the generation monitor's elapsed/remaining display live by nudging a
+  // tick once per second while at least one background generation is running.
   useEffect(() => {
-    if (!batchProgress || !batchStartedAt) return;
+    if (!hasRunningGenerationJobs) return;
     const interval = window.setInterval(() => {
       setBatchClockTick((t) => (t + 1) % 1_000_000);
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [batchProgress, batchStartedAt]);
+  }, [hasRunningGenerationJobs]);
 
   useEffect(() => {
     return () => {
-      Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
-      batchVisualBarTimersRef.current = {};
+      Object.values(generationJobAbortControllersRef.current).forEach((controller) => controller.abort());
+      generationJobAbortControllersRef.current = {};
+      Object.values(generationJobDismissTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      generationJobDismissTimersRef.current = {};
     };
   }, []);
 
@@ -878,61 +893,38 @@ const App: React.FC = () => {
     setIsAuthModalOpen(true);
   };
 
-  const handleStopBatch = () => {
-    const controller = batchAbortRef.current;
-    if (!controller || controller.signal.aborted) return;
-    setIsBatchStopping(true);
-    controller.abort();
+  const updateGenerationJob = (
+    jobId: string,
+    updater: (job: ActiveGenerationJob) => ActiveGenerationJob
+  ) => {
+    setActiveGenerationJobs((prev) =>
+      prev.map((job) => (job.id === jobId ? updater(job) : job))
+    );
   };
 
-  const reconcileBatchVisualBars = (
-    modelId: string,
-    currentJobs: Array<{ jobId: string; prompt: string }>
-  ) => {
-    const prevMap = batchModelJobsRef.current[modelId] || new Map<string, string>();
-    const nextMap = new Map<string, string>(currentJobs.map((job) => [job.jobId, job.prompt]));
-    batchModelJobsRef.current[modelId] = nextMap;
-
-    const added: Array<{ jobId: string; prompt: string }> = [];
-    const removedKeys: string[] = [];
-
-    nextMap.forEach((prompt, jobId) => {
-      if (!prevMap.has(jobId)) added.push({ jobId, prompt });
-    });
-    prevMap.forEach((_prompt, jobId) => {
-      if (!nextMap.has(jobId)) removedKeys.push(`${modelId}:${jobId}`);
-    });
-
-    if (added.length > 0) {
-      setBatchVisualBars((prev) => {
-        const existingKeys = new Set(prev.map((item) => item.key));
-        const additions = added
-          .map(({ jobId, prompt }) => ({
-            key: `${modelId}:${jobId}`,
-            modelId,
-            prompt,
-            phase: 'active' as const,
-          }))
-          .filter((item) => !existingKeys.has(item.key));
-        return additions.length > 0 ? [...prev, ...additions] : prev;
-      });
+  const clearGenerationJob = (jobId: string) => {
+    const dismissTimer = generationJobDismissTimersRef.current[jobId];
+    if (dismissTimer) {
+      window.clearTimeout(dismissTimer);
+      delete generationJobDismissTimersRef.current[jobId];
     }
+    delete generationJobAbortControllersRef.current[jobId];
+    setActiveGenerationJobs((prev) => prev.filter((job) => job.id !== jobId));
+  };
 
-    if (removedKeys.length > 0) {
-      setBatchVisualBars((prev) =>
-        prev.map((item) =>
-          removedKeys.includes(item.key) ? { ...item, phase: 'exiting' } : item
-        )
-      );
-      removedKeys.forEach((key) => {
-        const existing = batchVisualBarTimersRef.current[key];
-        if (existing) window.clearTimeout(existing);
-        batchVisualBarTimersRef.current[key] = window.setTimeout(() => {
-          setBatchVisualBars((prev) => prev.filter((item) => item.key !== key));
-          delete batchVisualBarTimersRef.current[key];
-        }, 850);
-      });
-    }
+  const scheduleGenerationJobDismissal = (jobId: string, delayMs = 9000) => {
+    const existing = generationJobDismissTimersRef.current[jobId];
+    if (existing) window.clearTimeout(existing);
+    generationJobDismissTimersRef.current[jobId] = window.setTimeout(() => {
+      clearGenerationJob(jobId);
+    }, delayMs);
+  };
+
+  const handleStopGenerationJob = (jobId: string) => {
+    const controller = generationJobAbortControllersRef.current[jobId];
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    updateGenerationJob(jobId, (job) => ({ ...job, status: 'stopping' }));
   };
 
   const handleGenerate = async (count: number = 1) => {
@@ -940,29 +932,27 @@ const App: React.FC = () => {
     // A/B selection active while new tiles are being produced is confusing,
     // because the viewport appears "stuck" on a stale comparison.
     setComparisonState({ mode: 'idle', a: null, b: null });
-    setIsGenerating(true);
     setError(null);
-    setBatchProgress(null);
-    setBatchStartedAt(Date.now());
     setBatchClockTick(0);
-    setIsBatchStopping(false);
-    setBatchModelProgress({});
-    setActiveBatchModelIds([]);
-    setBatchVisualBars([]);
-    Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
-    batchVisualBarTimersRef.current = {};
-    batchModelJobsRef.current = {};
-    const abortController = new AbortController();
-    batchAbortRef.current = abortController;
+
+    let jobId = '';
     try {
       if (!user) {
         openAuthModal('signup');
         throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to start generating.');
       }
+      if (!config.prompt.trim()) {
+        throw new Error('Enter a prompt before generating.');
+      }
 
       const modelIdsToRun = selectedModelIds.length > 0 ? selectedModelIds : [selectedModel];
+      const apiKeysByModel = modelIdsToRun.reduce<Record<string, string>>((acc, modelId) => {
+        const key = getApiKeyForModel(modelId);
+        if (key) acc[modelId] = key;
+        return acc;
+      }, {});
       // Verify every selected model has an API key wired up before we start.
-      const missingKeys = modelIdsToRun.filter((id) => !getApiKeyForModel(id));
+      const missingKeys = modelIdsToRun.filter((id) => !apiKeysByModel[id]);
       if (missingKeys.length > 0) {
         setSettingsMode(true);
         throw new Error(
@@ -982,18 +972,6 @@ const App: React.FC = () => {
       const safeCount = Math.max(1, Math.floor(count || 1));
       const perModelRuns = prompts.length * safeCount;
       const totalRuns = perModelRuns * modelIdsToRun.length;
-      setActiveBatchModelIds(modelIdsToRun);
-      setBatchModelProgress(
-        modelIdsToRun.reduce<Record<string, BatchModelProgressSummary>>((acc, modelId) => {
-          acc[modelId] = {
-            total: perModelRuns,
-            completed: 0,
-            failed: 0,
-            inFlight: 0,
-          };
-          return acc;
-        }, {})
-      );
       const cap = batchCapFor(user);
       if (Number.isFinite(cap) && totalRuns > cap) {
         throw new Error(
@@ -1018,6 +996,41 @@ const App: React.FC = () => {
       let sharedBatchGeneration: Generation | null = null;
       let sharedPersistQueue: Promise<Generation | null> = Promise.resolve(null);
       const primaryModelId = modelIdsToRun[0];
+      const runUser = user;
+      const runContext = context;
+      const runSystemPrompt = user.preferences.systemPrompt;
+      const runOpenAIQuality = user.preferences.settings?.openaiImageQuality || 'auto';
+      const startedAt = Date.now();
+      jobId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const abortController = new AbortController();
+      generationJobAbortControllersRef.current[jobId] = abortController;
+      const initialModelProgress = modelIdsToRun.reduce<Record<string, BatchModelProgressSummary>>((acc, modelId) => {
+        acc[modelId] = {
+          total: perModelRuns,
+          completed: 0,
+          failed: 0,
+          inFlight: 0,
+        };
+        return acc;
+      }, {});
+
+      setActiveGenerationJobs((prev) => [
+        {
+          id: jobId,
+          prompt: safeConfig.prompt,
+          modelIds: modelIdsToRun,
+          total: totalRuns,
+          completed: 0,
+          failed: 0,
+          inFlight: 0,
+          startedAt,
+          status: 'running',
+          errors: [],
+          modelProgress: initialModelProgress,
+          currentJobs: [],
+        },
+        ...prev
+      ]);
 
       // Aggregate progress across all per-model batches. Models run in
       // parallel (see Promise.all below), so we can't just add a running
@@ -1028,20 +1041,25 @@ const App: React.FC = () => {
       const perModelProgress: Record<string, BatchProgress> = {};
       const aggregate = {
         errors: [] as BatchError[],
-        generations: [] as Generation[],
         lastGeneration: undefined as Generation | undefined,
         fatalError: undefined as BatchError | undefined,
         /** Which model hit the fatal error (surfaced in the banner copy). */
         fatalErrorModelId: undefined as string | undefined,
       };
 
-      const summarizeAcrossModels = (latest?: Generation): BatchProgress => {
+      const summarizeAcrossModels = (latest?: Generation) => {
         const entries = Object.values(perModelProgress);
         const completed = entries.reduce((acc, p) => acc + p.completed, 0);
         const failed = entries.reduce((acc, p) => acc + p.failed, 0);
         const inFlight = entries.reduce((acc, p) => acc + p.inFlight, 0);
         const errors = entries.flatMap((p) => p.errors);
-        const currentPrompts = entries.flatMap((p) => p.currentPrompts);
+        const currentJobs = Object.entries(perModelProgress).flatMap(([modelId, progress]) =>
+          (progress.currentJobs || []).map((job) => ({
+            key: `${modelId}:${job.jobId}`,
+            modelId,
+            prompt: job.prompt,
+          }))
+        );
         return {
           total: totalRuns,
           completed,
@@ -1049,16 +1067,16 @@ const App: React.FC = () => {
           inFlight,
           errors,
           latest: latest || aggregate.lastGeneration,
-          currentPrompts,
+          currentJobs,
         };
       };
 
       const runBatchForModel = async (modelId: string) => {
-        const modelKey = getApiKeyForModel(modelId);
+        const modelKey = apiKeysByModel[modelId];
         if (!modelKey) throw new Error(`Missing API key for ${modelId}.`);
         // Per-model aspect-ratio coercion: GPT Image 2 supports wider ratios
         // than GPT Image 1.5, Gemini models support different ones, etc.
-        const safeAspectRatioForModel = getSafeAspectRatioForModel(modelId, safeConfig.aspectRatio, aspectRatios);
+        const safeAspectRatioForModel = getSafeAspectRatioForModel(modelId, safeConfig.aspectRatio, runContext.aspectRatios);
         const modelSafeConfig = safeAspectRatioForModel === safeConfig.aspectRatio
           ? safeConfig
           : { ...safeConfig, aspectRatio: safeAspectRatioForModel };
@@ -1070,15 +1088,15 @@ const App: React.FC = () => {
           const jobStart = performance.now();
           let result;
           if (modelId === 'gemini-svg') {
-            result = await generateSvg(jobConfig, context, modelKey, user?.preferences.systemPrompt);
+            result = await generateSvg(jobConfig, runContext, modelKey, runSystemPrompt);
           } else if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
             result = await generateOpenAIImage(structuredPrompt, jobConfig, modelKey, {
               modelId,
-              quality: user?.preferences.settings?.openaiImageQuality || 'auto',
-              systemPrompt: user?.preferences.systemPrompt
+              quality: runOpenAIQuality,
+              systemPrompt: runSystemPrompt
             });
           } else {
-            result = await generateGraphic(jobConfig, context, modelKey, user?.preferences.systemPrompt, modelId);
+            result = await generateGraphic(jobConfig, runContext, modelKey, runSystemPrompt, modelId);
           }
           recordModelDuration(modelId, performance.now() - jobStart);
 
@@ -1106,7 +1124,7 @@ const App: React.FC = () => {
                 generation.versions[0].aspectRatio = jobConfig.aspectRatio;
               }
               sharedBatchGeneration = generation;
-              await historyService.saveGeneration(user, generation);
+              await historyService.saveGeneration(runUser, generation);
               return generation;
             }
             const nextNumber = sharedBatchGeneration.versions.length + 1;
@@ -1125,7 +1143,7 @@ const App: React.FC = () => {
               currentVersionIndex: sharedBatchGeneration.versions.length,
             };
             sharedBatchGeneration = updated;
-            await historyService.updateGeneration(user, updated);
+            await historyService.updateGeneration(runUser, updated);
             return updated;
           });
 
@@ -1145,18 +1163,25 @@ const App: React.FC = () => {
             // different models, we always re-sum from the shared map rather
             // than accumulating deltas.
             perModelProgress[modelId] = progress;
-            setBatchModelProgress((prev) => ({
-              ...prev,
-              [modelId]: {
-                total: perModelRuns,
-                completed: progress.completed,
-                failed: progress.failed,
-                inFlight: progress.inFlight,
+            const summary = summarizeAcrossModels(progress.latest);
+            updateGenerationJob(jobId, (job) => ({
+              ...job,
+              completed: summary.completed,
+              failed: summary.failed,
+              inFlight: summary.inFlight,
+              errors: summary.errors,
+              latest: summary.latest || job.latest,
+              currentJobs: summary.currentJobs,
+              modelProgress: {
+                ...job.modelProgress,
+                [modelId]: {
+                  total: perModelRuns,
+                  completed: progress.completed,
+                  failed: progress.failed,
+                  inFlight: progress.inFlight,
+                }
               }
             }));
-            reconcileBatchVisualBars(modelId, progress.currentJobs || []);
-            const summary = summarizeAcrossModels(progress.latest);
-            setBatchProgress(summary);
             if (progress.latest) {
               const latest = progress.latest;
               aggregate.lastGeneration = latest;
@@ -1175,7 +1200,6 @@ const App: React.FC = () => {
         });
 
         aggregate.errors.push(...perModelResult.errors);
-        aggregate.generations.push(...perModelResult.generations);
         if (perModelResult.lastGeneration) aggregate.lastGeneration = perModelResult.lastGeneration;
         if (perModelResult.fatalError && !aggregate.fatalError) {
           aggregate.fatalError = perModelResult.fatalError;
@@ -1199,7 +1223,7 @@ const App: React.FC = () => {
       await Promise.all(modelIdsToRun.map((modelId) => runBatchForModel(modelId)));
 
       try {
-        const updatedHistory = await historyService.getHistory(user);
+        const updatedHistory = await historyService.getHistory(runUser);
         setHistory(updatedHistory);
       } catch (historyErr) {
         console.warn('History refresh after batch failed:', historyErr);
@@ -1210,36 +1234,54 @@ const App: React.FC = () => {
       const totalFailed = finalSummary.failed;
 
       const wasAborted = abortController.signal.aborted;
+      let finalStatus: ActiveGenerationJobStatus = 'completed';
+      let finalMessage = `Completed ${totalCompleted} of ${totalRuns}.`;
       if (wasAborted) {
-        setError(
-          `Stopped after ${totalCompleted} of ${totalRuns}. Kept the completed generation${totalCompleted === 1 ? '' : 's'}.`
-        );
+        finalStatus = 'stopped';
+        finalMessage = `Stopped after ${totalCompleted} of ${totalRuns}. Kept the completed generation${totalCompleted === 1 ? '' : 's'}.`;
       } else if (aggregate.fatalError) {
         // Provider refused further calls outright (billing / key / quota).
         // Prefer the friendly fatal message over the generic "N failed" wording.
-        setError(
-          `${aggregate.fatalError.message} (Completed ${totalCompleted} of ${totalRuns}.)`
-        );
+        finalStatus = 'failed';
+        finalMessage = `${aggregate.fatalError.message} (Completed ${totalCompleted} of ${totalRuns}.)`;
+        setError(finalMessage);
       } else if (totalFailed > 0) {
         const sample = aggregate.errors[0]?.message;
-        setError(
-          `Completed ${totalCompleted} of ${totalRuns}. ${totalFailed} failed${sample ? `: ${sample}` : '.'}`
-        );
+        finalStatus = 'failed';
+        finalMessage = `Completed ${totalCompleted} of ${totalRuns}. ${totalFailed} failed${sample ? `: ${sample}` : '.'}`;
+        setError(finalMessage);
       }
+      updateGenerationJob(jobId, (job) => ({
+        ...job,
+        completed: totalCompleted,
+        failed: totalFailed,
+        inFlight: 0,
+        currentJobs: [],
+        errors: finalSummary.errors,
+        latest: finalSummary.latest || job.latest,
+        status: finalStatus,
+        finishedAt: Date.now(),
+        message: finalMessage,
+      }));
+      scheduleGenerationJobDismissal(jobId, finalStatus === 'failed' ? 14000 : 9000);
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
+      const message = err.message || 'An unexpected error occurred.';
+      setError(message);
+      if (jobId) {
+        updateGenerationJob(jobId, (job) => ({
+          ...job,
+          status: 'failed',
+          inFlight: 0,
+          currentJobs: [],
+          finishedAt: Date.now(),
+          message,
+        }));
+        scheduleGenerationJobDismissal(jobId, 14000);
+      }
     } finally {
-      setIsGenerating(false);
-      setBatchProgress(null);
-      setBatchModelProgress({});
-      setActiveBatchModelIds([]);
-      setBatchVisualBars([]);
-      Object.values(batchVisualBarTimersRef.current).forEach((timer) => window.clearTimeout(timer));
-      batchVisualBarTimersRef.current = {};
-      batchModelJobsRef.current = {};
-      setBatchStartedAt(null);
-      setIsBatchStopping(false);
-      batchAbortRef.current = null;
+      if (jobId) {
+        delete generationJobAbortControllersRef.current[jobId];
+      }
     }
   };
 
@@ -1893,6 +1935,31 @@ const App: React.FC = () => {
     authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   };
 
+  const generationModelIdsToRun = selectedModelIds.length > 0 ? selectedModelIds : [selectedModel];
+  const missingGenerationApiKeyIds = user
+    ? generationModelIdsToRun.filter((modelId) => !getApiKeyForModel(modelId))
+    : generationModelIdsToRun;
+  const isGenerateSetupRequired = !user || missingGenerationApiKeyIds.length > 0;
+  const firstMissingModelId = missingGenerationApiKeyIds[0] || selectedModel;
+  const generateSetupActionLabel = !user ? 'Create account' : 'Add API key';
+  const generateSetupActionDescription = !user
+    ? 'Create a free account before generating'
+    : missingGenerationApiKeyIds.length > 1
+      ? `Add API keys for ${missingGenerationApiKeyIds.map((id) => MODEL_NAME_BY_ID[id] || id).join(', ')}`
+      : `Add an API key for ${MODEL_NAME_BY_ID[firstMissingModelId] || firstMissingModelId}`;
+
+  const handleGenerateSetupAction = () => {
+    setError(null);
+    setIsSetupModalOpen(false);
+    if (!user) {
+      openAuthModal('signup');
+      return;
+    }
+    setSettingsMode(true);
+    setCatalogMode(null);
+    setAdminMode(false);
+  };
+
   // Suspended-account hard block. A signed-in user with `isDisabled === true`
   // is stopped here before any studio, history, catalog, settings, or admin UI
   // can render. Only a sign-out action is exposed.
@@ -2121,7 +2188,7 @@ const App: React.FC = () => {
             config={config} 
             setConfig={setConfig} 
             onGenerate={handleGenerate}
-            isGenerating={isGenerating}
+            isGenerating={hasRunningGenerationJobs}
             options={context}
             setOptions={{ setBrandColors, setVisualStyles, setGraphicTypes, setAspectRatios }}
             onUploadGuidelines={handleUploadGuidelines}
@@ -2134,6 +2201,10 @@ const App: React.FC = () => {
             onOpenAIQualityChange={user ? handleOpenAIQualityChange : undefined}
             selectedModelIds={selectedModelIds}
             onModelIdsChange={setSelectedModelIds}
+            setupRequired={isGenerateSetupRequired}
+            setupActionLabel={generateSetupActionLabel}
+            setupActionDescription={generateSetupActionDescription}
+            onSetupAction={handleGenerateSetupAction}
           />
 
           {/* Main Content Area */}
@@ -2150,148 +2221,185 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* Batch progress banner */}
-            {batchProgress && batchProgress.total > 1 && (() => {
-              // `batchClockTick` is read so this block re-renders each second
-              // while a batch is active, keeping elapsed/remaining live.
+            {/* Background generation monitor */}
+            {activeGenerationJobs.length > 0 && (() => {
               void batchClockTick;
-              const doneCount = batchProgress.completed + batchProgress.failed;
-              const elapsedMs = batchStartedAt ? Date.now() - batchStartedAt : 0;
-              const elapsedLabel = formatDuration(elapsedMs / 1000);
-              const modelIdsForEta = (activeBatchModelIds.length > 0 ? activeBatchModelIds : [selectedModel])
-                .filter((id, index, arr) => arr.indexOf(id) === index);
-              const remainingJobs = Math.max(0, batchProgress.total - doneCount);
-              let remainingSeconds = 0;
-              if (remainingJobs > 0 && elapsedMs > 0 && doneCount > 0) {
-                // Observed throughput across all completed jobs best reflects
-                // real wall-clock progress during multi-model parallel runs.
-                const observedJobsPerSecond = doneCount / Math.max(1, elapsedMs / 1000);
-                remainingSeconds = Math.round(remainingJobs / Math.max(0.01, observedJobsPerSecond));
-              } else if (remainingJobs > 0) {
-                const expectedJobsPerSecond = modelIdsForEta.reduce((sum, modelId) => {
-                  const secsPerGen = Math.max(1, getModelSecondsPerGen(modelId));
-                  return sum + (DEFAULT_BATCH_CONCURRENCY / secsPerGen);
-                }, 0);
-                remainingSeconds = Math.round(remainingJobs / Math.max(0.01, expectedJobsPerSecond));
-              }
-              const remainingLabel = formatDuration(remainingSeconds);
-              const inFlight = batchProgress.inFlight;
-              const modelChips = modelIdsForEta
-                .map((modelId) => ({
-                  modelId,
-                  stats: batchModelProgress[modelId],
-                }))
-                .filter(({ stats }) => !!stats);
+              const runningCount = activeGenerationJobs.filter((job) =>
+                job.status === 'running' || job.status === 'stopping'
+              ).length;
               return (
                 <div
-                  className="absolute top-24 left-1/2 -translate-x-1/2 z-40 w-full max-w-lg px-4"
+                  className="absolute top-6 right-4 z-40 w-[min(440px,calc(100%-2rem))]"
                   role="status"
                   aria-live="polite"
                 >
-                  <div className="bg-white/95 dark:bg-[#161b22]/95 border border-gray-200 dark:border-[#30363d] rounded-xl shadow-lg backdrop-blur-sm px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
+                  <div className="bg-white/95 dark:bg-[#161b22]/95 border border-gray-200 dark:border-[#30363d] rounded-xl shadow-lg backdrop-blur-sm p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-4 h-4 border-2 border-brand-teal/30 border-t-brand-teal rounded-full animate-spin shrink-0" />
-                        <span className="text-sm font-medium text-slate-900 dark:text-white truncate">
-                          {isBatchStopping ? 'Finishing ' : 'Generating '}
-                          {doneCount} of {batchProgress.total}
-                          {inFlight > 0 && (
-                            <span className="text-slate-500 dark:text-slate-400 font-normal">
-                              {' '}· {inFlight} running
-                            </span>
-                          )}
+                        <Sparkles size={15} className="text-brand-teal shrink-0" />
+                        <span className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                          Active Generations
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {batchProgress.failed > 0 && (
-                          <span className="text-xs font-semibold text-red-600 dark:text-red-400">
-                            {batchProgress.failed} failed
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={handleStopBatch}
-                          disabled={isBatchStopping}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-gray-200 dark:border-[#30363d] text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                          title={isBatchStopping
-                            ? 'Waiting for in-flight generations to finish…'
-                            : 'Stop queuing new generations. In-flight ones will finish and be saved.'}
-                          aria-label="Stop batch generation"
-                        >
-                          <span className="block w-2 h-2 rounded-sm bg-red-500" aria-hidden="true" />
-                          {isBatchStopping ? 'Stopping…' : 'Stop'}
-                        </button>
-                      </div>
+                      <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                        {runningCount} running
+                      </span>
                     </div>
-                    <div className="mt-2 space-y-1.5">
-                      {batchVisualBars.length > 0 ? (
-                        batchVisualBars.map((bar) => {
-                          const seed = bar.key.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
-                          const activeWidth = 30 + (seed % 26); // 30-55%
-                          return (
-                            <div
-                              key={bar.key}
-                              className={`rounded-md border px-2.5 py-1.5 transition-all duration-700 ${
-                                bar.phase === 'active'
-                                  ? 'border-gray-200 dark:border-[#30363d] opacity-100'
-                                  : 'border-brand-teal/40 opacity-0 scale-[0.98]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-                                <span className="truncate font-medium">
-                                  {MODEL_NAME_BY_ID[bar.modelId] || bar.modelId}
-                                </span>
-                                <span className="truncate text-right">{bar.prompt}</span>
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                      {activeGenerationJobs.map((job) => {
+                        const doneCount = job.completed + job.failed;
+                        const progressPct = Math.round((doneCount / Math.max(1, job.total)) * 100);
+                        const running = job.status === 'running' || job.status === 'stopping';
+                        const elapsedMs = (job.finishedAt || Date.now()) - job.startedAt;
+                        const elapsedLabel = formatDuration(elapsedMs / 1000);
+                        const remainingJobs = Math.max(0, job.total - doneCount);
+                        let remainingSeconds = 0;
+                        if (remainingJobs > 0 && elapsedMs > 0 && doneCount > 0) {
+                          const observedJobsPerSecond = doneCount / Math.max(1, elapsedMs / 1000);
+                          remainingSeconds = Math.round(remainingJobs / Math.max(0.01, observedJobsPerSecond));
+                        } else if (remainingJobs > 0) {
+                          const expectedJobsPerSecond = job.modelIds.reduce((sum, modelId) => {
+                            const secsPerGen = Math.max(1, getModelSecondsPerGen(modelId));
+                            return sum + (DEFAULT_BATCH_CONCURRENCY / secsPerGen);
+                          }, 0);
+                          remainingSeconds = Math.round(remainingJobs / Math.max(0.01, expectedJobsPerSecond));
+                        }
+                        const remainingLabel = formatDuration(remainingSeconds);
+                        const modelChips = job.modelIds
+                          .map((modelId) => ({ modelId, stats: job.modelProgress[modelId] }))
+                          .filter(({ stats }) => !!stats);
+                        const statusLabel =
+                          job.status === 'stopping' ? 'Stopping' :
+                          job.status === 'completed' ? 'Done' :
+                          job.status === 'failed' ? 'Needs attention' :
+                          job.status === 'stopped' ? 'Stopped' :
+                          'Generating';
+                        const progressColor =
+                          job.status === 'failed'
+                            ? 'bg-red-500'
+                            : job.status === 'stopped'
+                              ? 'bg-slate-400'
+                              : 'bg-brand-teal';
+
+                        return (
+                          <div
+                            key={job.id}
+                            className="rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] p-2.5"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  {running ? (
+                                    <span className="h-3.5 w-3.5 rounded-full border-2 border-brand-teal/30 border-t-brand-teal animate-spin shrink-0" />
+                                  ) : (
+                                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${job.status === 'failed' ? 'bg-red-500' : 'bg-brand-teal'}`} />
+                                  )}
+                                  <span className="text-xs font-semibold text-slate-900 dark:text-white">
+                                    {statusLabel}
+                                  </span>
+                                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                                    {doneCount}/{job.total}
+                                  </span>
+                                  {job.inFlight > 0 && (
+                                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                                      {job.inFlight} running
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 line-clamp-2 break-words">
+                                  {job.prompt}
+                                </p>
                               </div>
-                              <div className="mt-1.5 h-2 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full ${bar.phase === 'active' ? 'bg-brand-teal animate-pulse' : 'bg-brand-teal/70'} transition-all duration-700`}
-                                  style={{ width: `${bar.phase === 'active' ? activeWidth : 100}%` }}
-                                />
+                              <div className="flex items-center gap-1 shrink-0">
+                                {job.latest && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleRestoreFromHistory(job.latest!)}
+                                    className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-gray-200 dark:border-[#30363d] text-slate-500 dark:text-slate-300 hover:text-brand-teal hover:border-brand-teal transition-colors"
+                                    title="View latest result"
+                                    aria-label="View latest result"
+                                  >
+                                    <ArrowRight size={14} />
+                                  </button>
+                                )}
+                                {running ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStopGenerationJob(job.id)}
+                                    disabled={job.status === 'stopping'}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-gray-200 dark:border-[#30363d] text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                    title={job.status === 'stopping'
+                                      ? 'Waiting for in-flight generations to finish'
+                                      : 'Stop queuing new generations for this run'}
+                                  >
+                                    <span className="block w-2 h-2 rounded-sm bg-red-500" aria-hidden="true" />
+                                    {job.status === 'stopping' ? 'Stopping' : 'Stop'}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => clearGenerationJob(job.id)}
+                                    className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-gray-200 dark:border-[#30363d] text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
+                                    title="Dismiss"
+                                    aria-label="Dismiss generation status"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                )}
                               </div>
                             </div>
-                          );
-                        })
-                      ) : (
-                        <div className="h-1.5 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-brand-teal transition-all duration-200"
-                            style={{
-                              width: `${Math.round(
-                                (doneCount / Math.max(1, batchProgress.total)) * 100
-                              )}%`
-                            }}
-                          />
-                        </div>
-                      )}
+                            <div className="mt-2 h-1.5 bg-gray-200 dark:bg-[#30363d] rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${progressColor} transition-all duration-300 ${running ? 'animate-pulse' : ''}`}
+                                style={{ width: `${progressPct}%` }}
+                              />
+                            </div>
+                            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                              <span>{elapsedLabel} elapsed</span>
+                              {running && remainingSeconds > 0 ? (
+                                <span>~{remainingLabel} remaining</span>
+                              ) : job.message ? (
+                                <span className="truncate">{job.message}</span>
+                              ) : (
+                                <span>{statusLabel}</span>
+                              )}
+                            </div>
+                            {job.currentJobs.length > 0 && (
+                              <div className="mt-1.5 space-y-1">
+                                {job.currentJobs.slice(0, 3).map((currentJob) => (
+                                  <div
+                                    key={currentJob.key}
+                                    className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400"
+                                  >
+                                    <span className="font-medium truncate">
+                                      {MODEL_NAME_BY_ID[currentJob.modelId] || currentJob.modelId}
+                                    </span>
+                                    <span className="truncate text-right">{currentJob.prompt}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {modelChips.length > 1 && (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                {modelChips.map(({ modelId, stats }) => (
+                                  <span
+                                    key={modelId}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-gray-200 dark:border-[#30363d] text-[10px] font-medium text-slate-600 dark:text-slate-300"
+                                    title={`${MODEL_NAME_BY_ID[modelId] || modelId}: ${stats!.completed + stats!.failed}/${stats!.total} complete, ${stats!.inFlight} running`}
+                                  >
+                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${stats!.inFlight > 0 ? 'bg-brand-teal animate-pulse' : 'bg-slate-400'}`} />
+                                    {MODEL_NAME_BY_ID[modelId] || modelId}
+                                    <span className="text-slate-400 dark:text-slate-500">
+                                      {stats!.completed + stats!.failed}/{stats!.total}
+                                    </span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                      <span>{elapsedLabel} elapsed</span>
-                      {isBatchStopping ? (
-                        <span>Wrapping up in-flight…</span>
-                      ) : remainingSeconds > 0 ? (
-                        <span>~{remainingLabel} remaining</span>
-                      ) : (
-                        <span>Finishing up…</span>
-                      )}
-                    </div>
-                    {modelChips.length > 1 && (
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        {modelChips.map(({ modelId, stats }) => (
-                          <span
-                            key={modelId}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-gray-200 dark:border-[#30363d] text-[10px] font-medium text-slate-600 dark:text-slate-300"
-                            title={`${MODEL_NAME_BY_ID[modelId] || modelId}: ${stats!.completed + stats!.failed}/${stats!.total} complete, ${stats!.inFlight} running`}
-                          >
-                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${stats!.inFlight > 0 ? 'bg-brand-teal animate-pulse' : 'bg-slate-400'}`} />
-                            {MODEL_NAME_BY_ID[modelId] || modelId}
-                            <span className="text-slate-400 dark:text-slate-500">
-                              {stats!.completed + stats!.failed}/{stats!.total}
-                            </span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               );

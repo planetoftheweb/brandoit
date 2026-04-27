@@ -45,7 +45,9 @@ import {
   MousePointer2,
   Gauge,
   GitCompare,
-  Check as CheckIcon
+  Check as CheckIcon,
+  KeyRound,
+  UserPlus
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 
@@ -82,6 +84,10 @@ interface ControlPanelProps {
    */
   selectedModelIds?: string[];
   onModelIdsChange?: (ids: string[]) => void;
+  setupRequired?: boolean;
+  setupActionLabel?: string;
+  setupActionDescription?: string;
+  onSetupAction?: () => void;
 }
 
 // Modal Component
@@ -463,7 +469,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   openaiQuality = 'auto',
   onOpenAIQualityChange,
   selectedModelIds,
-  onModelIdsChange
+  onModelIdsChange,
+  setupRequired = false,
+  setupActionLabel,
+  setupActionDescription,
+  onSetupAction
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [compareModelsMode, setCompareModelsMode] = useState(false);
@@ -511,6 +521,26 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const modelCount = isMultiModelActive ? effectiveSelectedModelIds.length : 1;
   const totalBatchRuns = perModelBatchRuns * modelCount;
   const exceedsBatchCap = Number.isFinite(batchCap) && totalBatchRuns > batchCap;
+  const hasSetupAction = setupRequired && typeof onSetupAction === 'function';
+  const generateButtonLabel = hasSetupAction
+    ? (setupActionLabel || (user ? 'Add API key' : 'Create account'))
+    : isGenerating
+      ? totalBatchRuns > 1
+        ? `Start x${totalBatchRuns}`
+        : 'Start'
+      : totalBatchRuns > 1
+        ? `Generate x${totalBatchRuns}`
+        : 'Generate';
+  const generateButtonDisabled = !hasSetupAction && (!config.prompt || exceedsBatchCap);
+  const generateButtonTitle = hasSetupAction
+    ? (setupActionDescription || generateButtonLabel)
+    : isGenerating
+      ? totalBatchRuns > 1
+        ? `Start ${totalBatchRuns} more images`
+        : 'Start another image'
+    : totalBatchRuns > 1
+      ? `Generate ${totalBatchRuns} images`
+      : 'Generate image';
   const durationEstimate = useMemo(
     () => {
       // Sum per-model duration estimates so a compare run with a slow + fast
@@ -1676,32 +1706,26 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
 
           {/* 2. Prompt Input Area */}
-          <div className="w-full max-w-5xl mx-auto flex flex-col gap-1.5">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <div className="absolute top-1/2 -translate-y-1/2 left-3 text-slate-400 dark:text-slate-500 pointer-events-none">
-                  <span className="text-sm font-bold uppercase tracking-wider text-brand-teal">Prompt</span>
-                </div>
+          <div className="w-full max-w-5xl mx-auto flex flex-col gap-1.5 min-w-0">
+            <div className="flex flex-nowrap items-stretch gap-2 min-w-0 w-full">
+              <div className="relative flex-1 basis-0 min-w-0">
                 <input 
                   type="text"
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
                   placeholder="Describe your graphic (use {a, b, c} for variations)..."
-                  className="w-full bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3.5 pl-24 pr-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner"
+                  className="h-12 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner"
                 />
               </div>
 
-              <div className="flex gap-2 sm:w-auto w-full">
+              <>
                 {/* Variations: typable number with a 1–5 quick-pick dropdown. */}
                 <div
-                  className="relative group flex items-center self-stretch pl-2 pr-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] shadow-sm"
+                  className="relative group flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] shadow-sm"
                   title={`Variations per prompt${Number.isFinite(batchCap) ? ` (max ${batchCapLabel})` : ''}`}
                 >
                   <label htmlFor="batch-count-input" className="sr-only">Variations per prompt</label>
-                  <div className="flex flex-col items-center leading-none">
-                    <span className="text-[10px] uppercase font-bold text-brand-teal tracking-wider mb-0.5">
-                      Qty
-                    </span>
+                  <div className="flex items-center justify-center leading-none">
                     <input
                       id="batch-count-input"
                       type="number"
@@ -1719,7 +1743,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         const clamped = Math.max(1, Math.min(Math.floor(raw), hardMax));
                         setBatchCount(clamped);
                       }}
-                      className="w-7 bg-transparent text-slate-900 dark:text-white text-base font-semibold text-center tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="w-6 bg-transparent text-slate-900 dark:text-white text-base font-semibold text-center tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       aria-label="Variations per prompt"
                     />
                   </div>
@@ -1729,7 +1753,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     aria-haspopup="listbox"
                     aria-expanded={activeDropdown === 'batch-count'}
                     aria-label="Pick a preset count"
-                    className="h-7 w-6 flex items-center justify-center rounded-md text-slate-500 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                    className="h-8 w-4 sm:w-5 flex items-center justify-center rounded-md text-slate-500 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
                   >
                     <ChevronDown
                       size={14}
@@ -1776,7 +1800,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   type="button"
                   onClick={handleExpandPrompt}
                   disabled={!config.prompt || isExpandingPrompt}
-                  className={`flex-1 sm:flex-none relative inline-flex items-center justify-center px-3 py-3 rounded-lg font-semibold border transition-all group ${
+                  className={`relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border font-semibold transition-all group ${
                     !config.prompt || isExpandingPrompt
                       ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                       : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
@@ -1790,25 +1814,33 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
 
                 <button
-                  onClick={() => onGenerate(safeBatchCount)}
-                  disabled={!config.prompt || isGenerating || exceedsBatchCap}
-                  className={`flex-none relative inline-flex items-center justify-center px-5 py-3 rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 sm:w-auto w-full group ${
-                    !config.prompt || isGenerating || exceedsBatchCap
+                  type="button"
+                  onClick={() => {
+                    if (hasSetupAction) {
+                      onSetupAction?.();
+                      return;
+                    }
+                    onGenerate(safeBatchCount);
+                  }}
+                  disabled={generateButtonDisabled}
+                  title={generateButtonTitle}
+                  className={`relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-lg font-bold shadow-md transition-all active:translate-y-0.5 group ${
+                    generateButtonDisabled
                       ? 'bg-gray-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
                       : 'bg-brand-red hover:bg-red-700 text-white shadow-brand-red/20'
                   }`}
-                  aria-label={totalBatchRuns > 1 ? `Generate ${totalBatchRuns} images` : 'Generate image'}
+                  aria-label={generateButtonTitle}
                 >
-                  {isGenerating ? (
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  {hasSetupAction ? (
+                    user ? <KeyRound size={16} className="text-white" /> : <UserPlus size={16} className="text-white" />
                   ) : (
                     <Send size={16} className="text-white" />
                   )}
                   <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                    {totalBatchRuns > 1 ? `Generate x${totalBatchRuns}` : 'Generate'}
+                    {generateButtonTitle}
                   </span>
                 </button>
-              </div>
+              </>
             </div>
 
             {hasBatchInfo && (

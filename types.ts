@@ -73,6 +73,7 @@ export interface GenerationVersion {
 
   imageData: string;
   imageUrl: string;
+  imageStoragePath?: string;
   mimeType: string;
   aspectRatio?: string;
 

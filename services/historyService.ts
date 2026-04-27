@@ -14,6 +14,7 @@ import {
 import { User, Generation, GenerationVersion, GeneratedImage, GenerationConfig } from "../types";
 import { toMarkLabel } from "./versionUtils";
 import { convertToWebP, makeImageUrl } from "./imageConversionService";
+import { deleteGenerationImages, uploadGenerationImage } from "./imageService";
 
 const LOCAL_STORAGE_KEY = 'brandoit_generations_v2';
 const LEGACY_STORAGE_KEY = 'brandoit_history';
@@ -74,6 +75,7 @@ const normalizeVersion = (
     type: version.type || (number === 1 ? 'generation' : 'refinement'),
     imageData,
     imageUrl,
+    imageStoragePath: version.imageStoragePath,
     mimeType,
     aspectRatio: version.aspectRatio || fallbackAspectRatio,
     svgCode: version.svgCode,
@@ -133,6 +135,7 @@ const mergeVersions = (left: GenerationVersion, right: GenerationVersion): Gener
     ...right,
     imageData: right.imageData || left.imageData || '',
     mimeType: right.mimeType || left.mimeType || 'image/webp',
+    imageStoragePath: right.imageStoragePath || left.imageStoragePath,
     svgCode: right.svgCode || left.svgCode,
     refinementPrompt: right.refinementPrompt || left.refinementPrompt,
     parentVersionId: right.parentVersionId || left.parentVersionId,
@@ -243,16 +246,45 @@ const upsertUserRemoteCache = (userId: string, generation: Generation) => {
   writeUserRemoteCache(userId, merged);
 };
 
-const serializeGenerationForRemote = (generation: Generation): Record<string, any> => {
+const serializeGenerationForRemote = async (
+  userId: string,
+  generation: Generation
+): Promise<Record<string, any>> => {
   const normalized = normalizeGeneration(generation);
+  const remoteVersions = await Promise.all(
+    normalized.versions.map(async (version) => {
+      if (version.mimeType === 'image/svg+xml') {
+        return {
+          ...version,
+          imageUrl: undefined
+        };
+      }
 
-  // Store only one copy of raster image payload remotely:
-  // keep imageData; reconstruct imageUrl on read.
+      if (!version.imageData) {
+        return version;
+      }
+
+      const uploaded = await uploadGenerationImage({
+        userId,
+        generationId: normalized.id,
+        versionId: version.id,
+        base64Data: version.imageData,
+        mimeType: version.mimeType || 'image/webp'
+      });
+
+      return {
+        ...version,
+        imageData: '',
+        imageUrl: uploaded.downloadUrl,
+        imageStoragePath: uploaded.path
+      };
+    })
+  );
+
+  // Raster bytes live in Firebase Storage. Firestore keeps only the generation
+  // metadata plus Storage download URL/path to stay below the 1 MiB doc limit.
   const withRemoteVersionWindow = (startIndex: number): Record<string, any> => {
-    const windowedVersions = normalized.versions.slice(startIndex).map((version) => ({
-      ...version,
-      imageUrl: undefined
-    }));
+    const windowedVersions = remoteVersions.slice(startIndex);
     const adjustedCurrent = Math.max(0, normalized.currentVersionIndex - startIndex);
 
     return {
@@ -710,7 +742,7 @@ export const historyService = {
 
   saveToRemote: async (userId: string, generation: Generation) => {
     const historyRef = collection(db, "users", userId, "history");
-    const payload = serializeGenerationForRemote(normalizeGeneration(generation));
+    const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
     await addDoc(historyRef, payload);
 
     const q = query(historyRef, orderBy("createdAt", "desc"));
@@ -718,7 +750,10 @@ export const historyService = {
     
     if (snapshot.size > REMOTE_LIMIT) {
       const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
-      const deletePromises = itemsToDelete.map(d => deleteDoc(doc(db, "users", userId, "history", d.id)));
+      const deletePromises = itemsToDelete.map(async (d) => {
+        await deleteDoc(doc(db, "users", userId, "history", d.id));
+        await deleteGenerationImages(userId, d.data().id || d.id);
+      });
       await Promise.all(deletePromises);
     }
   },
@@ -729,7 +764,7 @@ export const historyService = {
     const snapshot = await getDocs(q);
     const existing = snapshot.docs.find(d => d.data().id === generation.id);
     if (existing) {
-      const payload = serializeGenerationForRemote(normalizeGeneration(generation));
+      const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
       await updateDoc(doc(db, "users", userId, "history", existing.id), payload);
     } else {
       await historyService.saveToRemote(userId, generation);
@@ -761,6 +796,7 @@ export const historyService = {
       });
       if (target) {
         await deleteDoc(doc(db, "users", userId, "history", target.id));
+        await deleteGenerationImages(userId, generationId);
       }
     } catch (e) {
       console.error("Failed to delete remote generation:", e);

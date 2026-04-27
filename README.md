@@ -15,7 +15,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   Admin controls for System Defaults.
 *   **📂 Normalized Database:** Uses a smart "spreadsheet-like" structure to manage resources with flexible scoping (`private`, `public`, `team`, `system`).
 *   **🌍 Community Catalog:** Browse public items shared by other users.
-*   **💾 Cloud History:** Automatically saves your generation history to the cloud (Firestore).
+*   **💾 Cloud History:** Automatically saves your generation history with metadata in Firestore and raster image bytes in Firebase Storage (`users/{uid}/history/{generationId}/{versionId}.{ext}`), so tiles never bump into the 1 MiB Firestore document limit and deletes clean up Storage automatically.
 *   **🖼️ Smart Analysis:** Upload brand guidelines (PDF/Image) to extract colors and styles with an interactive review modal.
 *   **✨ Prompt Expansion:** One-click prompt enhancement using AI to generate detailed visual descriptions from simple text.
 *   **👤 User Profiles:** Sign up with Email or Username. Sync preferences across devices.
@@ -25,7 +25,8 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
 *   **🧬 Versioned Iteration:** Mark-based generation/refinement history with restore, per-refinement deletion, and per-version aspect-ratio tracking so follow-up edits keep the correct size.
 *   **📝 Better Prompt Editing:** Compact refine textbox with optional full-screen prompt editor and keyboard submit shortcut (`Cmd/Ctrl + Enter`).
 *   **📋 Clipboard-friendly UX:** Copy prompts, image URLs, or the actual images with centered toast feedback for every action (generate, download, delete, restore). Overlays show model, prompt, tags, and timestamps.
-*   **⚡ Batch generation:** Numeric `QTY` plus brace expansion in prompts, pre-send size and duration estimates, a live progress banner with stop, and one history tile with Mark I / II / III grouping (with per-mark expanded prompts and thumbnails).
+*   **⚡ Batch generation:** Numeric `QTY` plus brace expansion in prompts, pre-send size and duration estimates, and one history tile with Mark I / II / III grouping (with per-mark expanded prompts and thumbnails).
+*   **🪟 Concurrent background runs:** Each Generate click runs as its own backgrounded job — the toolbar stays unblocked so you can keep typing or fire off another run, and a floating "Active Generations" monitor surfaces every job with elapsed/ETA, throughput-aware estimates, per-model progress chips, a "View latest result" jump, and per-job stop / dismiss controls.
 *   **🆚 Comparison mode:** Generate across multiple models, then compare marks inline in the main viewport with a swipe slider (plus side-by-side export) and shift-click quick-pick from thumbnails/history.
 *   **⬇️ Unified downloads:** Single download menu on the main preview and in history for PNG, WebP, SVG, or HTML; download-all zips every generation mark; export selected tiles as a ZIP from Recent Generations.
 *   **🖼️ Thumbnail rail:** When a tile has multiple marks, browse and preview versions from a left rail without leaving the main viewport.

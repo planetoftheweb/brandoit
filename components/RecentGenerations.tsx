@@ -402,7 +402,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </div>
               )}
 
-              <div className="absolute top-2 right-2 z-10 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute top-2 right-2 z-10 flex flex-wrap items-center justify-end gap-1 lg:gap-2 max-w-[calc(100%-1rem)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 transition-opacity">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -426,7 +426,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     }
                     showToast('Download started');
                   }}
-                  className="group/download relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  className="group/download relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Download"
                 >
                   {latestVersion.mimeType === 'image/svg+xml' ? <FileCode size={16} /> : <Download size={16} />}
@@ -439,7 +439,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     e.stopPropagation();
                     copyImageToClipboard(getDisplayImageUrl(gen));
                   }}
-                  className="group/copyimg relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  className="group/copyimg relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Copy image to clipboard"
                 >
                   <ImageIcon size={16} />
@@ -453,7 +453,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     navigator.clipboard.writeText(getDisplayImageUrl(gen)).catch(err => console.error('Copy image URL failed', err));
                     showToast('Image URL copied');
                   }}
-                  className="group/copyurl relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  className="group/copyurl relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Copy image URL"
                 >
                   <Link size={16} />
@@ -488,7 +488,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       setCopyLoadingId(null);
                     }
                   }}
-                  className="group/copy relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  className="group/copy relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Copy full prompt"
                 >
                   {copyLoadingId === gen.id ? (
@@ -506,7 +506,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     onDelete(gen.id);
                     showToast('Generation removed');
                   }}
-                  className="group/delete relative inline-flex items-center justify-center h-9 w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
+                  className="group/delete relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Delete"
                 >
                   <Trash2 size={16} />
@@ -561,7 +561,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       ? 'absolute inset-0 bg-black/25 flex items-center justify-center opacity-100 transition-colors'
                       : isComparePicking
                         ? 'absolute inset-0 bg-black/0 hover:bg-brand-teal/30 transition-colors flex items-center justify-center'
-                        : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100'
+                        : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 focus:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 group-focus-within:opacity-100'
                   }
                   aria-label={selectionMode ? 'Toggle selection' : isComparePicking ? 'Pick this tile to compare' : 'Restore generation'}
                 >

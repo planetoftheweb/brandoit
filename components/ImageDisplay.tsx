@@ -714,7 +714,7 @@ ${version.svgCode}
       className={`group/btn ${variant === 'danger'
         ? 'bg-white/85 dark:bg-[#2b1c1c]/85 border border-red-200/80 dark:border-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-600 hover:border-red-600 hover:text-white'
         : 'bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white'
-      } p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative ${extraClass || ''}`}
+      } p-2.5 lg:p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative ${extraClass || ''}`}
       title={title}
     >
       {children}
@@ -1216,10 +1216,10 @@ ${version.svgCode}
                 two-up view, and their absolute position was overlapping the
                 slider's own Close / Swap / Side-by-side controls. */}
             <div
-              className={`absolute top-4 right-4 flex items-center gap-3 transition-opacity ${
+              className={`absolute top-4 right-4 flex flex-wrap justify-end items-center gap-2 lg:gap-3 max-w-[calc(100%-2rem)] transition-opacity ${
                 isComparing
                   ? 'opacity-0 pointer-events-none'
-                  : 'opacity-0 group-hover:opacity-100'
+                  : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100'
               }`}
             >
               {onEnterComparePicker && onExitComparePicker && (
@@ -1290,7 +1290,7 @@ ${version.svgCode}
                 // not the entire history gallery.
                 allGenerations={[generation]}
                 allLabel="Download all in this tile"
-                triggerClassName="group/btn bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition inline-flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                triggerClassName="group/btn bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white p-2.5 lg:p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition inline-flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
                 triggerTitle="Download"
                 icon={<Download size={18} />}
                 onNotify={showNotice}
