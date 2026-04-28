@@ -649,10 +649,10 @@ ${version.svgCode}
     setDeletingRefinementId(versionId);
     try {
       await onDeleteRefinementVersion(versionId);
-      showNotice('Refinement deleted');
+      showNotice('Version deleted');
       setVersionDropdownOpen(false);
     } catch (error: any) {
-      showNotice(error?.message || 'Failed to delete refinement');
+      showNotice(error?.message || 'Failed to delete version');
     } finally {
       setDeletingRefinementId(null);
     }
@@ -835,26 +835,42 @@ ${version.svgCode}
                         <span className="font-mono text-xs w-16 shrink-0">{v.label}</span>
                         <span className="text-xs text-slate-400">{v.type === 'refinement' ? 'Refinement' : 'Original'}</span>
                       </button>
-                      {v.type === 'refinement' && (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            void handleDeleteRefinementClick(v.id);
-                          }}
-                          disabled={Boolean(deletingRefinementId)}
-                          className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
-                            deletingRefinementId
-                              ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                              : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
-                          }`}
-                          aria-label={`Delete ${v.label}`}
-                          title={`Delete ${v.label}`}
-                        >
-                          {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                        </button>
-                      )}
+                      {/* Allow deleting any version, not just refinements.
+                          When a generation contains only one version, the
+                          handler would throw "Cannot delete the last version"
+                          — surface that as a disabled state instead so the
+                          button is informative rather than error-producing.
+                          This is what lets users remove blank/failed Mark I
+                          and Mark II tiles left over from compare runs or
+                          variation runs that returned empty payloads. */}
+                      {(() => {
+                        const isOnlyVersion = generation.versions.length <= 1;
+                        const isBusy = Boolean(deletingRefinementId);
+                        const disabled = isOnlyVersion || isBusy;
+                        const tooltip = isOnlyVersion
+                          ? 'Cannot delete the only version — use the tile trash to remove the whole generation'
+                          : `Delete ${v.label}`;
+                        return (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDeleteRefinementClick(v.id);
+                            }}
+                            disabled={disabled}
+                            className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
+                              disabled
+                                ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                                : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
+                            }`}
+                            aria-label={tooltip}
+                            title={tooltip}
+                          >
+                            {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                          </button>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -984,9 +1000,22 @@ ${version.svgCode}
                       setPopoverTop(btn.offsetTop - scroller.scrollTop + btn.offsetHeight / 2);
                     }
                   };
+                  // Hover-delete affordance on the rail. Sits absolutely on
+                  // top of the thumb button as a sibling (not nested) so it
+                  // doesn't violate the no-button-in-button rule. Hidden when
+                  // a generation has only one version (the underlying
+                  // handler refuses to delete the last one) and while in
+                  // compare-pick / comparing mode so it can't fight with the
+                  // pick-two flow. Visible whenever the thumb is hovered or
+                  // keyboard-focused so it's discoverable without obscuring
+                  // the image at rest.
+                  const showRailDelete =
+                    generation.versions.length > 1 && !isCompareMode && !isComparing;
+                  const railDeleteVisible =
+                    showRailDelete && (isHovered || deletingRefinementId === v.id);
                   return (
+                    <div key={v.id} className="relative w-full group/railThumb">
                     <button
-                      key={v.id}
                       type="button"
                       role="option"
                       aria-selected={isCommitted}
@@ -1043,6 +1072,36 @@ ${version.svgCode}
                         </span>
                       )}
                     </button>
+                    {showRailDelete && (
+                      <button
+                        type="button"
+                        onMouseEnter={() => setHoveredVersionIdx(idx)}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleDeleteRefinementClick(v.id);
+                        }}
+                        disabled={Boolean(deletingRefinementId)}
+                        aria-label={`Delete ${v.label}`}
+                        title={`Delete ${v.label}`}
+                        className={`absolute top-1 right-1 z-10 inline-flex items-center justify-center h-5 w-5 rounded-full bg-red-600 text-white shadow ring-1 ring-white/40 dark:ring-black/40 transition-all focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-400/70 ${
+                          railDeleteVisible
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover/railThumb:opacity-100'
+                        } ${
+                          deletingRefinementId
+                            ? 'cursor-not-allowed bg-red-400'
+                            : 'hover:bg-red-700'
+                        }`}
+                      >
+                        {deletingRefinementId === v.id ? (
+                          <RefreshCw size={11} className="animate-spin" />
+                        ) : (
+                          <X size={11} strokeWidth={3} />
+                        )}
+                      </button>
+                    )}
+                    </div>
                   );
                 })}
               </div>

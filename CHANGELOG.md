@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-04-28
+### Fixed
+- **Empty model responses no longer get persisted as blank versions.** When a model API returned a 200 with no usable bytes (`base64Data` missing/short, or SVG with no `svgCode`), the previous code happily passed it through `createVersionFromImage`, producing a "Mark X" tile that rendered as a solid-black thumbnail in the Compare rail and version dropdown. `runOne` in the batch loop now validates the result and throws a descriptive error if the payload isn't usable, which routes the slot through the existing `state.failed` counter instead of writing a phantom version (`App.tsx`).
+
+### Changed
+- **Any version can be deleted, not just refinements.** `handleDeleteRefinementVersion` previously hard-rejected any non-`'refinement'` version with `Only refinement versions can be deleted.`, and the version-dropdown trash button was gated behind `v.type === 'refinement'`. That left no way to remove blank/failed `type: 'generation'` versions produced by Compare runs and N-variations runs (Mark I + Mark II in a 3-up batch), so users were stuck with empty Compare-rail tiles. The type guard is removed from the App-level handler, and the dropdown now renders a delete button for every version. The "you can't delete the last version" guard remains, surfaced as a disabled button with an explanatory tooltip rather than a thrown error (`App.tsx`, `components/ImageDisplay.tsx`).
+
+### Added
+- **Hover-to-delete on Compare rail thumbnails.** Each rail thumbnail now has a small red `×` badge in its top-right corner that appears on hover (or while a delete is in flight), wired to the same `handleDeleteRefinementClick` handler as the version dropdown. Hidden when the generation has only one version, and while in compare-pick / comparing mode so it can't fight with the pick-two flow. The thumb itself is still a `<button role="option">`; the delete button is a sibling under a wrapping `<div className="relative group/railThumb">` so we don't violate the no-button-in-button rule (`components/ImageDisplay.tsx`).
+- **"Version deleted" toast wording.** The post-delete notice now says "Version deleted" / "Failed to delete version" instead of "Refinement deleted" / "Failed to delete refinement", since the same path now applies to non-refinements (`components/ImageDisplay.tsx`).
+
 ## [0.7.2] - 2026-04-28
 ### Fixed
 - **Recent-generations tile delete actually removes the tile.** For signed-in users `historyService.deleteFromRemote` was deleting the Firestore doc and its Storage objects, but the per-user `brandoit_remote_history_cache_v1:{uid}` localStorage mirror still contained the deleted item. The next `historyService.getHistory` call merged remote + this cache + local-pending + the merge backup, so the deleted generation was resurrected on every refresh and immediately re-written into the cache. `deleteFromRemote` now scrubs the deleted id from the per-user remote cache, the local-pending list, and the merge backup in a `finally` block, so a successful Firestore delete no longer comes back as a zombie tile (`services/historyService.ts`).

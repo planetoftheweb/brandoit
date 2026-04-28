@@ -1097,6 +1097,22 @@ const App: React.FC = () => {
           }
           recordModelDuration(modelId, performance.now() - jobStart);
 
+          // Safety net: occasionally a model API returns a 200 with an empty
+          // payload (no base64 / no svg) — the call doesn't throw, but the
+          // resulting "image" is a 0-byte tile that renders solid black in
+          // the gallery and Compare rail. Without this guard we persisted
+          // those blanks as `type: 'generation'` versions, which the user
+          // could not remove individually. Treat empties as a failure so
+          // they're counted in `state.failed` and never make it to the
+          // version list.
+          const isSvgResult = result?.mimeType === 'image/svg+xml';
+          const hasUsableBytes = isSvgResult
+            ? Boolean(result?.svgCode && result.svgCode.trim().length > 0)
+            : Boolean(result?.base64Data && result.base64Data.length > 100);
+          if (!hasUsableBytes) {
+            throw new Error('Model returned an empty image — skipping');
+          }
+
           // Append into the SHARED tile. The first version anywhere in the
           // Generate click creates the Generation; everything afterwards
           // becomes another version, regardless of which model produced it.
@@ -1631,11 +1647,14 @@ const App: React.FC = () => {
     const targetIndex = currentGeneration.versions.findIndex((version) => version.id === versionId);
     if (targetIndex < 0) return;
 
-    const targetVersion = currentGeneration.versions[targetIndex];
-    if (targetVersion.type !== 'refinement') {
-      throw new Error('Only refinement versions can be deleted.');
-    }
-
+    // Any single version can be removed (originals and refinements alike) —
+    // the only hard constraint is that the generation must keep at least one
+    // version. Removing the very last one would leave a phantom tile with no
+    // image, so use the gallery-tile delete instead. This matters because
+    // failed/blank-output runs are stored as `type: 'generation'` versions
+    // (Compare/N-variation siblings), and previously only refinement-typed
+    // versions were deletable, leaving users stuck with empty Mark I / II
+    // tiles in the version dropdown and Compare rail.
     const remainingVersions = currentGeneration.versions.filter((version) => version.id !== versionId);
     if (remainingVersions.length === 0) {
       throw new Error('Cannot delete the last version.');
