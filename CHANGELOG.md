@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-28
+### Removed
+- **"Mark" version badge on Recent Generations tiles.** The orange `Mark I/II/III` pill that overlaid the top-left corner of every multi-version thumbnail in the gallery has been removed; the gallery now reads as a clean image grid. The version label is still surfaced on the main viewer (top-center version dropdown, version menu rows, thumbnail-rail hover preview, and Info overlay) so refinement context is preserved where it matters. The Compare badge stacking logic was simplified accordingly — it now anchors at `top-2` instead of conditionally moving to `top-8` when the Mark pill was present (`components/RecentGenerations.tsx`).
+
 ## [0.7.0] - 2026-04-27
 ### Added
 - **Carousel navigation on the main viewer.** `ImageDisplay` now exposes prev/next arrow buttons that step the main image through the recent-generations history one tile at a time. Arrows are positioned at the left and right edges of the image card (desktop) and rendered as an inline row with a `currentIdx / total` counter on mobile. The same navigation is bound to global ←/→ keyboard shortcuts that respect inputs/textareas/contenteditables and the prompt-editor modal so they don't fire mid-typing. The arrow buttons are disabled at the ends of the history list and hidden whenever the comparison slider is on screen so they can't fight with its own controls (`components/ImageDisplay.tsx`, `App.tsx`).

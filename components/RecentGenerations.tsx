@@ -472,17 +472,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   </button>
                 </div>
               )}
-              {/* Mark badge */}
-              {versionCount > 1 && (
-                <div className={`absolute top-2 z-10 ${selectionMode ? 'left-14' : 'left-2'}`}>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/90 text-white shadow-sm">
-                    {latestVersion.label}
-                  </span>
-                </div>
-              )}
               {showCompareBadge && (
                 <div
-                  className={`absolute z-10 ${versionCount > 1 ? 'top-8' : 'top-2'} ${selectionMode ? 'left-14' : 'left-2'}`}
+                  className={`absolute z-10 top-2 ${selectionMode ? 'left-14' : 'left-2'}`}
                   title={
                     isInTileComparison
                       ? `Comparison tile — ${distinctTileModelIds.map((id) => getModelLabel(id)).join(' vs ')}`
