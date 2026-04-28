@@ -750,16 +750,13 @@ const App: React.FC = () => {
   };
 
   const requestDeleteHistory = (historyId: string) => {
-    const needConfirm = user?.preferences?.settings?.confirmDeleteHistory ?? true;
-    if (needConfirm) {
-      setSkipFutureConfirm(false);
-      setConfirmDeleteModal({ type: 'history', id: historyId });
-    } else {
-      executeDeleteHistory(historyId).catch((err) => {
-        console.error("Failed to delete history item:", err);
-        setError(err.message || "Failed to delete history item.");
-      });
-    }
+    // Tile-trash is destructive enough that we always force the confirmation
+    // modal here, even when the user has previously checked "Don't ask me
+    // again". The setting is still respected for the main-image trash button
+    // (`requestDeleteCurrent`), where you're explicitly working with one
+    // image and there's no risk of an accidental misclick on a thumbnail.
+    setSkipFutureConfirm(false);
+    setConfirmDeleteModal({ type: 'history', id: historyId });
   };
 
   const buildStructuredPrompt = (currentConfig: GenerationConfig): string => {
@@ -2521,15 +2518,20 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={skipFutureConfirm}
-                onChange={(e) => setSkipFutureConfirm(e.target.checked)}
-                className="h-4 w-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
-              />
-              Don’t ask me again for this action
-            </label>
+            {/* "Don't ask me again" is intentionally only available for the
+                main-image trash. Tile-trash in the gallery always confirms,
+                because a misclicked thumbnail is too easy to lose silently. */}
+            {confirmDeleteModal.type === 'current' && (
+              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={skipFutureConfirm}
+                  onChange={(e) => setSkipFutureConfirm(e.target.checked)}
+                  className="h-4 w-4 text-brand-red rounded border-gray-300 focus:ring-brand-red cursor-pointer"
+                />
+                Don’t ask me again for this action
+              </label>
+            )}
 
             <div className="flex justify-end gap-3 pt-2">
               <button

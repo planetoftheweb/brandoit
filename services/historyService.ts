@@ -246,6 +246,27 @@ const upsertUserRemoteCache = (userId: string, generation: Generation) => {
   writeUserRemoteCache(userId, merged);
 };
 
+// Remove a single generation from the per-user remote cache so it cannot
+// resurrect itself the next time `getHistory` merges remote + cache. Without
+// this scrub a deleted item is removed from Firestore but pulled back in from
+// the cache and re-written, making delete look like a no-op to the user.
+const removeFromUserRemoteCache = (userId: string, generationId: string) => {
+  const filtered = readUserRemoteCache(userId).filter((gen) => gen.id !== generationId);
+  writeUserRemoteCache(userId, filtered);
+};
+
+// Remove a single generation from the merge backup so a tombstoned item never
+// reappears via the recovery-from-backup path inside `getHistory`.
+const removeFromMergeBackup = (generationId: string) => {
+  try {
+    const current = readMergeBackup();
+    const filtered = current.filter((gen) => gen.id !== generationId);
+    writeJsonArray(MERGE_BACKUP_KEY, filtered);
+  } catch (e) {
+    console.error('Failed to scrub merge backup:', e);
+  }
+};
+
 const serializeGenerationForRemote = async (
   userId: string,
   generation: Generation
@@ -801,6 +822,15 @@ export const historyService = {
     } catch (e) {
       console.error("Failed to delete remote generation:", e);
       throw e;
+    } finally {
+      // Always scrub local mirrors so the next `getHistory` merge can't
+      // resurrect the deleted item from the per-user remote cache, the
+      // local-pending list, or the merge backup. We do this in `finally` so
+      // that even if the Firestore delete partially failed, we don't leave
+      // a phantom client-side entry that the user keeps trying to retry.
+      removeFromUserRemoteCache(userId, generationId);
+      historyService.deleteFromLocal(generationId);
+      removeFromMergeBackup(generationId);
     }
   },
 

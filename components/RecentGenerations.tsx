@@ -605,8 +605,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    // Don't toast here — onDelete just opens the confirm
+                    // modal, the actual deletion is asynchronous and may be
+                    // cancelled. Previous code synchronously claimed
+                    // "Generation removed" before anything had happened,
+                    // which made cancelled or failed deletes look like
+                    // successful ones. Tile-disappear-on-success is the
+                    // honest visual feedback.
                     onDelete(gen.id);
-                    showToast('Generation removed');
                   }}
                   className="group/delete relative inline-flex items-center justify-center h-8 w-8 lg:h-9 lg:w-9 rounded-md border border-red-200/80 dark:border-red-900/40 bg-white/85 dark:bg-[#2b1c1c]/80 text-red-600 dark:text-red-200 shadow-sm hover:bg-red-600 hover:border-red-600 hover:text-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-red-400/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition"
                   aria-label="Delete"
