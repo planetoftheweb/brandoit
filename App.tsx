@@ -2405,27 +2405,34 @@ const App: React.FC = () => {
               );
             })()}
 
-            {/* Display */}
-            <ImageDisplay
-              generation={currentGeneration}
-              onRefine={handleRefine}
-              onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
-              onResizeCanvasRefine={handleResizeCanvasRefine}
-              isRefining={isGenerating}
-              onCopy={handleCopyCurrent}
-              onDelete={requestDeleteCurrent}
-              onVersionChange={handleVersionChange}
-              onDeleteRefinementVersion={handleDeleteRefinementVersion}
-              selectedModel={selectedModel}
-              onModelChange={handleModelChange}
-              resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
-              options={context}
-              history={history}
-              comparisonState={comparisonState}
-              onEnterComparePicker={enterComparePickerMode}
-              onExitComparePicker={exitComparePickerMode}
-              onPickMark={pickMarkForComparison}
-            />
+            {/* Display — only render the viewer when we have something to show
+                or there's no history at all (true first-run). When the viewer
+                is empty but the user already has prior generations, skip the
+                "Ready to Create" placeholder so the Recent Generations gallery
+                lands at the top of the page on load. */}
+            {(currentGeneration || history.length === 0) && (
+              <ImageDisplay
+                generation={currentGeneration}
+                onRefine={handleRefine}
+                onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
+                onResizeCanvasRefine={handleResizeCanvasRefine}
+                isRefining={isGenerating}
+                onCopy={handleCopyCurrent}
+                onDelete={requestDeleteCurrent}
+                onVersionChange={handleVersionChange}
+                onDeleteRefinementVersion={handleDeleteRefinementVersion}
+                selectedModel={selectedModel}
+                onModelChange={handleModelChange}
+                resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
+                options={context}
+                history={history}
+                comparisonState={comparisonState}
+                onEnterComparePicker={enterComparePickerMode}
+                onExitComparePicker={exitComparePickerMode}
+                onPickMark={pickMarkForComparison}
+                onNavigateToGeneration={handleRestoreFromHistory}
+              />
+            )}
 
             {/* History Gallery */}
             <RecentGenerations

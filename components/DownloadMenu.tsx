@@ -32,6 +32,13 @@ interface DownloadMenuProps {
   triggerClassName?: string;
   triggerLabel?: string;
   triggerTitle?: string;
+  /**
+   * Class names applied to the inner label `<span>` of the trigger button.
+   * Lets callers responsively hide the text label (e.g. `hidden xl:inline`)
+   * to collapse the trigger to icon-only at narrower widths without losing
+   * its accessible name (which still reads `triggerTitle`/`triggerLabel`).
+   */
+  triggerLabelClassName?: string;
   icon?: React.ReactNode;
   disabled?: boolean;
   align?: "left" | "right";
@@ -46,6 +53,7 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
   triggerClassName,
   triggerLabel,
   triggerTitle,
+  triggerLabelClassName,
   icon,
   disabled = false,
   align = "right",
@@ -137,7 +145,9 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
         className={triggerClassName || defaultTriggerClasses}
       >
         {triggerIcon}
-        {showTriggerText && resolvedLabel ? <span>{resolvedLabel}</span> : null}
+        {showTriggerText && resolvedLabel ? (
+          <span className={triggerLabelClassName}>{resolvedLabel}</span>
+        ) : null}
         <ChevronDown size={14} className="opacity-70" aria-hidden="true" />
       </button>
 

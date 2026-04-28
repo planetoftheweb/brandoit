@@ -1,12 +1,32 @@
 import React from 'react';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare } from 'lucide-react';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getLatestVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { DownloadMenu } from './DownloadMenu';
+import { RichSelect, RichSelectOption } from './RichSelect';
+
+type ThumbnailSize = 'xs' | 'sm' | 'md' | 'lg';
+
+// Tailwind grid-column maps per thumbnail size. Kept as full literal class
+// strings so Tailwind's JIT picks them up (it can't see dynamically built
+// `grid-cols-${n}` strings). Smaller sizes pack more tiles per row.
+const THUMBNAIL_GRID_CLASS: Record<ThumbnailSize, string> = {
+  xs: 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2',
+  sm: 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-8 gap-2.5',
+  md: 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3',
+  lg: 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4',
+};
+
+const THUMBNAIL_SIZE_OPTIONS: RichSelectOption[] = [
+  { value: 'xs', label: 'X-Small', description: 'Pack the most thumbnails per row' },
+  { value: 'sm', label: 'Small', description: 'Compact grid' },
+  { value: 'md', label: 'Medium', description: 'Default — balanced size' },
+  { value: 'lg', label: 'Large', description: 'Bigger thumbnails, fewer per row' },
+];
 
 interface RecentGenerationsMarkRef {
   generationId: string;
@@ -50,6 +70,50 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+  // Per-tile details panel (prompt + tag chips) is opt-in. Default to hidden
+  // so the gallery reads as a clean image grid; users who want context can
+  // flip the toggle and the choice survives reloads via localStorage.
+  const DETAILS_PREF_KEY = 'recentGenerations.showDetails';
+  const SIZE_PREF_KEY = 'recentGenerations.thumbnailSize';
+  const [showDetails, setShowDetails] = React.useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(DETAILS_PREF_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  // Thumbnail density. Defaults to 'sm' so the gallery reads as a tighter
+  // grid out of the box; users can pick xs/md/lg from the toolbar dropdown
+  // and the choice persists.
+  const [thumbnailSize, setThumbnailSize] = React.useState<ThumbnailSize>(() => {
+    if (typeof window === 'undefined') return 'sm';
+    try {
+      const stored = window.localStorage.getItem(SIZE_PREF_KEY);
+      if (stored === 'xs' || stored === 'sm' || stored === 'md' || stored === 'lg') {
+        return stored;
+      }
+    } catch {
+      // ignore
+    }
+    return 'sm';
+  });
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(DETAILS_PREF_KEY, showDetails ? '1' : '0');
+    } catch {
+      // ignore — quota / private mode shouldn't break the UI
+    }
+  }, [showDetails]);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SIZE_PREF_KEY, thumbnailSize);
+    } catch {
+      // ignore
+    }
+  }, [thumbnailSize]);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
 
@@ -251,7 +315,12 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Toolbar — `flex-nowrap` so action buttons never break onto a second
+            row. Each button collapses its text label to icon-only below `xl`
+            (1280px), which is roughly the width at which all four buttons +
+            the heading on the left fit comfortably without wrapping. The
+            buttons keep their accessible names via `aria-label`/`title`. */}
+        <div className="flex flex-nowrap items-center gap-2">
           {selectionMode ? (
             <>
               <button
@@ -290,14 +359,44 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             </>
           ) : (
             <>
+              <div className="w-32 xl:w-36 shrink-0">
+                <RichSelect
+                  value={thumbnailSize}
+                  onChange={(value) => setThumbnailSize(value as ThumbnailSize)}
+                  options={THUMBNAIL_SIZE_OPTIONS}
+                  placeholder="Size"
+                  icon={LayoutGrid}
+                  compact
+                  buttonClassName="rounded-lg min-h-11"
+                  menuClassName="max-w-[16rem] z-[40]"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDetails((v) => !v)}
+                aria-pressed={showDetails}
+                aria-label={showDetails ? 'Hide details' : 'Show details'}
+                title={showDetails ? 'Hide prompt and tag details under each thumbnail' : 'Show prompt and tag details under each thumbnail'}
+                className={`inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border transition shrink-0 ${
+                  showDetails
+                    ? 'border-brand-teal bg-brand-teal/10 text-brand-teal'
+                    : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal'
+                }`}
+              >
+                {showDetails ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+                <span className="hidden xl:inline">
+                  {showDetails ? 'Hide details' : 'Show details'}
+                </span>
+              </button>
               <DownloadMenu
                 mode="all-only"
                 allGenerations={history}
                 allLabel={`Download all (${history.length})`}
                 triggerLabel={`Download all (${history.length})`}
                 triggerTitle="Download all as ZIP"
+                triggerLabelClassName="hidden xl:inline"
                 icon={<Archive size={16} aria-hidden />}
-                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none"
+                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none shrink-0"
                 disabled={history.length === 0}
                 onNotify={showToast}
                 align="right"
@@ -305,17 +404,19 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectionMode(true)}
-                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+                aria-label="Select for export"
+                title="Select for export"
+                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
               >
                 <CheckSquare size={16} aria-hidden />
-                Select for export
+                <span className="hidden xl:inline">Select for export</span>
               </button>
             </>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      <div className={THUMBNAIL_GRID_CLASS[thumbnailSize]}>
         {history.map((gen) => {
           const latestVersion = getLatestVersion(gen);
           const versionCount = gen.versions.length;
@@ -402,7 +503,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </div>
               )}
 
-              <div className="absolute top-2 right-2 z-10 flex flex-wrap items-center justify-end gap-1 lg:gap-2 max-w-[calc(100%-1rem)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 transition-opacity">
+              {/* Per-tile hover toolbar. Hidden by default on any device that
+                  supports hover (desktops, laptops, hover-capable tablets) so
+                  the gallery reads as a clean image grid; revealed on hover/
+                  focus-within. Touch-only devices (phones, tablets without a
+                  pointer) keep the toolbar always-visible because there's no
+                  hover state to surface it. `@media(hover:hover)` targets the
+                  capability rather than guessing by viewport width, which
+                  fixes the prior `lg:` breakpoint leaving narrow desktop
+                  windows looking busy. */}
+              <div className="absolute top-2 right-2 z-10 flex flex-wrap items-center justify-end gap-1 lg:gap-2 max-w-[calc(100%-1rem)] opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100 transition-opacity">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -580,37 +690,39 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </button>
               </div>
 
-              <div className="p-3 pt-4">
-                <p className="text-xs font-medium text-slate-900 dark:text-white line-clamp-2 mb-2 h-8 leading-relaxed">
-                  {gen.config.prompt}
-                </p>
-                
-                <div className="flex flex-wrap gap-1.5">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                    {getLabel(gen.config.graphicTypeId, options.graphicTypes)}
-                  </span>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                    {getLabel(gen.config.visualStyleId, options.visualStyles)}
-                  </span>
-                  {isInTileComparison ? (
-                    distinctTileModelIds.map((modelId) => (
-                      <span
-                        key={modelId}
-                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40"
-                      >
-                        {getModelLabel(modelId)}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
-                      {getModelLabel(gen.modelId)}
+              {showDetails && (
+                <div className="p-3 pt-4">
+                  <p className="text-xs font-medium text-slate-900 dark:text-white line-clamp-2 mb-2 h-8 leading-relaxed">
+                    {gen.config.prompt}
+                  </p>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                      {getLabel(gen.config.graphicTypeId, options.graphicTypes)}
                     </span>
-                  )}
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
-                    {formatTimestamp(gen.createdAt)}
-                  </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                      {getLabel(gen.config.visualStyleId, options.visualStyles)}
+                    </span>
+                    {isInTileComparison ? (
+                      distinctTileModelIds.map((modelId) => (
+                        <span
+                          key={modelId}
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40"
+                        >
+                          {getModelLabel(modelId)}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
+                        {getModelLabel(gen.modelId)}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-gray-500/60 bg-[#11151d] text-slate-100">
+                      {formatTimestamp(gen.createdAt)}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCurrentVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
@@ -52,6 +52,12 @@ interface ImageDisplayProps {
   onEnterComparePicker?: (seed?: ImageDisplayMarkRef) => void;
   onExitComparePicker?: () => void;
   onPickMark?: (ref: ImageDisplayMarkRef) => void;
+  /**
+   * Step the main viewport to a sibling generation in the recent-history
+   * carousel. Wired by the parent to the same restore flow used by the
+   * Recent Generations grid so state stays consistent.
+   */
+  onNavigateToGeneration?: (gen: Generation) => void;
 }
 
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
@@ -73,6 +79,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onEnterComparePicker,
   onExitComparePicker,
   onPickMark,
+  onNavigateToGeneration,
 }) => {
   const isCompareMode = comparisonState?.mode === 'picking';
   const comparisonA = comparisonState?.a || null;
@@ -177,6 +184,31 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     onEnterComparePicker(currentMarkRef || undefined);
   };
 
+  // Carousel navigation across the Recent Generations history. The grid is
+  // rendered newest-first, so "previous" (←) jumps to the newer neighbor and
+  // "next" (→) jumps to the older one — matching the visual order users see
+  // in the gallery below.
+  const currentIdxInHistory = generation
+    ? history.findIndex((g) => g.id === generation.id)
+    : -1;
+  const newerGeneration =
+    currentIdxInHistory > 0 ? history[currentIdxInHistory - 1] : null;
+  const olderGeneration =
+    currentIdxInHistory >= 0 && currentIdxInHistory < history.length - 1
+      ? history[currentIdxInHistory + 1]
+      : null;
+  const canNavigate = !!onNavigateToGeneration && !isComparing && !isCompareMode;
+  const canGoNewer = canNavigate && !!newerGeneration;
+  const canGoOlder = canNavigate && !!olderGeneration;
+  const goNewer = useCallback(() => {
+    if (!onNavigateToGeneration || !newerGeneration) return;
+    onNavigateToGeneration(newerGeneration);
+  }, [onNavigateToGeneration, newerGeneration]);
+  const goOlder = useCallback(() => {
+    if (!onNavigateToGeneration || !olderGeneration) return;
+    onNavigateToGeneration(olderGeneration);
+  }, [onNavigateToGeneration, olderGeneration]);
+
   useEffect(() => {
     return () => {
       if (noticeTimer) window.clearTimeout(noticeTimer);
@@ -207,6 +239,40 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       }
     };
   }, []);
+
+  // Keyboard carousel: ←/→ steps the main viewport to the neighboring
+  // generation. We deliberately attach this at the window level so users
+  // don't have to focus the image first, but we bail out whenever the user
+  // is typing somewhere or another modal/picker owns the keyboard.
+  useEffect(() => {
+    if (!canNavigate) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isPromptEditorOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      if (e.key === 'ArrowLeft' && canGoNewer) {
+        e.preventDefault();
+        goNewer();
+      } else if (e.key === 'ArrowRight' && canGoOlder) {
+        e.preventDefault();
+        goOlder();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canNavigate, canGoNewer, canGoOlder, goNewer, goOlder, isPromptEditorOpen]);
 
   useEffect(() => {
     return () => {
@@ -1092,6 +1158,41 @@ ${version.svgCode}
           <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-visible border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
 
+            {/* Carousel arrows — step to a neighboring generation in history.
+                Hidden while the comparison slider is active so we don't pile
+                on top of its own controls, and individually disabled at the
+                edges of the history list. Mirrors the keyboard ←/→ shortcut. */}
+            {canNavigate && (canGoNewer || canGoOlder) && (
+              <>
+                <button
+                  type="button"
+                  onClick={goNewer}
+                  disabled={!canGoNewer}
+                  aria-label="Previous generation (newer)"
+                  title={canGoNewer ? 'Previous generation (←)' : 'No newer generation'}
+                  className="hidden sm:inline-flex absolute top-1/2 -translate-y-1/2 left-3 z-20 items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  <ChevronLeft size={22} />
+                </button>
+                <button
+                  type="button"
+                  onClick={goOlder}
+                  disabled={!canGoOlder}
+                  aria-label="Next generation (older)"
+                  title={canGoOlder ? 'Next generation (→)' : 'No older generation'}
+                  className="hidden sm:inline-flex absolute top-1/2 -translate-y-1/2 right-3 z-20 items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  <ChevronRight size={22} />
+                </button>
+                {/* Position counter — small, unobtrusive label so users know
+                    where they are in the history without scrolling down. */}
+                <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-black/60 text-white backdrop-blur-sm shadow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition pointer-events-none">
+                  {currentIdxInHistory + 1} / {history.length}
+                </div>
+              </>
+            )}
+
+
             {/* Main viewport renders the committed version — OR, when two
                 marks have been picked for comparison, the Juxtapose slider
                 fills the same shadow card directly (no inner padding, no
@@ -1306,6 +1407,35 @@ ${version.svgCode}
             </div>
           </div>
           </div>
+
+          {/* Mobile carousel controls — at small widths the floating overlay
+              arrows would crowd the image, so we surface a normal-flow row
+              under the card with the same prev/next/position info. */}
+          {canNavigate && (canGoNewer || canGoOlder) && (
+            <div className="sm:hidden mt-3 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={goNewer}
+                disabled={!canGoNewer}
+                aria-label="Previous generation (newer)"
+                className="inline-flex items-center justify-center h-11 w-11 rounded-full border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 shadow hover:border-brand-teal hover:text-brand-teal disabled:opacity-40 disabled:pointer-events-none transition"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums min-w-[3.5rem] text-center">
+                {currentIdxInHistory + 1} / {history.length}
+              </span>
+              <button
+                type="button"
+                onClick={goOlder}
+                disabled={!canGoOlder}
+                aria-label="Next generation (older)"
+                className="inline-flex items-center justify-center h-11 w-11 rounded-full border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 shadow hover:border-brand-teal hover:text-brand-teal disabled:opacity-40 disabled:pointer-events-none transition"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
       </div>
