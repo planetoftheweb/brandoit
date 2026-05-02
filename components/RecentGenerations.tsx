@@ -725,7 +725,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   >
                     <FolderIcon size={14} aria-hidden />
                     <span className="truncate max-w-[10rem]">{folder.name}</span>
-                    <span className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold ${
+                    <span className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums ${
                       isViewing ? 'bg-brand-teal text-white' : 'bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300'
                     }`}>
                       {count}

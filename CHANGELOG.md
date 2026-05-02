@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-02
+### Fixed
+- **Folder count badge sits true-center inside its pill.** The `(N)` badge next to each folder chip in `RecentGenerations` was rendering with `text-[10px]` inside an `h-5` (20px) circle using the default `leading-normal` (~1.5), which produced a 15px line box that flex-centered the line — but not the actual glyph — leaving multi-digit counts like `20` reading as slightly low. Added `leading-none` so the line box equals the font size and `tabular-nums` so digits stay even-width as the count grows or shrinks (`components/RecentGenerations.tsx`).
+
 ## [0.8.0] - 2026-05-02
 ### Added
 - **Folders for the Recent Generations gallery.** Tiles can now be grouped into named folders. The gallery shows a folder tab strip above the grid (each chip displays a count and is filterable), every user gets an auto-seeded `Inbox` (renameable, undeletable), and a "New folder" chip on the strip starts an inline creation flow. Each folder chip exposes a pin toggle that controls which folder is the **sticky default** for new generations — with no pin, new tiles fall back to Inbox. The strip's kebab menu offers Rename and Delete (Inbox hides Delete); deleting a folder sweeps every tile inside it into Inbox before removing the folder so nothing is ever stranded. The selection-mode toolbar gets a "Move to folder" picker for bulk reassignment. Folders persist on the user document under `preferences.folders` / `preferences.activeFolderId` for signed-in users and in `localStorage` for guests, so the gallery looks the same before and after sign-in. Every `Generation` carries a `folderId`; legacy items without one are normalized into Inbox at read time. New `services/folderService.ts`, `Folder` interface, and `INBOX_FOLDER_ID` constant in `types.ts`. `historyService.moveGenerationsToFolder` is the durable bulk-write path used by both selection-mode moves and folder deletion (`App.tsx`, `components/RecentGenerations.tsx`, `services/folderService.ts`, `services/historyService.ts`, `services/authService.ts`, `types.ts`).
