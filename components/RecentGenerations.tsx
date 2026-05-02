@@ -4,6 +4,7 @@ import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, 
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
+import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getLatestVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { DownloadMenu } from './DownloadMenu';
@@ -284,20 +285,47 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return imageSrcById[gen.id] || latestVersion.imageUrl;
   };
 
-  const handleImageLoadError = (gen: Generation) => {
+  const applyFallbackBlobUrl = (generationId: string, blobUrl: string) => {
+    const previousBlobUrl = blobUrlsRef.current[generationId];
+    if (previousBlobUrl) URL.revokeObjectURL(previousBlobUrl);
+    blobUrlsRef.current[generationId] = blobUrl;
+    setImageSrcById((prev) => ({ ...prev, [generationId]: blobUrl }));
+  };
+
+  const handleImageLoadError = async (gen: Generation) => {
     const currentSource = imageSrcById[gen.id];
     if (currentSource?.startsWith('blob:')) return;
 
     const latestVersion = getLatestVersion(gen);
-    const fakeImage = { imageUrl: latestVersion.imageUrl, base64Data: latestVersion.imageData, mimeType: latestVersion.mimeType };
-    const blobUrl = createBlobUrlFromImage(fakeImage);
-    if (!blobUrl) return;
 
-    const previousBlobUrl = blobUrlsRef.current[gen.id];
-    if (previousBlobUrl) URL.revokeObjectURL(previousBlobUrl);
+    // Path 1 — version still carries inline base64 (only true for fresh
+    // generations that haven't been uploaded + stripped yet).
+    const inlineBlobUrl = createBlobUrlFromImage({
+      imageUrl: latestVersion.imageUrl,
+      base64Data: latestVersion.imageData,
+      mimeType: latestVersion.mimeType
+    });
+    if (inlineBlobUrl) {
+      applyFallbackBlobUrl(gen.id, inlineBlobUrl);
+      return;
+    }
 
-    blobUrlsRef.current[gen.id] = blobUrl;
-    setImageSrcById((prev) => ({ ...prev, [gen.id]: blobUrl }));
+    // Path 2 — every other case (history loaded from Firestore, where the
+    // bytes were stripped on upload). Look in IndexedDB. This is the path
+    // that recovers thumbnails when the network blocks Firebase Storage.
+    if (!latestVersion.id) return;
+    try {
+      const cachedBlobUrl = await getCachedImageBlobUrl(gen.id, latestVersion.id);
+      if (!cachedBlobUrl) return;
+      // Re-check we didn't already swap to a blob while waiting on IDB.
+      if (blobUrlsRef.current[gen.id]) {
+        URL.revokeObjectURL(cachedBlobUrl);
+        return;
+      }
+      applyFallbackBlobUrl(gen.id, cachedBlobUrl);
+    } catch (error) {
+      console.warn('[RecentGenerations] Failed to load cached blob URL:', error);
+    }
   };
 
   return (
@@ -651,7 +679,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       onPickMark({
                         generationId: gen.id,
                         versionId: latestVersion.id,
-                        imageUrl: latestVersion.imageUrl,
+                        imageUrl: getDisplayImageUrl(gen),
                         mimeType: latestVersion.mimeType,
                         // Per-version model wins for mixed-model tiles so the
                         // slider labels the right side correctly.

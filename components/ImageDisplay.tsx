@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
 import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
+import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getCurrentVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
 import { webpToPngBlob } from '../services/imageConversionService';
@@ -137,6 +138,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [noticeTimer, setNoticeTimer] = useState<number | null>(null);
   const [renderImageSrc, setRenderImageSrc] = useState<string>('');
   const [fallbackBlobUrl, setFallbackBlobUrl] = useState<string | null>(null);
+  const [versionImageSrcByKey, setVersionImageSrcByKey] = useState<Record<string, string>>({});
   const [versionDropdownOpen, setVersionDropdownOpen] = useState(false);
   const [animationPaused, setAnimationPaused] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
@@ -160,9 +162,14 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const compareHintTimerRef = useRef<number | null>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const railInnerRef = useRef<HTMLDivElement>(null);
+  const versionBlobUrlsRef = useRef<Record<string, string>>({});
 
   const version = generation ? getCurrentVersion(generation) : null;
   const isSvg = version?.mimeType === 'image/svg+xml';
+  const getVersionImageKey = (generationId: string, versionId: string): string =>
+    `${generationId}|${versionId}`;
+  const getVersionDisplayImageUrl = (generationId: string, targetVersion: GenerationVersion): string =>
+    versionImageSrcByKey[getVersionImageKey(generationId, targetVersion.id)] || targetVersion.imageUrl;
 
   // Turn the currently-committed version into a MarkRef so the Compare button
   // can hand it off as the pre-seeded "A" side. Users enter compare mode
@@ -172,7 +179,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     ? {
         generationId: generation.id,
         versionId: version.id,
-        imageUrl: version.imageUrl,
+        imageUrl: renderImageSrc || getVersionDisplayImageUrl(generation.id, version),
         mimeType: version.mimeType,
         modelId: version.modelId || generation.modelId,
         markLabel: version.label,
@@ -279,6 +286,32 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
     };
   }, [fallbackBlobUrl]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(versionBlobUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+      versionBlobUrlsRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const activeKeys = new Set(
+      generation?.versions.map((item) => getVersionImageKey(generation.id, item.id)) || []
+    );
+    const staleKeys = Object.keys(versionBlobUrlsRef.current).filter((key) => !activeKeys.has(key));
+    if (staleKeys.length === 0) return;
+
+    staleKeys.forEach((key) => {
+      URL.revokeObjectURL(versionBlobUrlsRef.current[key]);
+      delete versionBlobUrlsRef.current[key];
+    });
+
+    setVersionImageSrcByKey((prev) => {
+      const next = { ...prev };
+      staleKeys.forEach((key) => delete next[key]);
+      return next;
+    });
+  }, [generation?.id, generation?.versions]);
 
   useEffect(() => {
     if (!isSvg || !svgContainerRef.current) return;
@@ -658,15 +691,82 @@ ${version.svgCode}
     }
   };
 
-  const handleImageError = () => {
+  const handleImageError = async () => {
     if (!version) return;
     if (renderImageSrc.startsWith('blob:')) return;
-    const fakeImage = { imageUrl: version.imageUrl, base64Data: version.imageData, mimeType: version.mimeType };
-    const blobUrl = createBlobUrlFromImage(fakeImage);
-    if (!blobUrl) return;
-    if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
-    setFallbackBlobUrl(blobUrl);
-    setRenderImageSrc(blobUrl);
+
+    // Path 1 — fresh generation, base64 still inline. Cheap, synchronous.
+    const inlineBlobUrl = createBlobUrlFromImage({
+      imageUrl: version.imageUrl,
+      base64Data: version.imageData,
+      mimeType: version.mimeType
+    });
+    if (inlineBlobUrl) {
+      if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
+      setFallbackBlobUrl(inlineBlobUrl);
+      setRenderImageSrc(inlineBlobUrl);
+      return;
+    }
+
+    // Path 2 — history loaded from Firestore (no inline bytes). Try the
+    // IndexedDB cache. This is what restores the main preview when the
+    // network blocks Firebase Storage.
+    if (!generation || !version.id) return;
+    try {
+      const cachedBlobUrl = await getCachedImageBlobUrl(generation.id, version.id);
+      if (!cachedBlobUrl) return;
+      // Bail if the user navigated to a different version while we waited.
+      const stillCurrentVersion = getCurrentVersion(generation);
+      if (!stillCurrentVersion || stillCurrentVersion.id !== version.id) {
+        URL.revokeObjectURL(cachedBlobUrl);
+        return;
+      }
+      if (renderImageSrc.startsWith('blob:')) {
+        URL.revokeObjectURL(cachedBlobUrl);
+        return;
+      }
+      if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
+      setFallbackBlobUrl(cachedBlobUrl);
+      setRenderImageSrc(cachedBlobUrl);
+    } catch (error) {
+      console.warn('[ImageDisplay] Failed to load cached blob URL:', error);
+    }
+  };
+
+  const handleVersionImageError = async (generationId: string, targetVersion: GenerationVersion) => {
+    const key = getVersionImageKey(generationId, targetVersion.id);
+    const currentSource = versionImageSrcByKey[key];
+    if (currentSource?.startsWith('blob:')) return;
+
+    // Path 1 — inline bytes available.
+    const inlineBlobUrl = createBlobUrlFromImage({
+      imageUrl: targetVersion.imageUrl,
+      base64Data: targetVersion.imageData,
+      mimeType: targetVersion.mimeType
+    });
+    if (inlineBlobUrl) {
+      const previousBlobUrl = versionBlobUrlsRef.current[key];
+      if (previousBlobUrl) URL.revokeObjectURL(previousBlobUrl);
+      versionBlobUrlsRef.current[key] = inlineBlobUrl;
+      setVersionImageSrcByKey((prev) => ({ ...prev, [key]: inlineBlobUrl }));
+      return;
+    }
+
+    // Path 2 — IndexedDB cache lookup.
+    if (!targetVersion.id) return;
+    try {
+      const cachedBlobUrl = await getCachedImageBlobUrl(generationId, targetVersion.id);
+      if (!cachedBlobUrl) return;
+      // Re-check the slot wasn't filled while we awaited IDB.
+      if (versionBlobUrlsRef.current[key]) {
+        URL.revokeObjectURL(cachedBlobUrl);
+        return;
+      }
+      versionBlobUrlsRef.current[key] = cachedBlobUrl;
+      setVersionImageSrcByKey((prev) => ({ ...prev, [key]: cachedBlobUrl }));
+    } catch (error) {
+      console.warn('[ImageDisplay] Failed to load cached version blob URL:', error);
+    }
   };
 
   const refineModelOptions = SUPPORTED_MODELS.filter((model) =>
@@ -971,10 +1071,11 @@ ${version.svgCode}
                   // comparison runs (mixed-model tiles) pick the right model
                   // for the slider label / refine fan-out.
                   const thumbModelId = v.modelId || generation.modelId;
+                  const thumbImageUrl = getVersionDisplayImageUrl(generation.id, v);
                   const markRef: ImageDisplayMarkRef = {
                     generationId: generation.id,
                     versionId: v.id,
-                    imageUrl: v.imageUrl,
+                    imageUrl: thumbImageUrl,
                     mimeType: v.mimeType,
                     modelId: thumbModelId,
                     markLabel: v.label,
@@ -1043,10 +1144,11 @@ ${version.svgCode}
                         />
                       ) : v.imageUrl ? (
                         <img
-                          src={v.imageUrl}
+                          src={thumbImageUrl}
                           alt={v.label}
                           loading="lazy"
                           className="w-full h-full object-cover"
+                          onError={() => handleVersionImageError(generation.id, v)}
                         />
                       ) : (
                         <div className="w-full h-full bg-gray-100 dark:bg-[#161b22]" />
@@ -1135,6 +1237,7 @@ ${version.svgCode}
                 const isCommitted = hoveredVersionIdx === generation.currentVersionIndex;
                 const isSvgThumb = v.mimeType === 'image/svg+xml';
                 const previewStyle = getHoverPreviewStyle(v.aspectRatio || generation.config.aspectRatio);
+                const previewImageUrl = getVersionDisplayImageUrl(generation.id, v);
                 return (
                   <div
                     className="pointer-events-none absolute left-full ml-3 -translate-y-1/2 z-30 animate-in fade-in zoom-in-95 duration-150"
@@ -1156,9 +1259,10 @@ ${version.svgCode}
                           />
                         ) : v.imageUrl ? (
                           <img
-                            src={v.imageUrl}
+                            src={previewImageUrl}
                             alt=""
                             className="w-full h-full object-contain"
+                            onError={() => handleVersionImageError(generation.id, v)}
                           />
                         ) : null}
                       </div>

@@ -15,6 +15,13 @@ import { User, Generation, GenerationVersion, GeneratedImage, GenerationConfig }
 import { toMarkLabel } from "./versionUtils";
 import { convertToWebP, makeImageUrl } from "./imageConversionService";
 import { deleteGenerationImages, uploadGenerationImage } from "./imageService";
+import {
+  backfillImageCache,
+  cacheImageFromBase64,
+  pruneCacheToActiveKeys,
+  removeCachedGeneration,
+  buildImageCacheKey
+} from "./imageCache";
 
 const LOCAL_STORAGE_KEY = 'brandoit_generations_v2';
 const LEGACY_STORAGE_KEY = 'brandoit_history';
@@ -192,6 +199,40 @@ const mergeGenerationPair = (left: Generation, right: Generation): Generation =>
   };
 };
 
+// Walks the merged history once, prunes any cache entry whose generation/version
+// is no longer present, then kicks the (rate-limited) backfill so any version
+// missing local bytes is re-downloaded while the network is healthy. Designed
+// to run after every `getHistory` so old generations recover their cache the
+// next time the user is off the blocked network.
+const primeImageCacheForHistory = (history: Generation[]): void => {
+  try {
+    const activeKeys = new Set<string>();
+    const backfillTargets: { generationId: string; versionId: string; imageUrl: string }[] = [];
+    for (const generation of history) {
+      for (const version of generation.versions) {
+        if (!version.id) continue;
+        activeKeys.add(buildImageCacheKey(generation.id, version.id));
+        const imageUrl = version.imageUrl;
+        // Only chase real http(s) downloads — data: URLs already carry their
+        // bytes inline and SVG-only versions have no raster to cache.
+        if (imageUrl && /^https?:/i.test(imageUrl) && version.mimeType !== 'image/svg+xml') {
+          backfillTargets.push({
+            generationId: generation.id,
+            versionId: version.id,
+            imageUrl
+          });
+        }
+      }
+    }
+    void pruneCacheToActiveKeys(activeKeys);
+    if (backfillTargets.length > 0) {
+      void backfillImageCache(backfillTargets);
+    }
+  } catch (error) {
+    console.warn('[historyService] Failed to prime image cache:', error);
+  }
+};
+
 const mergeGenerationCollections = (collections: Generation[][], maxItems: number): Generation[] => {
   const byId = new Map<string, Generation>();
 
@@ -292,6 +333,18 @@ const serializeGenerationForRemote = async (
         base64Data: version.imageData,
         mimeType: version.mimeType || 'image/webp'
       });
+
+      // Stash the raw bytes in IndexedDB before we strip them from the
+      // Firestore payload. Without this, any subsequent reload that can't
+      // reach `firebasestorage.googleapis.com` (VPN/proxy/captive portal)
+      // has nothing to render — the saved doc only carries the Storage URL.
+      // Fire-and-forget; the cache write must not block the upload pipeline.
+      void cacheImageFromBase64(
+        normalized.id,
+        version.id,
+        version.imageData,
+        version.mimeType || 'image/webp'
+      );
 
       return {
         ...version,
@@ -548,7 +601,7 @@ export const historyService = {
     if (user) {
       upsertUserRemoteCache(user.id, normalized);
       try {
-        await historyService.saveToRemote(user.id, normalized);
+        await historyService.saveToRemote(user.id, normalized, user.isAdmin === true);
         historyService.deleteFromLocal(normalized.id);
       } catch (e) {
         // Preserve locally if remote write fails so data is not lost on refresh.
@@ -565,7 +618,7 @@ export const historyService = {
     if (user) {
       upsertUserRemoteCache(user.id, normalized);
       try {
-        await historyService.updateRemote(user.id, normalized);
+        await historyService.updateRemote(user.id, normalized, user.isAdmin === true);
         historyService.deleteFromLocal(normalized.id);
       } catch (e) {
         // Preserve locally if remote write fails so refinements can be retried/synced.
@@ -596,6 +649,11 @@ export const historyService = {
         Math.max(REMOTE_LIMIT, LOCAL_LIMIT)
       );
       writeUserRemoteCache(user.id, merged);
+      // Best-effort: pull every history image into IndexedDB so VPN-blocked
+      // sessions still have raster bytes to render. Also drop stale cache
+      // entries for items that no longer exist in history. Both are
+      // fire-and-forget — they must not delay the UI.
+      void primeImageCacheForHistory(merged);
       return merged;
     } else {
       return mergeGenerationCollections([historyService.getFromLocal()], LOCAL_LIMIT);
@@ -761,34 +819,45 @@ export const historyService = {
 
   // --- Firestore Logic ---
 
-  saveToRemote: async (userId: string, generation: Generation) => {
+  saveToRemote: async (userId: string, generation: Generation, isAdmin: boolean = false) => {
     const historyRef = collection(db, "users", userId, "history");
     const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
     await addDoc(historyRef, payload);
 
+    // Admins keep an unbounded history (Firestore + Storage) so we can always
+    // audit, recover, or repurpose past assets. Regular accounts are capped at
+    // REMOTE_LIMIT to keep storage costs predictable; this will become tier-aware
+    // once paid plans are introduced.
+    if (isAdmin) return;
+
     const q = query(historyRef, orderBy("createdAt", "desc"));
     const snapshot = await getDocs(q);
-    
+
     if (snapshot.size > REMOTE_LIMIT) {
       const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
       const deletePromises = itemsToDelete.map(async (d) => {
+        const evictedId = d.data().id || d.id;
         await deleteDoc(doc(db, "users", userId, "history", d.id));
-        await deleteGenerationImages(userId, d.data().id || d.id);
+        await deleteGenerationImages(userId, evictedId);
+        void removeCachedGeneration(evictedId);
       });
       await Promise.all(deletePromises);
     }
   },
 
-  updateRemote: async (userId: string, generation: Generation) => {
+  updateRemote: async (userId: string, generation: Generation, isAdmin: boolean = false) => {
     const historyRef = collection(db, "users", userId, "history");
-    const q = query(historyRef, orderBy("createdAt", "desc"), limit(REMOTE_SCAN_LIMIT));
+    // Admins may have grown beyond REMOTE_SCAN_LIMIT, so widen the lookup for
+    // them. Regular accounts stay on the bounded scan to keep reads cheap.
+    const scanLimit = isAdmin ? Math.max(REMOTE_SCAN_LIMIT, 500) : REMOTE_SCAN_LIMIT;
+    const q = query(historyRef, orderBy("createdAt", "desc"), limit(scanLimit));
     const snapshot = await getDocs(q);
     const existing = snapshot.docs.find(d => d.data().id === generation.id);
     if (existing) {
       const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
       await updateDoc(doc(db, "users", userId, "history", existing.id), payload);
     } else {
-      await historyService.saveToRemote(userId, generation);
+      await historyService.saveToRemote(userId, generation, isAdmin);
     }
   },
 
@@ -819,6 +888,7 @@ export const historyService = {
         await deleteDoc(doc(db, "users", userId, "history", target.id));
         await deleteGenerationImages(userId, generationId);
       }
+      void removeCachedGeneration(generationId);
     } catch (e) {
       console.error("Failed to delete remote generation:", e);
       throw e;
@@ -834,7 +904,7 @@ export const historyService = {
     }
   },
 
-  mergeLocalToRemote: async (userId: string): Promise<{ synced: number; failed: number }> => {
+  mergeLocalToRemote: async (userId: string, isAdmin: boolean = false): Promise<{ synced: number; failed: number }> => {
     const localHistory = historyService.getFromLocal();
     if (localHistory.length === 0) return { synced: 0, failed: 0 };
 
@@ -850,7 +920,7 @@ export const historyService = {
     for (const gen of [...localHistory].reverse()) {
       upsertUserRemoteCache(userId, gen);
       try {
-        await historyService.saveToRemote(userId, gen);
+        await historyService.saveToRemote(userId, gen, isAdmin);
         synced += 1;
       } catch (e) {
         console.error("Failed to sync local generation to remote:", gen.id, e);
