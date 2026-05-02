@@ -722,7 +722,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onBack, currentUser }) => 
                             />
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right relative sticky right-0 bg-white dark:bg-[#161b22] group-hover:bg-gray-50 dark:group-hover:bg-[#0f141c] shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.08)] dark:shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.5)]">
+                        <td
+                          className={`px-4 py-3 text-right relative sticky right-0 bg-white dark:bg-[#161b22] group-hover:bg-gray-50 dark:group-hover:bg-[#0f141c] shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.08)] dark:shadow-[-8px_0_8px_-6px_rgba(0,0,0,0.5)] ${
+                            openRowMenu === row.id ? 'z-30' : ''
+                          }`}
+                        >
                           <button
                             type="button"
                             onClick={() =>

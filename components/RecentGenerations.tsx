@@ -1,6 +1,7 @@
 import React from 'react';
-import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, MoreHorizontal, Pencil, FolderInput, X as XIcon, Check } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
@@ -55,6 +56,18 @@ interface RecentGenerationsProps {
   onPickMark?: (ref: RecentGenerationsMarkRef) => void;
   /** Batch ids for currently-picked A/B marks, used to render "picked" badge. */
   pickedMarkIds?: { a?: string; b?: string };
+  /** All folders the current actor owns. The Inbox folder is always present. */
+  folders: Folder[];
+  /** Sticky folder for new generations. `undefined` => Inbox is the fallback. */
+  activeFolderId?: string;
+  /** Create a new folder; returns the created folder so the gallery can switch view to it. */
+  onCreateFolder: (name: string) => Promise<Folder>;
+  onRenameFolder: (folderId: string, nextName: string) => Promise<void>;
+  onDeleteFolder: (folderId: string) => Promise<void>;
+  /** Pin or clear (`null`) the sticky folder for new generations. */
+  onSetActiveFolder: (folderId: string | null) => Promise<void>;
+  /** Bulk-move a list of tiles into a folder (used by selection-mode action). */
+  onMoveToFolder: (generationIds: string[], folderId: string) => Promise<void>;
 }
 
 export const RecentGenerations: React.FC<RecentGenerationsProps> = ({ 
@@ -64,13 +77,44 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   options,
   isComparePicking,
   onPickMark,
-  pickedMarkIds
+  pickedMarkIds,
+  folders,
+  activeFolderId,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onSetActiveFolder,
+  onMoveToFolder
 }) => {
   const [copyLoadingId, setCopyLoadingId] = React.useState<string | null>(null);
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+  // Folder UI state. `viewFolderId` is the folder whose tiles are currently
+  // shown in the grid; defaults to the sticky `activeFolderId` (or Inbox).
+  // The user can switch views without changing the sticky pin.
+  const [viewFolderId, setViewFolderId] = React.useState<string>(
+    activeFolderId || INBOX_FOLDER_ID
+  );
+  const [renamingFolderId, setRenamingFolderId] = React.useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = React.useState('');
+  const [pendingDeleteFolderId, setPendingDeleteFolderId] = React.useState<string | null>(null);
+  // The folder tab strip uses `overflow-x-auto`, which forces overflow-y to
+  // `auto` per CSS spec — that would clip an inline `absolute` dropdown below
+  // each chip. We instead remember the open kebab's button rect and render
+  // the menu through a portal at fixed coords so it floats above the strip.
+  const [openFolderMenu, setOpenFolderMenu] = React.useState<
+    { id: string; rect: DOMRect } | null
+  >(null);
+  const openFolderMenuId = openFolderMenu?.id ?? null;
+  const setOpenFolderMenuId = (id: string | null) => {
+    if (id === null) setOpenFolderMenu(null);
+  };
+  const [isCreatingFolder, setIsCreatingFolder] = React.useState(false);
+  const [newFolderDraft, setNewFolderDraft] = React.useState('');
+  const [folderBusy, setFolderBusy] = React.useState(false);
+  const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
   // Per-tile details panel (prompt + tag chips) is opt-in. Default to hidden
   // so the gallery reads as a clean image grid; users who want context can
   // flip the toggle and the choice survives reloads via localStorage.
@@ -143,16 +187,98 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setSelectedIds((prev) => prev.filter((id) => valid.has(id)));
   }, [history]);
 
+  // Keep viewFolderId pointed at a folder that still exists. If the active
+  // view-tab gets deleted (e.g. user removes the folder while viewing it),
+  // fall back to Inbox so the gallery never shows a "missing folder"
+  // empty state.
+  React.useEffect(() => {
+    if (folders.length === 0) return;
+    if (!folders.some((f) => f.id === viewFolderId)) {
+      setViewFolderId(INBOX_FOLDER_ID);
+    }
+  }, [folders, viewFolderId]);
+
+  // Reposition the portal-rendered folder kebab menu when the page or any
+  // scrollable ancestor scrolls (the folder strip itself scrolls horizontally),
+  // and close it if the anchor button is no longer in the DOM.
+  React.useEffect(() => {
+    if (!openFolderMenu) return;
+    const update = () => {
+      const button = document.querySelector(
+        `[data-folder-kebab="${openFolderMenu.id}"]`
+      ) as HTMLElement | null;
+      if (!button) {
+        setOpenFolderMenu(null);
+        return;
+      }
+      const rect = button.getBoundingClientRect();
+      setOpenFolderMenu((prev) =>
+        prev && prev.id === openFolderMenu.id ? { id: prev.id, rect } : prev
+      );
+    };
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [openFolderMenu?.id]);
+
+  // Close the per-folder kebab and the move-to-folder picker on outside
+  // clicks / Escape, mirroring the existing toast lifecycle.
+  React.useEffect(() => {
+    if (!openFolderMenuId && !moveMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('[data-folder-menu]')) return;
+      setOpenFolderMenuId(null);
+      setMoveMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpenFolderMenuId(null);
+        setMoveMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [openFolderMenuId, moveMenuOpen]);
+
+  // Visible history is the slice of tiles that live in the currently-viewed
+  // folder. Legacy items without a `folderId` are normalized into Inbox via
+  // historyService, so this filter handles them implicitly.
+  const visibleHistory = React.useMemo(
+    () => history.filter((g) => (g.folderId || INBOX_FOLDER_ID) === viewFolderId),
+    [history, viewFolderId]
+  );
+
+  // Per-folder counts shown on the tab chips. Built from the full history
+  // (not the filtered slice) so every chip stays accurate while the user
+  // is browsing a single folder.
+  const folderCounts = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const folder of folders) counts.set(folder.id, 0);
+    for (const gen of history) {
+      const id = gen.folderId || INBOX_FOLDER_ID;
+      counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    return counts;
+  }, [history, folders]);
+
   // Items that the "download all" menu operates on: selected items when the
-  // user has made a selection; otherwise the full visible history.
+  // user has made a selection; otherwise the visible folder's history.
   const downloadScope = React.useMemo(() => {
-    if (selectedIds.length === 0) return history;
-    return history.filter((g) => selectedIds.includes(g.id));
-  }, [history, selectedIds]);
+    if (selectedIds.length === 0) return visibleHistory;
+    return visibleHistory.filter((g) => selectedIds.includes(g.id));
+  }, [visibleHistory, selectedIds]);
   const downloadScopeLabel =
     selectedIds.length > 0
       ? `Download selected (${selectedIds.length})`
-      : `Download all (${history.length})`;
+      : `Download all (${visibleHistory.length})`;
 
   React.useEffect(() => {
     return () => {
@@ -184,7 +310,11 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     });
   }, [history]);
 
-  if (history.length === 0) return null;
+  // Hide the entire gallery only when there are no tiles AND no user
+  // folders beyond the auto-seeded Inbox. Once the user creates any folder
+  // we keep rendering so they can manage it even before generating tiles.
+  const hasUserFolders = folders.some((f) => f.id !== INBOX_FOLDER_ID);
+  if (history.length === 0 && !hasUserFolders) return null;
 
   const getLabel = (id: string, list: any[]) => {
     const item = list.find(i => i.id === id || i.value === id);
@@ -335,7 +465,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           <Clock size={18} />
           <h3 className="text-sm font-bold uppercase tracking-wider">Recent Generations</h3>
           <span className="text-xs text-slate-400 dark:text-slate-500">
-            ({history.length} {history.length === 1 ? 'item' : 'items'})
+            ({visibleHistory.length} {visibleHistory.length === 1 ? 'item' : 'items'} in folder
+            {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
           </span>
           {selectionMode && selectedIds.length > 0 && (
             <span className="text-xs font-semibold text-brand-teal" aria-live="polite">
@@ -353,7 +484,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             <>
               <button
                 type="button"
-                onClick={() => setSelectedIds(history.map((g) => g.id))}
+                onClick={() => setSelectedIds(visibleHistory.map((g) => g.id))}
                 className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
               >
                 Select all
@@ -377,6 +508,64 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 onNotify={showToast}
                 align="right"
               />
+              <div className="relative" data-folder-menu>
+                <button
+                  type="button"
+                  onClick={() => setMoveMenuOpen((prev) => !prev)}
+                  disabled={selectedIds.length === 0 || folderBusy}
+                  aria-haspopup="menu"
+                  aria-expanded={moveMenuOpen}
+                  className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  <FolderInput size={16} aria-hidden />
+                  Move to folder
+                </button>
+                {moveMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
+                  >
+                    {folders.map((folder) => {
+                      const isHighlighted = folder.id === (activeFolderId || INBOX_FOLDER_ID);
+                      return (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          role="menuitem"
+                          onClick={async () => {
+                            setMoveMenuOpen(false);
+                            if (selectedIds.length === 0) return;
+                            try {
+                              setFolderBusy(true);
+                              await onMoveToFolder(selectedIds, folder.id);
+                              showToast(
+                                `Moved ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'} to ${folder.name}`
+                              );
+                              setSelectedIds([]);
+                            } catch (err) {
+                              console.error('Move to folder failed:', err);
+                              showToast('Move failed');
+                            } finally {
+                              setFolderBusy(false);
+                            }
+                          }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs rounded-md transition ${
+                            isHighlighted
+                              ? 'bg-brand-teal/10 text-brand-teal font-semibold'
+                              : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                          }`}
+                        >
+                          <FolderIcon size={14} aria-hidden />
+                          <span className="truncate flex-1">{folder.name}</span>
+                          <span className="text-[10px] text-slate-400">
+                            {folderCounts.get(folder.id) || 0}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={exitSelectionMode}
@@ -418,14 +607,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               </button>
               <DownloadMenu
                 mode="all-only"
-                allGenerations={history}
-                allLabel={`Download all (${history.length})`}
-                triggerLabel={`Download all (${history.length})`}
-                triggerTitle="Download all as ZIP"
+                allGenerations={visibleHistory}
+                allLabel={`Download all (${visibleHistory.length})`}
+                triggerLabel={`Download all (${visibleHistory.length})`}
+                triggerTitle="Download all in folder as ZIP"
                 triggerLabelClassName="hidden xl:inline"
                 icon={<Archive size={16} aria-hidden />}
                 triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none shrink-0"
-                disabled={history.length === 0}
+                disabled={visibleHistory.length === 0}
                 onNotify={showToast}
                 align="right"
               />
@@ -444,8 +633,253 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         </div>
       </div>
 
+      {/* Folder tab strip. Each chip filters the grid to its folder; the
+          pin icon next to the folder name controls which folder is the
+          sticky default for new generations. The kebab opens rename /
+          delete actions (Inbox hides Delete). The trailing chip starts a
+          folder-creation flow with an inline name input. */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-4 border-b border-gray-200 dark:border-[#30363d]">
+        {folders.map((folder) => {
+          const isViewing = folder.id === viewFolderId;
+          // The pin lights up only when the user has explicitly pinned a
+          // folder. When `activeFolderId` is undefined we don't auto-light
+          // Inbox so users can tell at a glance whether stickiness is
+          // currently set or cleared.
+          const isPinned = folder.id === activeFolderId;
+          const isInbox = folder.id === INBOX_FOLDER_ID;
+          const count = folderCounts.get(folder.id) || 0;
+          const isRenaming = renamingFolderId === folder.id;
+          return (
+            <div
+              key={folder.id}
+              data-folder-menu
+              className={`group flex items-center gap-1 rounded-full border px-1 py-1 transition shrink-0 ${
+                isViewing
+                  ? 'border-brand-teal bg-brand-teal/10 text-brand-teal'
+                  : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal'
+              }`}
+            >
+              {isRenaming ? (
+                <form
+                  className="flex items-center gap-1 px-2"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const next = renameDraft.trim();
+                    if (!next) return;
+                    try {
+                      setFolderBusy(true);
+                      await onRenameFolder(folder.id, next);
+                      setRenamingFolderId(null);
+                      setRenameDraft('');
+                      showToast('Folder renamed');
+                    } catch (err) {
+                      console.error('Rename folder failed:', err);
+                      showToast('Rename failed');
+                    } finally {
+                      setFolderBusy(false);
+                    }
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={renameDraft}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setRenamingFolderId(null);
+                        setRenameDraft('');
+                      }
+                    }}
+                    className="text-xs font-semibold bg-transparent border border-brand-teal rounded-md px-2 py-1 min-h-9 focus:outline-none focus:ring-2 focus:ring-brand-teal/40 text-slate-900 dark:text-slate-100"
+                    aria-label={`Rename ${folder.name}`}
+                    maxLength={60}
+                  />
+                  <button
+                    type="submit"
+                    disabled={folderBusy || !renameDraft.trim()}
+                    className="inline-flex items-center justify-center h-9 w-9 rounded-md text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
+                    aria-label="Save folder name"
+                  >
+                    <Check size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenamingFolderId(null);
+                      setRenameDraft('');
+                    }}
+                    className="inline-flex items-center justify-center h-9 w-9 rounded-md text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
+                    aria-label="Cancel rename"
+                  >
+                    <XIcon size={14} />
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setViewFolderId(folder.id)}
+                    aria-pressed={isViewing}
+                    className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 min-h-9 rounded-full text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal"
+                  >
+                    <FolderIcon size={14} aria-hidden />
+                    <span className="truncate max-w-[10rem]">{folder.name}</span>
+                    <span className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold ${
+                      isViewing ? 'bg-brand-teal text-white' : 'bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300'
+                    }`}>
+                      {count}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        setFolderBusy(true);
+                        // Toggle: pinning the already-sticky folder clears
+                        // the pin (new tiles fall back to Inbox).
+                        await onSetActiveFolder(isPinned ? null : folder.id);
+                        showToast(
+                          isPinned
+                            ? 'Sticky folder cleared'
+                            : `New tiles will save to ${folder.name}`
+                        );
+                      } catch (err) {
+                        console.error('Toggle sticky folder failed:', err);
+                        showToast('Could not update sticky folder');
+                      } finally {
+                        setFolderBusy(false);
+                      }
+                    }}
+                    title={
+                      isPinned
+                        ? 'Sticky for new generations — click to clear'
+                        : 'Pin as sticky folder for new generations'
+                    }
+                    aria-label={
+                      isPinned
+                        ? `Clear sticky pin on ${folder.name}`
+                        : `Pin ${folder.name} as sticky folder`
+                    }
+                    aria-pressed={isPinned}
+                    disabled={folderBusy}
+                    className={`inline-flex items-center justify-center h-9 w-9 rounded-full transition ${
+                      isPinned
+                        ? 'text-amber-500 hover:bg-amber-100/40 dark:hover:bg-amber-500/10'
+                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                    }`}
+                  >
+                    {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      if (openFolderMenu?.id === folder.id) {
+                        setOpenFolderMenu(null);
+                        return;
+                      }
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setOpenFolderMenu({ id: folder.id, rect });
+                    }}
+                    aria-haspopup="menu"
+                    aria-expanded={openFolderMenuId === folder.id}
+                    aria-label={`Folder actions for ${folder.name}`}
+                    data-folder-kebab={folder.id}
+                    className="inline-flex items-center justify-center h-9 w-9 rounded-full text-slate-500 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]"
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+
+        {isCreatingFolder ? (
+          <form
+            data-folder-menu
+            className="flex items-center gap-1 rounded-full border border-brand-teal bg-white dark:bg-[#161b22] px-2 py-1 shrink-0"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const next = newFolderDraft.trim();
+              if (!next) return;
+              try {
+                setFolderBusy(true);
+                const created = await onCreateFolder(next);
+                setIsCreatingFolder(false);
+                setNewFolderDraft('');
+                setViewFolderId(created.id);
+                showToast(`Created ${created.name}`);
+              } catch (err) {
+                console.error('Create folder failed:', err);
+                showToast('Could not create folder');
+              } finally {
+                setFolderBusy(false);
+              }
+            }}
+          >
+            <FolderPlus size={14} className="text-brand-teal" aria-hidden />
+            <input
+              autoFocus
+              type="text"
+              value={newFolderDraft}
+              onChange={(e) => setNewFolderDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setIsCreatingFolder(false);
+                  setNewFolderDraft('');
+                }
+              }}
+              placeholder="Folder name"
+              className="text-xs font-semibold bg-transparent border-0 px-1 py-1 min-h-9 focus:outline-none text-slate-900 dark:text-slate-100 w-32"
+              maxLength={60}
+            />
+            <button
+              type="submit"
+              disabled={folderBusy || !newFolderDraft.trim()}
+              className="inline-flex items-center justify-center h-9 w-9 rounded-full text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
+              aria-label="Create folder"
+            >
+              <Check size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreatingFolder(false);
+                setNewFolderDraft('');
+              }}
+              className="inline-flex items-center justify-center h-9 w-9 rounded-full text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
+              aria-label="Cancel"
+            >
+              <XIcon size={14} />
+            </button>
+          </form>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setIsCreatingFolder(true);
+              setNewFolderDraft('');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1 min-h-9 rounded-full border border-dashed border-gray-300 dark:border-[#30363d] text-xs font-semibold text-slate-600 dark:text-slate-300 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
+          >
+            <FolderPlus size={14} aria-hidden />
+            New folder
+          </button>
+        )}
+      </div>
+
+      {visibleHistory.length === 0 && (
+        <div className="text-center py-12 text-sm text-slate-500 dark:text-slate-400 border border-dashed border-gray-300 dark:border-[#30363d] rounded-xl mb-4">
+          This folder is empty.
+          {activeFolderId === viewFolderId
+            ? ' New generations will land here.'
+            : ' Pin this folder to make new generations land here, or move tiles in from another folder.'}
+        </div>
+      )}
+
       <div className={THUMBNAIL_GRID_CLASS[thumbnailSize]}>
-        {history.map((gen) => {
+        {visibleHistory.map((gen) => {
           const latestVersion = getLatestVersion(gen);
           const versionCount = gen.versions.length;
           const batchId = gen.comparisonBatchId;
@@ -453,7 +887,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           // itself, so we detect "compare" by counting distinct per-version
           // models within the tile. Legacy behavior (one tile per model with a
           // shared batchId) is still handled below as a fallback so old
-          // history items keep their badge.
+          // history items keep their badge. Use full history for sibling
+          // counts so a comparison group spread across folders still reads
+          // correctly.
           const distinctTileModelIds = Array.from(
             new Set(gen.versions.map((v) => v.modelId).filter(Boolean) as string[])
           );
@@ -753,6 +1189,110 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           );
         })}
       </div>
+
+      {/* Folder delete confirmation. Tiles inside the deleted folder are
+          swept into Inbox by App.handleDeleteFolder before the folder
+          itself is removed, so deletion never strands content. */}
+      {pendingDeleteFolderId && (() => {
+        const target = folders.find((f) => f.id === pendingDeleteFolderId);
+        if (!target) return null;
+        const tilesInFolder = folderCounts.get(target.id) || 0;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div role="dialog" aria-modal="true" aria-labelledby="delete-folder-title" className="bg-white dark:bg-[#161b22] rounded-xl border border-gray-200 dark:border-[#30363d] shadow-2xl max-w-sm w-full p-5">
+              <h2 id="delete-folder-title" className="text-base font-bold text-slate-900 dark:text-slate-100">
+                Delete "{target.name}"?
+              </h2>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                {tilesInFolder > 0
+                  ? `${tilesInFolder} tile${tilesInFolder === 1 ? '' : 's'} will move to Inbox.`
+                  : 'This folder is empty.'}
+              </p>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteFolderId(null)}
+                  disabled={folderBusy}
+                  className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-slate-500 transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setFolderBusy(true);
+                      await onDeleteFolder(target.id);
+                      setPendingDeleteFolderId(null);
+                      showToast(`Deleted ${target.name}`);
+                    } catch (err) {
+                      console.error('Delete folder failed:', err);
+                      showToast('Could not delete folder');
+                    } finally {
+                      setFolderBusy(false);
+                    }
+                  }}
+                  disabled={folderBusy}
+                  className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg bg-brand-red text-white hover:opacity-90 disabled:opacity-50 transition"
+                >
+                  Delete folder
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Folder kebab dropdown — rendered through a portal so it isn't
+          clipped by the folder strip's `overflow-x-auto` (which CSS upgrades
+          to `overflow-y: auto` and hides anything that overflows below). */}
+      {openFolderMenu && (() => {
+        const target = folders.find((f) => f.id === openFolderMenu.id);
+        if (!target) return null;
+        const isInbox = target.id === INBOX_FOLDER_ID;
+        // Anchor the menu under the kebab's right edge, mirroring the prior
+        // `right-0 top-full mt-1` placement.
+        const menuWidth = 160;
+        const top = openFolderMenu.rect.bottom + 4;
+        const left = Math.max(8, openFolderMenu.rect.right - menuWidth);
+        return createPortal(
+          <div
+            role="menu"
+            data-folder-menu
+            style={{ position: 'fixed', top, left, minWidth: menuWidth, zIndex: 50 }}
+            className="rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setRenamingFolderId(target.id);
+                setRenameDraft(target.name);
+                setOpenFolderMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 rounded-md hover:bg-gray-100 dark:hover:bg-[#21262d]"
+            >
+              <Pencil size={14} aria-hidden />
+              Rename
+            </button>
+            {!isInbox && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenFolderMenu(null);
+                  setPendingDeleteFolderId(target.id);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-red-600 dark:text-red-300 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20"
+              >
+                <Trash2 size={14} aria-hidden />
+                Delete folder
+              </button>
+            )}
+          </div>,
+          document.body
+        );
+      })()}
 
       {toastMessage && (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center">

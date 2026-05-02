@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode } from '../types';
+import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset } from '../types';
 import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
@@ -21,6 +21,7 @@ import {
   PenTool, 
   Layout, 
   Maximize, 
+  Maximize2,
   Sparkles, 
   ChevronDown,
   Check,
@@ -47,7 +48,9 @@ import {
   GitCompare,
   Check as CheckIcon,
   KeyRound,
-  UserPlus
+  UserPlus,
+  Bookmark,
+  BookmarkPlus
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 
@@ -88,6 +91,18 @@ interface ControlPanelProps {
   setupActionLabel?: string;
   setupActionDescription?: string;
   onSetupAction?: () => void;
+  /**
+   * Saved toolbar presets the user can recall. When omitted/empty the
+   * dropdown shows an empty state inviting the user to save their first
+   * preset.
+   */
+  presets?: ToolbarPreset[];
+  /** Apply a preset's snapshot to the current toolbar config. */
+  onApplyPreset?: (preset: ToolbarPreset) => void;
+  /** Persist the current toolbar settings as a new named preset. */
+  onSavePreset?: (name: string) => Promise<void> | void;
+  /** Remove a preset by id. */
+  onDeletePreset?: (presetId: string) => Promise<void> | void;
 }
 
 // Modal Component
@@ -473,7 +488,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   setupRequired = false,
   setupActionLabel,
   setupActionDescription,
-  onSetupAction
+  onSetupAction,
+  presets = [],
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [compareModelsMode, setCompareModelsMode] = useState(false);
@@ -505,6 +524,70 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [isAnalysingOption, setIsAnalysingOption] = useState(false);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const [isExpandingPrompt, setIsExpandingPrompt] = useState(false);
+
+  // Preset save flow state. The dropdown lists existing presets and shows
+  // an inline "name your preset" input when the user clicks the save CTA so
+  // we don't need a full modal for a one-field interaction.
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+  const [isSavingPreset, setIsSavingPreset] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [isNamingPreset, setIsNamingPreset] = useState(false);
+  const presetNameInputRef = useRef<HTMLInputElement>(null);
+
+  const closePresetDropdown = () => {
+    setActiveDropdown(null);
+    setIsNamingPreset(false);
+    setPresetNameDraft('');
+    setPresetError(null);
+  };
+
+  const handleApplyPreset = (preset: ToolbarPreset) => {
+    onApplyPreset?.(preset);
+    closePresetDropdown();
+  };
+
+  const handleStartSavePreset = () => {
+    setPresetError(null);
+    setIsNamingPreset(true);
+    // Suggest a name to make the common case zero-friction.
+    setPresetNameDraft(`Preset ${presets.length + 1}`);
+    // Defer focus so the input has mounted.
+    window.setTimeout(() => presetNameInputRef.current?.focus(), 0);
+  };
+
+  const handleConfirmSavePreset = async () => {
+    if (!onSavePreset) return;
+    const trimmed = presetNameDraft.trim();
+    if (!trimmed) {
+      setPresetError('Name this preset to save it.');
+      return;
+    }
+    if (presets.some(p => p.name.toLowerCase() === trimmed.toLowerCase())) {
+      setPresetError('A preset with this name already exists.');
+      return;
+    }
+    setIsSavingPreset(true);
+    setPresetError(null);
+    try {
+      await onSavePreset(trimmed);
+      closePresetDropdown();
+    } catch (err: any) {
+      setPresetError(err?.message || 'Failed to save preset.');
+    } finally {
+      setIsSavingPreset(false);
+    }
+  };
+
+  const handleDeletePreset = async (e: React.MouseEvent, presetId: string) => {
+    e.stopPropagation();
+    if (!onDeletePreset) return;
+    try {
+      await onDeletePreset(presetId);
+    } catch (err) {
+      console.error('Failed to delete preset', err);
+    }
+  };
+  const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
 
   // Batch generation controls: variations-per-prompt count and brace expansion preview.
   const [batchCount, setBatchCount] = useState<number>(1);
@@ -588,12 +671,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     if (!config.prompt || isExpandingPrompt) return;
     setIsExpandingPrompt(true);
     try {
-      const activeModel = user?.preferences?.selectedModel || 'gemini';
+      // Prompt expansion always runs on Gemini's analysis model
+      // (gemini-2.5-flash), so it must use the Gemini key regardless of which
+      // image model the user has selected. Otherwise an OpenAI key would be
+      // handed to the Gemini SDK and the request fails.
       const customKey =
-        user?.preferences?.apiKeys?.[activeModel] ||
-        (activeModel === 'gemini' || activeModel === 'gemini-3.1-flash-image-preview' || activeModel === 'gemini-svg'
-          ? user?.preferences?.apiKeys?.gemini || user?.preferences?.geminiApiKey
-          : user?.preferences?.geminiApiKey);
+        user?.preferences?.apiKeys?.gemini ||
+        user?.preferences?.geminiApiKey;
       const expanded = await expandPrompt(
         config.prompt,
         config,
@@ -633,6 +717,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   // Clear search when dropdown changes
   useEffect(() => {
     setSearchTerm('');
+  }, [activeDropdown]);
+
+  // Reset the inline preset-name input whenever the user closes the
+  // presets dropdown or pivots to a different one. Without this, reopening
+  // the dropdown would still be in "naming" mode with stale text.
+  useEffect(() => {
+    if (activeDropdown !== 'presets') {
+      setIsNamingPreset(false);
+      setPresetNameDraft('');
+      setPresetError(null);
+    }
   }, [activeDropdown]);
 
   const handleChange = (key: keyof GenerationConfig, value: string) => {
@@ -690,21 +785,35 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
     const renderGroup = (groupItems: any[], title: string) => {
         if (groupItems.length === 0) return null;
+        // Pin the currently-selected item to the top of its group so users can
+        // see at a glance which one is active. Everything else stays alphabetical.
+        const sortedItems = [...groupItems].sort((a: any, b: any) => {
+            const aSel = config[configKey] === (a.id || a.value);
+            const bSel = config[configKey] === (b.id || b.value);
+            if (aSel && !bSel) return -1;
+            if (!aSel && bSel) return 1;
+            return (a.name || a.label).localeCompare(b.name || b.label);
+        });
         return (
             <div className="mb-2">
                 <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-gray-50 dark:bg-[#161b22] sticky top-0 z-10 border-b border-gray-100 dark:border-[#30363d]">
                     {title}
                 </div>
-                {groupItems.sort((a: any, b: any) => (a.name || a.label).localeCompare(b.name || b.label)).map((item: any) => {
+                {sortedItems.map((item: any) => {
                     const Icon = item.icon || (type === 'type' ? Layout : type === 'style' ? PenTool : type === 'size' ? Maximize : Palette);
                     const isSelected = config[configKey] === (item.id || item.value);
-                    
+
                     return (
-                        <div 
-                            key={item.id || item.value} 
-                            className="group relative flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer" 
+                        <div
+                            key={item.id || item.value}
+                            aria-selected={isSelected}
+                            className={`group relative flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
+                                isSelected
+                                    ? 'bg-brand-teal/10 ring-1 ring-brand-teal/30 dark:ring-brand-teal/40 hover:bg-brand-teal/15'
+                                    : 'hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                            }`}
                             onClick={() => {
-                                handleChange(configKey, item.id || item.value); 
+                                handleChange(configKey, item.id || item.value);
                                 setActiveDropdown(null);
                             }}
                         >
@@ -849,23 +958,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
     setIsAnalysingOption(true);
     try {
-      const getActiveApiKey = (): string | undefined => {
-        if (!user) return undefined;
-        const selectedModel = user.preferences.selectedModel || 'gemini';
-        if (user.preferences.apiKeys && user.preferences.apiKeys[selectedModel]) {
-          return user.preferences.apiKeys[selectedModel];
-        }
-        if (
-          selectedModel === 'gemini' ||
-          selectedModel === 'gemini-3.1-flash-image-preview' ||
-          selectedModel === 'gemini-svg'
-        ) {
-          if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
-          if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
-        }
-        return undefined;
-      };
-      const result = await analyzeImageForOption(file, modalType, getActiveApiKey(), user?.preferences.systemPrompt); 
+      // analyzeImageForOption always runs on Gemini's analysis model, so it
+      // must use the Gemini key regardless of the user's selected image model.
+      const geminiKey =
+        user?.preferences?.apiKeys?.gemini ||
+        user?.preferences?.geminiApiKey;
+      const result = await analyzeImageForOption(file, modalType, geminiKey, user?.preferences.systemPrompt); 
       
       setNewItemName(result.name);
       if (modalType === 'style' && result.description) setNewItemDescription(result.description);
@@ -1187,13 +1285,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   };
 
   const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => {
-    // Menu-style item (no per-button border). Three tiers driven by pure CSS:
-    //   - base  (< lg): icon-only 44x44 tap target (tooltip shows label)
-    //   - lg+  (>=1024): icon + truncated label
-    //   - xl+  (>=1280): icon + stacked SUBLABEL/label + chevron
-    //   - 2xl+ (>=1536): adds color-palette preview strip under label
-    // Text tier starts at `lg` (not `md`) so nothing overflows at tablet
-    // widths. The outer flex container uses flex-wrap as a final safety net.
+    // Menu-style item (no per-button border). Five responsive tiers driven by pure CSS:
+    //   - base  (< md):   icon-only 44x44 tap target (tooltip shows label)
+    //   - md+  (>=768):   icon + UPPERCASE category label (TYPE, STYLE, ...)
+    //   - lg+  (>=1024):  icon + selected value (Infographic, Hand Drawn, ...)
+    //   - xl+  (>=1280):  icon + stacked SUBLABEL/value + chevron
+    //   - 2xl+ (>=1536):  adds color-palette preview strip under value
+    // The compact category-label tier replaces the old icon-only-only tier
+    // at tablet widths so users can still recognize each control by name.
     const titleText =
       subLabel && (typeof label === 'string' || typeof label === 'number')
         ? `${subLabel}: ${label}`
@@ -1205,9 +1304,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         onClick={onClick}
         title={titleText}
         aria-label={titleText}
-        className={`h-11 rounded-md flex items-center transition-colors group shrink-0
+        className={`h-11 rounded-md flex items-center transition-colors group shrink-0 lg:shrink lg:min-w-0
           w-11 justify-center p-0
-          lg:w-auto lg:justify-start lg:px-2.5 lg:gap-2
+          md:w-auto md:justify-start md:px-2.5 md:gap-2
           xl:px-3 xl:gap-2.5
           ${
             isActive
@@ -1221,6 +1320,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             isActive ? 'text-brand-teal' : 'text-slate-500 dark:text-slate-400 group-hover:text-brand-teal'
           }`}
         />
+        {/* Compact category label — only md..lg (when there's no room for the full value). */}
+        <span className={`hidden md:inline lg:hidden text-[11px] uppercase font-bold tracking-wider whitespace-nowrap ${
+          isActive ? 'text-brand-teal' : 'text-slate-600 dark:text-slate-300 group-hover:text-brand-teal'
+        }`}>
+          {subLabel}
+        </span>
+        {/* Selected value (and optional stacked sublabel + palette) — lg+ */}
         <div className="hidden lg:flex flex-col flex-1 min-w-0 text-left">
           <span className="hidden xl:block text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider leading-none mb-0.5">
             {subLabel}
@@ -1352,8 +1458,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
           
           {/* 1. Toolbar Controls — menu bar. No overflow clipping here because
-              dropdown panels are absolute children and must escape this box. */}
-          <div className="flex flex-wrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full">
+              dropdown panels are absolute children and must escape this box.
+              At lg+ the row is forced to a single line (`flex-nowrap`); the
+              dropdown buttons truncate their value labels via `lg:min-w-0`
+              when there isn't enough room. Below lg we still allow a wrap
+              fallback so tiny viewports never produce a horizontal scrollbar
+              that would clip the dropdown panels. */}
+          <div className="flex flex-wrap lg:flex-nowrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full lg:min-w-0">
             
             {/* Graphic Type */}
             <div className="relative">
@@ -1423,22 +1534,31 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       { id: 'static' as SvgMode, label: 'Static', icon: Pause, desc: 'No animations' },
                       { id: 'animated' as SvgMode, label: 'Animated', icon: Play, desc: 'CSS/SMIL animations' },
                       { id: 'interactive' as SvgMode, label: 'Interactive', icon: MousePointer2, desc: 'Hover & focus states' },
-                    ]).map(mode => (
+                    ]).map(mode => {
+                      const isSel = (config.svgMode || 'static') === mode.id;
+                      return (
                       <button
                         key={mode.id}
                         onClick={() => {
                           setConfig(prev => ({ ...prev, svgMode: mode.id }));
                           setActiveDropdown(null);
                         }}
-                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${(config.svgMode || 'static') === mode.id ? 'text-brand-teal font-semibold' : 'text-slate-700 dark:text-slate-200'}`}
+                        aria-selected={isSel}
+                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 transition-colors ${
+                          isSel
+                            ? 'bg-brand-teal/10 text-brand-teal font-semibold border-l-2 border-brand-teal'
+                            : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] border-l-2 border-transparent'
+                        }`}
                       >
-                        <mode.icon size={14} className="text-brand-teal" />
-                        <div className="flex flex-col">
+                        <mode.icon size={14} className={isSel ? 'text-brand-teal' : 'text-slate-500 dark:text-slate-400'} />
+                        <div className="flex flex-col flex-1">
                           <span className="font-medium">{mode.label}</span>
-                          <span className="text-xs text-slate-500 dark:text-slate-400">{mode.desc}</span>
+                          <span className={`text-xs ${isSel ? 'text-brand-teal/80' : 'text-slate-500 dark:text-slate-400'}`}>{mode.desc}</span>
                         </div>
+                        {isSel && <CheckIcon size={14} className="text-brand-teal shrink-0" />}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1578,10 +1698,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                 }
                               }}
                               title={model.description}
-                              className={`w-full text-left pl-7 pr-3 py-2 text-[15px] flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${
+                              aria-selected={compareModelsMode ? isChecked : isPrimary}
+                              className={`w-full text-left pl-5 pr-3 py-2 text-[15px] flex items-center gap-2 transition-colors border-l-2 ${
                                 (compareModelsMode ? isChecked : isPrimary)
-                                  ? 'text-brand-teal font-semibold'
-                                  : 'text-slate-700 dark:text-slate-200'
+                                  ? 'bg-brand-teal/10 text-brand-teal font-semibold border-brand-teal hover:bg-brand-teal/15'
+                                  : 'text-slate-700 dark:text-slate-200 border-transparent hover:bg-gray-100 dark:hover:bg-[#21262d]'
                               }`}
                             >
                               {compareModelsMode ? (
@@ -1636,22 +1757,157 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       { id: 'low' as const, label: 'Low', desc: 'Fastest, cheapest' },
                       { id: 'medium' as const, label: 'Medium', desc: 'Balanced' },
                       { id: 'high' as const, label: 'High', desc: 'Best detail, slower' }
-                    ]).map((q) => (
+                    ]).map((q) => {
+                      const isSel = openaiQuality === q.id;
+                      return (
                       <button
                         key={q.id}
                         onClick={() => {
                           onOpenAIQualityChange(q.id);
                           setActiveDropdown(null);
                         }}
-                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors ${openaiQuality === q.id ? 'text-brand-teal font-semibold' : 'text-slate-700 dark:text-slate-200'}`}
+                        aria-selected={isSel}
+                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 transition-colors ${
+                          isSel
+                            ? 'bg-brand-teal/10 text-brand-teal font-semibold border-l-2 border-brand-teal'
+                            : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] border-l-2 border-transparent'
+                        }`}
                       >
-                        <Gauge size={14} className="text-brand-teal" />
-                        <div className="flex flex-col">
+                        <Gauge size={14} className={isSel ? 'text-brand-teal' : 'text-slate-500 dark:text-slate-400'} />
+                        <div className="flex flex-col flex-1">
                           <span className="font-medium">{q.label}</span>
-                          <span className="text-xs text-slate-500 dark:text-slate-400">{q.desc}</span>
+                          <span className={`text-xs ${isSel ? 'text-brand-teal/80' : 'text-slate-500 dark:text-slate-400'}`}>{q.desc}</span>
                         </div>
+                        {isSel && <CheckIcon size={14} className="text-brand-teal shrink-0" />}
                       </button>
-                    ))}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Presets — recall a saved grouping of toolbar settings.
+                Hidden for guests (saving requires a user document). */}
+            {user && (
+              <div className="relative">
+                <DropdownButton
+                  icon={Bookmark}
+                  subLabel="Presets"
+                  label={presets.length === 0 ? 'None saved' : `${presets.length} saved`}
+                  isActive={activeDropdown === 'presets'}
+                  onClick={() => toggleDropdown('presets')}
+                />
+                {activeDropdown === 'presets' && (
+                  <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+                    <div className="max-h-60 overflow-y-auto custom-scrollbar p-1">
+                      {presets.length === 0 ? (
+                        <div className="px-3 py-6 text-center text-xs text-slate-500">
+                          No saved presets yet.
+                          <div className="mt-1 text-[11px] text-slate-400">
+                            Save your current toolbar setup to recall it later.
+                          </div>
+                        </div>
+                      ) : (
+                        [...presets]
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map(preset => (
+                            <div
+                              key={preset.id}
+                              className="group relative flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer"
+                              onClick={() => handleApplyPreset(preset)}
+                              title={`Apply preset: ${preset.name}`}
+                            >
+                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <Bookmark size={16} className="text-brand-teal shrink-0" />
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-xs truncate text-slate-700 dark:text-slate-200 font-semibold">
+                                    {preset.name}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 truncate">
+                                    {[
+                                      preset.selectedModel && (modelLabelMap[preset.selectedModel] || preset.selectedModel),
+                                      preset.aspectRatio,
+                                      preset.svgMode && preset.svgMode !== 'static' ? preset.svgMode : null
+                                    ].filter(Boolean).join(' · ') || 'Toolbar snapshot'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                onClick={(e) => handleDeletePreset(e, preset.id)}
+                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors opacity-60 group-hover:opacity-100"
+                                title="Delete preset"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          ))
+                      )}
+                    </div>
+
+                    {isNamingPreset ? (
+                      <div className="border-t border-gray-200 dark:border-[#30363d] p-3 space-y-2 bg-gray-50 dark:bg-[#0d1117]">
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Preset name
+                        </label>
+                        <input
+                          ref={presetNameInputRef}
+                          type="text"
+                          value={presetNameDraft}
+                          onChange={(e) => {
+                            setPresetNameDraft(e.target.value);
+                            if (presetError) setPresetError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleConfirmSavePreset();
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setIsNamingPreset(false);
+                              setPresetNameDraft('');
+                              setPresetError(null);
+                            }
+                          }}
+                          placeholder="e.g. Square Hand Drawn"
+                          className="w-full bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-teal focus:border-brand-teal"
+                          maxLength={60}
+                        />
+                        {presetError && (
+                          <p className="text-[11px] text-red-500" role="alert">{presetError}</p>
+                        )}
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsNamingPreset(false);
+                              setPresetNameDraft('');
+                              setPresetError(null);
+                            }}
+                            className="flex-1 px-2 py-1.5 text-xs font-medium rounded-md border border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleConfirmSavePreset}
+                            disabled={isSavingPreset || !presetNameDraft.trim()}
+                            className="flex-1 px-2 py-1.5 text-xs font-bold rounded-md bg-brand-teal text-white hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1"
+                          >
+                            {isSavingPreset && <Loader2 size={12} className="animate-spin" />}
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleStartSavePreset}
+                        className="w-full text-left p-3 text-xs font-bold text-brand-teal dark:text-brand-teal border-t border-gray-200 dark:border-[#30363d] hover:bg-gray-100 dark:hover:bg-[#21262d] flex items-center gap-2 transition-colors"
+                      >
+                        <BookmarkPlus size={14} /> Save current as preset
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1709,13 +1965,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           <div className="w-full max-w-5xl mx-auto flex flex-col gap-1.5 min-w-0">
             <div className="flex flex-nowrap items-stretch gap-2 min-w-0 w-full">
               <div className="relative flex-1 basis-0 min-w-0">
-                <input 
-                  type="text"
+                <textarea 
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
                   placeholder="Describe your graphic (use {a, b, c} for variations)..."
-                  className="h-12 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner"
+                  className="min-h-[48px] h-12 focus:h-32 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-11 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all duration-200 ease-in-out placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner resize-y overflow-y-auto"
                 />
+                <button
+                  type="button"
+                  onClick={() => setIsPromptModalOpen(true)}
+                  className="absolute top-2 right-2 p-1.5 rounded-md text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                  title="Open full-screen prompt editor"
+                  aria-label="Open full-screen prompt editor"
+                >
+                  <Maximize2 size={14} />
+                </button>
               </div>
 
               <>
@@ -1879,6 +2143,114 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
         </div>
       </div>
+
+      {/* PROMPT EDITOR MODAL — full-screen view of the prompt so long text and
+          brace-expansion options stay readable without resizing the inline
+          textarea (which can otherwise hide preview imagery below). */}
+      {isPromptModalOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setIsPromptModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit prompt"
+        >
+          <div
+            className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center px-5 py-4 border-b border-gray-200 dark:border-[#30363d]">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Edit prompt</h3>
+              <button
+                onClick={() => setIsPromptModalOpen(false)}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-md hover:bg-gray-100 dark:hover:bg-[#30363d] transition-colors"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden p-5">
+              <textarea
+                autoFocus
+                value={config.prompt}
+                onChange={(e) => handleChange('prompt', e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setIsPromptModalOpen(false);
+                  }
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!generateButtonDisabled) {
+                      setIsPromptModalOpen(false);
+                      if (hasSetupAction) {
+                        onSetupAction?.();
+                      } else {
+                        onGenerate(safeBatchCount);
+                      }
+                    }
+                  }
+                }}
+                placeholder="Describe your graphic (use {a, b, c} for variations)..."
+                className="w-full h-[55vh] min-h-[280px] bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg p-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red placeholder-slate-400 dark:placeholder-slate-600 resize-none leading-relaxed"
+              />
+              {hasBatchInfo && (
+                <div
+                  className={`text-xs mt-2 ${
+                    exceedsBatchCap
+                      ? 'text-red-600 dark:text-red-400 font-medium'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {exceedsBatchCap ? (
+                    `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap.`
+                  ) : (
+                    <>
+                      {expansion.hasBraces
+                        ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                        : modelCount > 1
+                          ? `Will run ${totalBatchRuns} generations across ${modelCount} models.`
+                          : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
+                      {totalBatchRuns > 0 && (
+                        <span className="text-slate-400 dark:text-slate-500">
+                          {' '}Est. ~{estimatedLabel}.
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-gray-200 dark:border-[#30363d]">
+              <button
+                type="button"
+                onClick={handleExpandPrompt}
+                disabled={!config.prompt || isExpandingPrompt}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+                  !config.prompt || isExpandingPrompt
+                    ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                    : 'bg-white dark:bg-[#0d1117] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white'
+                }`}
+              >
+                {isExpandingPrompt ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                Expand prompt
+              </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline text-[11px] text-slate-400 dark:text-slate-500">
+                  Esc to close - Cmd/Ctrl+Enter to generate
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsPromptModalOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-brand-red hover:bg-red-700 text-white font-semibold text-sm shadow-md shadow-brand-red/20 transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL FOR ADDING/EDITING CUSTOM OPTIONS */}
       <Modal 

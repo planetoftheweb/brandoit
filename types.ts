@@ -107,6 +107,32 @@ export interface Generation {
    * comparisons themselves are not persisted.
    */
   comparisonBatchId?: string;
+
+  /**
+   * Folder this tile lives in. Every Generation belongs to exactly one
+   * folder; legacy items without this field are normalized to
+   * `INBOX_FOLDER_ID` at read time so the gallery can always group by
+   * folder.
+   */
+  folderId: string;
+}
+
+/**
+ * Reserved id of the always-present "Inbox" folder. Auto-created on first
+ * init (per user / per guest device) and undeletable, but renameable. Used
+ * as the fallback target when an `activeFolderId` is missing or a folder is
+ * deleted with tiles still inside it.
+ */
+export const INBOX_FOLDER_ID = 'folder-inbox';
+
+/**
+ * A user-owned container that groups generation tiles. Folders persist on
+ * the user document for signed-in users and in localStorage for guests.
+ */
+export interface Folder {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface BrandGuidelinesAnalysis {
@@ -123,7 +149,44 @@ export interface UserPreferences {
   };
   selectedModel?: string;
   systemPrompt?: string;
-  settings?: UserSettings; 
+  settings?: UserSettings;
+  /**
+   * Saved toolbar preset groups. Each entry captures a snapshot of the
+   * configurable toolbar fields (type/style/colors/size/model/quality/svgMode)
+   * so the user can recall a frequently-used combination with one click.
+   */
+  presets?: ToolbarPreset[];
+  /**
+   * User-owned folders that contain generation tiles. The reserved
+   * `INBOX_FOLDER_ID` entry is auto-seeded on first init and cannot be
+   * removed (only renamed). Folder list order is the order of creation.
+   */
+  folders?: Folder[];
+  /**
+   * Sticky folder for new generations. When set, every new tile auto-lands
+   * in this folder until cleared. `undefined` / missing => fall back to
+   * Inbox. Cleared explicitly by the user via the gallery's pin toggle.
+   */
+  activeFolderId?: string;
+}
+
+/**
+ * A named snapshot of toolbar settings the user wants to recall later.
+ * Stored on the user document under preferences.presets. Empty/undefined
+ * fields are treated as "leave the current value alone" when applied, so
+ * a user can save partial presets (e.g. just a style + palette pair).
+ */
+export interface ToolbarPreset {
+  id: string;
+  name: string;
+  createdAt: number;
+  graphicTypeId?: string;
+  visualStyleId?: string;
+  colorSchemeId?: string;
+  aspectRatio?: string;
+  svgMode?: SvgMode;
+  selectedModel?: string;
+  openaiImageQuality?: 'low' | 'medium' | 'high' | 'auto';
 }
 
 export interface UserSettings {

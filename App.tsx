@@ -7,7 +7,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
 import { AdminPage } from './components/AdminPage';
 import { RecentGenerations } from './components/RecentGenerations';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -27,6 +27,8 @@ import { generateOpenAIImage } from './services/openaiService';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
+import { presetService } from './services/presetService';
+import { folderService } from './services/folderService';
 import {
   historyService,
   createGeneration,
@@ -50,7 +52,7 @@ import {
 } from './services/timeEstimationService';
 import { detectLikelyCanvasPadding } from './services/recomposeQualityService';
 import { toMarkLabel } from './services/versionUtils';
-import { buildProfileImageCacheKey } from './services/imageCache';
+import { buildProfileImageCacheKey, getCachedImageBlob } from './services/imageCache';
 import { CachedImage } from './components/CachedImage';
 // import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
@@ -287,6 +289,11 @@ const App: React.FC = () => {
 
   const [currentGeneration, setCurrentGeneration] = useState<Generation | null>(null);
   const [history, setHistory] = useState<Generation[]>([]);
+  // Folder state. `folders` is hydrated from the user doc (or localStorage
+  // for guests) on every auth change; `activeFolderId` is the sticky pin
+  // for new generations — `undefined` means "no pin, fall back to Inbox".
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<string | undefined>(undefined);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -407,9 +414,26 @@ const App: React.FC = () => {
     } else {
        loadResources(user);
     }
-    
+
+    // Hydrate folder state alongside resources so the gallery has a folder
+    // list ready by the time history finishes loading. `loadFolders` also
+    // auto-seeds Inbox the first time it's called for a user/device.
+    let cancelled = false;
+    folderService.loadFolders(user || null)
+      .then(({ folders: nextFolders, activeFolderId: nextActive }) => {
+        if (cancelled) return;
+        setFolders(nextFolders);
+        setActiveFolderId(nextActive);
+      })
+      .catch(err => {
+        console.warn('[App] Failed to hydrate folders:', err);
+      });
+
     // Seed catalog (legacy community items) - can probably be removed or gated too
     // seedCatalog().catch(console.error);
+    return () => {
+      cancelled = true;
+    };
   }, [user?.id, user?.username, user?.isAdmin]); // Run when account context changes
 
   // Effect to toggle body class
@@ -439,7 +463,7 @@ const App: React.FC = () => {
             : restoredUser;
         setUser(hydratedUser);
         try {
-          const mergeResult = await historyService.mergeLocalToRemote(hydratedUser.id);
+          const mergeResult = await historyService.mergeLocalToRemote(hydratedUser.id, hydratedUser.isAdmin === true);
           if (mergeResult.failed > 0) {
             setError(`Synced ${mergeResult.synced} item(s), but ${mergeResult.failed} local item(s) are still pending sync.`);
           }
@@ -484,7 +508,7 @@ const App: React.FC = () => {
     
     // Merge local history if any
     try {
-      const mergeResult = await historyService.mergeLocalToRemote(loggedInUser.id);
+      const mergeResult = await historyService.mergeLocalToRemote(loggedInUser.id, loggedInUser.isAdmin === true);
       if (mergeResult.failed > 0) {
         setError(`Synced ${mergeResult.synced} item(s), but ${mergeResult.failed} local item(s) could not be synced yet. They were kept locally.`);
       }
@@ -999,6 +1023,11 @@ const App: React.FC = () => {
       const runContext = context;
       const runSystemPrompt = user.preferences.systemPrompt;
       const runOpenAIQuality = user.preferences.settings?.openaiImageQuality || 'auto';
+      // Snapshot the sticky folder at click time so every tile from this
+      // Generate run lands in the same folder, even if the user changes the
+      // pin while the batch is in flight. Falls back to Inbox when nothing
+      // is pinned, so the gallery can always group every tile by folder.
+      const runFolderId = activeFolderId || INBOX_FOLDER_ID;
       const startedAt = Date.now();
       jobId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const abortController = new AbortController();
@@ -1131,7 +1160,8 @@ const App: React.FC = () => {
                 result,
                 { ...jobConfig },
                 primaryModelId,
-                comparisonBatchId
+                comparisonBatchId,
+                runFolderId
               );
               // Tag this first version with whichever model actually produced it.
               if (generation.versions[0]) {
@@ -1406,6 +1436,28 @@ const App: React.FC = () => {
       base64Data: currentVersion.imageData,
       mimeType: currentVersion.mimeType,
     };
+
+    // Post-0.6.0 the saved version usually has `imageData=''` because raster
+    // bytes live in Firebase Storage. If the network can't reach
+    // firebasestorage.googleapis.com (VPN, captive portal, transient DNS),
+    // a plain `fetch(imageUrl)` inside the analysis service throws "Failed
+    // to fetch" and the button looks broken. The IndexedDB image cache
+    // (populated at upload time) is exactly the fallback we need.
+    if (!currentImage.base64Data && currentVersion.id) {
+      try {
+        const cachedBlob = await getCachedImageBlob(currentGeneration.id, currentVersion.id);
+        if (cachedBlob) {
+          const buffer = await cachedBlob.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          currentImage.base64Data = btoa(binary);
+          currentImage.mimeType = currentImage.mimeType || cachedBlob.type || 'image/png';
+        }
+      } catch (cacheErr) {
+        console.warn('Image cache read failed, falling back to network fetch:', cacheErr);
+      }
+    }
 
     const plan = await analyzeImageForCorrectionPrompt(
       currentImage,
@@ -1953,6 +2005,131 @@ const App: React.FC = () => {
     authService.updateUserPreferences(user.id, updatedUser.preferences).catch(console.error);
   };
 
+  // ----- Toolbar preset handlers -----
+  // A preset captures a snapshot of the most-tweaked toolbar fields so users
+  // can recall a frequently-used combination in one click. Persisted on the
+  // user document under preferences.presets via presetService.
+  const handleSavePreset = async (name: string) => {
+    if (!user) throw new Error('Sign in to save presets.');
+    const snapshot: Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'> = {
+      graphicTypeId: config.graphicTypeId || undefined,
+      visualStyleId: config.visualStyleId || undefined,
+      colorSchemeId: config.colorSchemeId || undefined,
+      aspectRatio: config.aspectRatio || undefined,
+      svgMode: config.svgMode,
+      selectedModel,
+      openaiImageQuality: user.preferences.settings?.openaiImageQuality
+    };
+    const { presets } = await presetService.savePreset(user, name, snapshot);
+    setUser(prev => prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev);
+  };
+
+  const handleApplyPreset = (preset: ToolbarPreset) => {
+    // Apply only the fields the preset actually carries — leave the rest
+    // untouched so partial presets compose with the user's current setup.
+    setConfig(prev => {
+      const next = { ...prev };
+      if (preset.graphicTypeId) next.graphicTypeId = preset.graphicTypeId;
+      if (preset.visualStyleId) next.visualStyleId = preset.visualStyleId;
+      if (preset.colorSchemeId) next.colorSchemeId = preset.colorSchemeId;
+      if (preset.aspectRatio) {
+        // Aspect ratios are model-locked, so coerce to whatever's safe for
+        // the model that will end up active after applying the preset.
+        const targetModel = preset.selectedModel || selectedModel;
+        next.aspectRatio = getSafeAspectRatioForModel(targetModel, preset.aspectRatio, aspectRatios);
+      }
+      if (preset.svgMode) next.svgMode = preset.svgMode;
+      return next;
+    });
+
+    if (preset.selectedModel && preset.selectedModel !== selectedModel) {
+      handleModelChange(preset.selectedModel);
+      // Multi-model compare picks should follow the active selection so the
+      // next Generate click runs against the preset's chosen model only.
+      setSelectedModelIds([preset.selectedModel]);
+    }
+
+    if (preset.openaiImageQuality && user) {
+      handleOpenAIQualityChange(preset.openaiImageQuality);
+    }
+  };
+
+  const handleDeletePreset = async (presetId: string) => {
+    if (!user) return;
+    const presets = await presetService.deletePreset(user, presetId);
+    setUser(prev => prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev);
+  };
+
+  // ----- Folder handlers -----
+  // Folders group generation tiles for the gallery. Persistence routes
+  // through `folderService` (Firestore for users, localStorage for guests).
+  // Local state is updated optimistically alongside every async write so
+  // the gallery reflects changes without waiting on a round-trip.
+  const handleCreateFolder = async (name: string): Promise<Folder> => {
+    const result = await folderService.createFolder(user || null, name, folders);
+    setFolders(result.folders);
+    setActiveFolderId(result.activeFolderId);
+    return result.folder;
+  };
+
+  const handleRenameFolder = async (folderId: string, nextName: string) => {
+    const nextFolders = await folderService.renameFolder(
+      user || null,
+      folders,
+      activeFolderId,
+      folderId,
+      nextName
+    );
+    setFolders(nextFolders);
+  };
+
+  const handleDeleteFolder = async (folderId: string) => {
+    // Sweep tiles into Inbox first so deletion never strands a tile in a
+    // missing folder. The bulk move uses the same updateGeneration path
+    // that refinements rely on, so writes are durable.
+    const orphanIds = history
+      .filter(g => g.folderId === folderId)
+      .map(g => g.id);
+    if (orphanIds.length > 0) {
+      const moved = await historyService.moveGenerationsToFolder(
+        user || null,
+        history,
+        orphanIds,
+        INBOX_FOLDER_ID
+      );
+      if (moved.length > 0) {
+        const movedById = new Map(moved.map(g => [g.id, g]));
+        setHistory(prev => prev.map(g => movedById.get(g.id) || g));
+      }
+    }
+
+    const result = await folderService.deleteFolder(
+      user || null,
+      folders,
+      activeFolderId,
+      folderId
+    );
+    setFolders(result.folders);
+    setActiveFolderId(result.activeFolderId);
+  };
+
+  const handleSetActiveFolder = async (folderId: string | null) => {
+    const next = await folderService.setActiveFolder(user || null, folders, folderId);
+    setActiveFolderId(next);
+  };
+
+  const handleMoveGenerationsToFolder = async (generationIds: string[], folderId: string) => {
+    const moved = await historyService.moveGenerationsToFolder(
+      user || null,
+      history,
+      generationIds,
+      folderId
+    );
+    if (moved.length === 0) return;
+    const movedById = new Map(moved.map(g => [g.id, g]));
+    setHistory(prev => prev.map(g => movedById.get(g.id) || g));
+  };
+
   const generationModelIdsToRun = selectedModelIds.length > 0 ? selectedModelIds : [selectedModel];
   const missingGenerationApiKeyIds = user
     ? generationModelIdsToRun.filter((modelId) => !getApiKeyForModel(modelId))
@@ -2228,6 +2405,10 @@ const App: React.FC = () => {
             setupActionLabel={generateSetupActionLabel}
             setupActionDescription={generateSetupActionDescription}
             onSetupAction={handleGenerateSetupAction}
+            presets={user?.preferences.presets || []}
+            onApplyPreset={handleApplyPreset}
+            onSavePreset={user ? handleSavePreset : undefined}
+            onDeletePreset={user ? handleDeletePreset : undefined}
           />
 
           {/* Main Content Area */}
@@ -2469,6 +2650,13 @@ const App: React.FC = () => {
                 a: comparisonState.a ? `${comparisonState.a.generationId}|${comparisonState.a.versionId}` : undefined,
                 b: comparisonState.b ? `${comparisonState.b.generationId}|${comparisonState.b.versionId}` : undefined,
               }}
+              folders={folders}
+              activeFolderId={activeFolderId}
+              onCreateFolder={handleCreateFolder}
+              onRenameFolder={handleRenameFolder}
+              onDeleteFolder={handleDeleteFolder}
+              onSetActiveFolder={handleSetActiveFolder}
+              onMoveToFolder={handleMoveGenerationsToFolder}
             />
           </main>
         </>

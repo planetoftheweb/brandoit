@@ -11,7 +11,7 @@ import {
   updateDoc,
   where
 } from "firebase/firestore";
-import { User, Generation, GenerationVersion, GeneratedImage, GenerationConfig } from "../types";
+import { User, Generation, GenerationVersion, GeneratedImage, GenerationConfig, INBOX_FOLDER_ID } from "../types";
 import { toMarkLabel } from "./versionUtils";
 import { convertToWebP, makeImageUrl } from "./imageConversionService";
 import { deleteGenerationImages, uploadGenerationImage } from "./imageService";
@@ -133,6 +133,11 @@ const normalizeGeneration = (input: Partial<Generation>): Generation => {
     versions: safeVersions,
     currentVersionIndex,
     comparisonBatchId: input.comparisonBatchId,
+    // Legacy generations (saved before folders existed) land in Inbox so the
+    // folder-tab gallery can group every tile without losing anything.
+    folderId: typeof input.folderId === 'string' && input.folderId.length > 0
+      ? input.folderId
+      : INBOX_FOLDER_ID,
   };
 };
 
@@ -404,6 +409,7 @@ const hydrateGenerationFromRemote = (docId: string, data: any): Generation => {
     versions: Array.isArray(data.versions) ? data.versions : [],
     currentVersionIndex: data.currentVersionIndex,
     comparisonBatchId: data.comparisonBatchId,
+    folderId: data.folderId,
   });
 };
 
@@ -431,7 +437,8 @@ const mapRemoteDocToGeneration = (docId: string, data: any): Generation => {
     config: data.config || EMPTY_CONFIG,
     modelId: data.modelId || 'gemini',
     versions: [version],
-    currentVersionIndex: 0
+    currentVersionIndex: 0,
+    folderId: data.folderId,
   });
 };
 
@@ -486,7 +493,8 @@ export const createGeneration = async (
   image: GeneratedImage,
   config: GenerationConfig,
   modelId: string,
-  comparisonBatchId?: string
+  comparisonBatchId?: string,
+  folderId?: string
 ): Promise<Generation> => {
   // First version inherits the Generation's primary model. For comparison
   // tiles, subsequent versions added by App.tsx will pass their own modelId.
@@ -501,6 +509,10 @@ export const createGeneration = async (
     versions: [version],
     currentVersionIndex: 0,
     comparisonBatchId,
+    // Caller passes the user's sticky folder (or `INBOX_FOLDER_ID` when
+    // unset). Falling back here keeps callers that haven't been updated
+    // yet from accidentally writing tiles with no folder.
+    folderId: folderId && folderId.length > 0 ? folderId : INBOX_FOLDER_ID,
   };
 };
 
@@ -577,6 +589,7 @@ const migrateLegacyHistory = async (): Promise<Generation[] | null> => {
           modelId: item.modelId || 'gemini',
           versions: [version],
           currentVersionIndex: 0,
+          folderId: INBOX_FOLDER_ID,
         });
       } catch {
         // Skip items that fail migration
@@ -628,6 +641,41 @@ export const historyService = {
     } else {
       historyService.updateLocal(normalized);
     }
+  },
+
+  /**
+   * Bulk-reassign a list of generations to a different folder. Used by the
+   * gallery's selection-mode "Move to folder" action and by folder
+   * deletion (which sweeps tiles into Inbox before removing the folder
+   * entry). Returns the updated generations so the caller can splice them
+   * into local history state in one shot.
+   */
+  moveGenerationsToFolder: async (
+    user: User | null,
+    history: Generation[],
+    generationIds: string[],
+    folderId: string
+  ): Promise<Generation[]> => {
+    if (generationIds.length === 0) return [];
+    const targetIds = new Set(generationIds);
+    const targets = history.filter(g => targetIds.has(g.id));
+    const updated: Generation[] = [];
+    for (const gen of targets) {
+      if (gen.folderId === folderId) {
+        updated.push(gen);
+        continue;
+      }
+      const next: Generation = { ...gen, folderId };
+      try {
+        await historyService.updateGeneration(user, next);
+        updated.push(next);
+      } catch (e) {
+        // One failed write shouldn't strand the rest of the batch — log
+        // and keep going so the user sees as much progress as possible.
+        console.error('[historyService] Failed to move generation to folder:', gen.id, e);
+      }
+    }
+    return updated;
   },
 
   getHistory: async (user: User | null): Promise<Generation[]> => {

@@ -1,8 +1,10 @@
 import {
   collectionGroup,
   getDocs,
+  getDoc,
   getCountFromServer,
   collection,
+  doc,
   query,
   orderBy,
   limit as limitFn,
@@ -88,6 +90,53 @@ export interface AdminStats {
     byAspectRatio: StatsBucketEntry[];
     /** Top N users by image count, with name/email resolved from `users/`. */
     topUsers: StatsTopUser[];
+  };
+}
+
+/**
+ * A focused, single-user version of `AdminStats`.
+ *
+ * Built by scanning just `users/{uid}/history/*` instead of the full
+ * collection group, so it's cheap even for huge projects.
+ */
+export interface UserStats {
+  /** Wall-clock when the snapshot was built. */
+  generatedAt: number;
+
+  /** How long it took to aggregate, ms. */
+  durationMs: number;
+
+  /** History documents scanned (= this user's tiles). */
+  scannedHistoryDocs: number;
+
+  /** The user we focused on (looked up from `users/{uid}`). */
+  user: {
+    uid: string;
+    name: string;
+    email: string;
+    username?: string;
+    photoURL?: string;
+    /** Account creation time as ms epoch (best-effort from `createdAt`). */
+    createdAtMs: number | null;
+    /** Last sign-in time as ms epoch (best-effort from `lastSignInAt`). */
+    lastSignInAtMs: number | null;
+    /** True if `users/{uid}.isDisabled === true`. */
+    isDisabled: boolean;
+    /** Has at least one configured API key (Gemini or OpenAI). */
+    hasApiKey: boolean;
+    /** Persisted admin signal — see `AdminStats.users.legacyAdminSignals`. */
+    isLegacyAdminSignal: boolean;
+  };
+
+  generations: {
+    totalTiles: number;
+    totalImages: number;
+    totalRefinements: number;
+    perDayLast30: StatsDailyEntry[];
+    byModel: StatsBucketEntry[];
+    byGraphicType: StatsBucketEntry[];
+    byVisualStyle: StatsBucketEntry[];
+    byAspectRatio: StatsBucketEntry[];
   };
 }
 
@@ -411,6 +460,149 @@ export const statsService = {
         byVisualStyle: bucketToSortedEntries(byVisualStyle, 10),
         byAspectRatio: bucketToSortedEntries(byAspectRatio, 10),
         topUsers,
+      },
+    };
+  },
+
+  /**
+   * Build a focused snapshot for a single user.
+   *
+   * Targets just `users/{uid}` + `users/{uid}/history/*`, so it's a small,
+   * predictable query regardless of project size — nice when drilling in
+   * from the admin leaderboard.
+   *
+   * Same admin-only security model as `getStats`: the top-level
+   * `users/{uid}` doc and the user's `history` subcollection both require
+   * `isAdmin()` to be readable from another user's session.
+   */
+  async getUserStats(uid: string): Promise<UserStats> {
+    if (!uid || typeof uid !== "string") {
+      throw new Error("getUserStats: a user id is required.");
+    }
+    const startedAt = Date.now();
+
+    // --- 1. User profile -------------------------------------------------
+    const userSnap = await getDoc(doc(db, "users", uid));
+    const u = (userSnap.exists() ? userSnap.data() : {}) as any;
+
+    const apiKeys = u?.preferences?.apiKeys ?? {};
+    const hasGemini =
+      typeof apiKeys?.gemini === "string" && apiKeys.gemini.trim().length > 0;
+    const hasLegacyGemini =
+      typeof u?.preferences?.geminiApiKey === "string" &&
+      u.preferences.geminiApiKey.trim().length > 0;
+    const hasOpenAI =
+      typeof apiKeys?.openai === "string" && apiKeys.openai.trim().length > 0;
+
+    // --- 2. Catalog labels ----------------------------------------------
+    const catalog = await resourceService.getAllResources();
+    const graphicTypeLabels = new Map<string, string>();
+    catalog.graphicTypes?.forEach((g: any) =>
+      graphicTypeLabels.set(g.id, g.name || g.label || g.id)
+    );
+    const visualStyleLabels = new Map<string, string>();
+    catalog.visualStyles?.forEach((s: any) =>
+      visualStyleLabels.set(s.id, s.name || s.label || s.id)
+    );
+    const aspectRatioLabels = new Map<string, string>();
+    catalog.aspectRatios?.forEach((a: any) =>
+      aspectRatioLabels.set(a.id, a.name || a.label || a.id)
+    );
+
+    // --- 3. This user's history (single subcollection) -------------------
+    const historySnap = await getDocs(collection(db, "users", uid, "history"));
+
+    let totalTiles = 0;
+    let totalImages = 0;
+    let totalRefinements = 0;
+
+    const byModel = new Map<string, { label: string; count: number }>();
+    const byGraphicType = new Map<string, { label: string; count: number }>();
+    const byVisualStyle = new Map<string, { label: string; count: number }>();
+    const byAspectRatio = new Map<string, { label: string; count: number }>();
+
+    const dailyImages = new Map<string, number>();
+    const dailyRefinements = new Map<string, number>();
+
+    historySnap.forEach((snap) => {
+      totalTiles += 1;
+      const data = snap.data() as any;
+      const versions: any[] = Array.isArray(data?.versions) ? data.versions : [];
+      const tileCreated = coerceMs(data?.createdAt) ?? Date.now();
+
+      const modelId = data?.modelId || "unknown";
+      addBucket(byModel, modelId, modelLabel(modelId), 1);
+
+      const cfg = data?.config || {};
+      if (cfg.graphicTypeId) {
+        addBucket(
+          byGraphicType,
+          cfg.graphicTypeId,
+          graphicTypeLabels.get(cfg.graphicTypeId) || cfg.graphicTypeId,
+          1
+        );
+      }
+      if (cfg.visualStyleId) {
+        addBucket(
+          byVisualStyle,
+          cfg.visualStyleId,
+          visualStyleLabels.get(cfg.visualStyleId) || cfg.visualStyleId,
+          1
+        );
+      }
+      if (cfg.aspectRatio) {
+        addBucket(
+          byAspectRatio,
+          cfg.aspectRatio,
+          aspectRatioLabels.get(cfg.aspectRatio) || cfg.aspectRatio,
+          1
+        );
+      }
+
+      for (const v of versions) {
+        const ts = coerceMs(v?.timestamp) ?? tileCreated;
+        const day = dayKey(new Date(ts));
+        if (v?.type === "generation") {
+          totalImages += 1;
+          dailyImages.set(day, (dailyImages.get(day) ?? 0) + 1);
+        } else if (v?.type === "refinement") {
+          totalRefinements += 1;
+          dailyRefinements.set(day, (dailyRefinements.get(day) ?? 0) + 1);
+        }
+      }
+    });
+
+    const perDayLast30: StatsDailyEntry[] = lastNDays(30).map((date) => ({
+      date,
+      images: dailyImages.get(date) ?? 0,
+      refinements: dailyRefinements.get(date) ?? 0,
+    }));
+
+    return {
+      generatedAt: Date.now(),
+      durationMs: Date.now() - startedAt,
+      scannedHistoryDocs: totalTiles,
+      user: {
+        uid,
+        name: u?.name || "(unnamed)",
+        email: u?.email || "",
+        username: u?.username,
+        photoURL: u?.photoURL,
+        createdAtMs: coerceMs(u?.createdAt),
+        lastSignInAtMs: coerceMs(u?.lastSignInAt),
+        isDisabled: u?.isDisabled === true,
+        hasApiKey: hasGemini || hasLegacyGemini || hasOpenAI,
+        isLegacyAdminSignal: u?.username === "planetoftheweb",
+      },
+      generations: {
+        totalTiles,
+        totalImages,
+        totalRefinements,
+        perDayLast30,
+        byModel: bucketToSortedEntries(byModel),
+        byGraphicType: bucketToSortedEntries(byGraphicType, 10),
+        byVisualStyle: bucketToSortedEntries(byVisualStyle, 10),
+        byAspectRatio: bucketToSortedEntries(byAspectRatio, 10),
       },
     };
   },

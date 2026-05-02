@@ -18,7 +18,7 @@ import {
   serverTimestamp
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { User, UserPreferences, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from "../types";
+import { User, UserPreferences, BrandColor, VisualStyle, GraphicType, AspectRatioOption, ToolbarPreset, Folder } from "../types";
 import { BRAND_COLORS, VISUAL_STYLES, GRAPHIC_TYPES, ASPECT_RATIOS } from "../constants";
 
 const defaultPreferences: UserPreferences = {
@@ -82,6 +82,39 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
     if (Object.keys(settingsClean).length > 0) clean.settings = settingsClean;
   }
 
+  if (Array.isArray(prefs.presets) && prefs.presets.length > 0) {
+    // Drop undefined fields per preset because Firestore rejects them.
+    clean.presets = prefs.presets.map(preset => {
+      const p: any = {
+        id: preset.id,
+        name: preset.name,
+        createdAt: preset.createdAt
+      };
+      if (preset.graphicTypeId) p.graphicTypeId = preset.graphicTypeId;
+      if (preset.visualStyleId) p.visualStyleId = preset.visualStyleId;
+      if (preset.colorSchemeId) p.colorSchemeId = preset.colorSchemeId;
+      if (preset.aspectRatio) p.aspectRatio = preset.aspectRatio;
+      if (preset.svgMode) p.svgMode = preset.svgMode;
+      if (preset.selectedModel) p.selectedModel = preset.selectedModel;
+      if (preset.openaiImageQuality) p.openaiImageQuality = preset.openaiImageQuality;
+      return p;
+    });
+  }
+
+  if (Array.isArray(prefs.folders) && prefs.folders.length > 0) {
+    clean.folders = prefs.folders
+      .filter(folder => folder && typeof folder.id === 'string' && typeof folder.name === 'string')
+      .map(folder => ({
+        id: folder.id,
+        name: folder.name,
+        createdAt: typeof folder.createdAt === 'number' ? folder.createdAt : Date.now()
+      }));
+  }
+
+  if (typeof prefs.activeFolderId === 'string' && prefs.activeFolderId.length > 0) {
+    clean.activeFolderId = prefs.activeFolderId;
+  }
+
   return clean;
 };
 
@@ -110,6 +143,22 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
       confirmDeleteCurrent: savedPrefs.settings?.confirmDeleteCurrent ?? true,
       openaiImageQuality: savedPrefs.settings?.openaiImageQuality
     },
+    presets: Array.isArray(savedPrefs.presets)
+      ? (savedPrefs.presets as any[]).filter(p => p && typeof p.id === 'string' && typeof p.name === 'string') as ToolbarPreset[]
+      : [],
+    folders: Array.isArray(savedPrefs.folders)
+      ? (savedPrefs.folders as any[])
+          .filter(f => f && typeof f.id === 'string' && typeof f.name === 'string')
+          .map(f => ({
+            id: f.id,
+            name: f.name,
+            createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now()
+          })) as Folder[]
+      : [],
+    activeFolderId:
+      typeof savedPrefs.activeFolderId === 'string' && savedPrefs.activeFolderId.length > 0
+        ? savedPrefs.activeFolderId
+        : undefined,
   };
 };
 
