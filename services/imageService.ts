@@ -1,5 +1,6 @@
 import { storage } from './firebase';
 import { ref, uploadBytes, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
+import { buildProfileImageCacheKey, cacheBlobByKey } from './imageCache';
 
 const extensionForMime = (mimeType: string): string => {
   const normalized = mimeType.toLowerCase();
@@ -68,6 +69,12 @@ export const uploadProfileImage = async (file: File, userId: string): Promise<st
 
     // Get the download URL
     const downloadURL = await getDownloadURL(storageRef);
+
+    // Seed the IndexedDB cache with the original file blob so the avatar
+    // still renders when Firebase Storage is unreachable (VPN, corp proxy,
+    // etc.). We already have the bytes locally — no point re-fetching them.
+    void cacheBlobByKey(buildProfileImageCacheKey(userId), file);
+
     return downloadURL;
   } catch (error: any) {
     console.error("Error uploading image:", error);

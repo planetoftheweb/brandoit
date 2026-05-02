@@ -19,6 +19,8 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { statsService, AdminStats, StatsBucketEntry } from '../services/statsService';
+import { buildProfileImageCacheKey } from '../services/imageCache';
+import { CachedImage } from './CachedImage';
 
 // -----------------------------------------------------------------------------
 // Tiny local chart primitives (no chart library; keeps the bundle small).
@@ -510,8 +512,9 @@ export const StatsPage: React.FC = () => {
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
                             {u.photoURL ? (
-                              <img
+                              <CachedImage
                                 src={u.photoURL}
+                                cacheKey={buildProfileImageCacheKey(u.uid)}
                                 alt=""
                                 className="w-6 h-6 rounded-full object-cover border border-gray-200 dark:border-[#30363d]"
                               />

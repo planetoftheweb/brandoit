@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { UserSettings, AspectRatioOption, GraphicType, User, Team, VisualStyle, BrandColor } from '../types';
 import { ArrowLeft, Settings as SettingsIcon, Save, User as UserIcon, Camera, Loader2, Users, Plus, Key, CheckCircle, Layout, PenTool, Palette, Maximize, Sparkles, ChevronDown, X } from 'lucide-react';
 import { uploadProfileImage } from '../services/imageService';
+import { buildProfileImageCacheKey } from '../services/imageCache';
+import { CachedImage } from './CachedImage';
 import { teamService } from '../services/teamService';
 import { authService } from '../services/authService';
 import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
@@ -502,7 +504,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       {isUploading ? (
                         <Loader2 size={24} className="animate-spin text-brand-teal" />
                       ) : photoURL ? (
-                        <img src={photoURL} alt={name} className="w-full h-full object-cover" />
+                        <CachedImage
+                          src={photoURL}
+                          cacheKey={buildProfileImageCacheKey(user.id)}
+                          alt={name}
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         <span className="text-2xl font-bold text-slate-400">{name.charAt(0).toUpperCase()}</span>
                       )}

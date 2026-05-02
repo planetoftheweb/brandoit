@@ -39,6 +39,14 @@ export interface CachedImageRecord {
 export const buildImageCacheKey = (generationId: string, versionId: string): string =>
   `${generationId}|${versionId}`;
 
+// Reserved namespace prefix for cache keys that don't belong to a generation.
+// Anything starting with `__` is treated as off-limits to history-driven prune
+// passes so per-user assets (profile photos, etc.) survive history changes.
+const RESERVED_KEY_PREFIX = '__';
+
+export const buildProfileImageCacheKey = (userId: string): string =>
+  `__profile__|${userId}`;
+
 const isBrowser = (): boolean =>
   typeof window !== 'undefined' && typeof indexedDB !== 'undefined';
 
@@ -230,7 +238,9 @@ export const removeCachedGeneration = async (generationId: string): Promise<void
 
 // Drop any cache entry that no longer corresponds to an active history item.
 // `activeKeys` should contain `${generationId}|${versionId}` for every version
-// currently in the user's history. Best-effort.
+// currently in the user's history. Reserved namespace keys (profile photos,
+// etc.) are preserved unconditionally so unrelated subsystems don't accidentally
+// nuke each other's cached blobs. Best-effort.
 export const pruneCacheToActiveKeys = async (activeKeys: Set<string>): Promise<void> => {
   if (!isBrowser()) return;
   try {
@@ -238,7 +248,12 @@ export const pruneCacheToActiveKeys = async (activeKeys: Set<string>): Promise<v
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const allKeys = (await promisifyRequest(store.getAllKeys())) as string[];
-    const stale = allKeys.filter((key) => typeof key === 'string' && !activeKeys.has(key));
+    const stale = allKeys.filter(
+      (key) =>
+        typeof key === 'string' &&
+        !key.startsWith(RESERVED_KEY_PREFIX) &&
+        !activeKeys.has(key)
+    );
     stale.forEach((key) => store.delete(key));
     await new Promise<void>((resolve) => {
       tx.oncomplete = () => resolve();
@@ -248,6 +263,103 @@ export const pruneCacheToActiveKeys = async (activeKeys: Set<string>): Promise<v
   } catch (error) {
     console.warn('[imageCache] Failed to prune cache:', error);
   }
+};
+
+// Generic key-based variants. Used for non-generation assets like profile
+// photos, where the call site supplies a stable cache key (e.g. via
+// `buildProfileImageCacheKey`).
+export const cacheBlobByKey = async (key: string, blob: Blob): Promise<void> => {
+  if (!isBrowser() || !key || !blob || blob.size === 0) return;
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const record: CachedImageRecord = {
+      key,
+      generationId: '',
+      versionId: '',
+      blob,
+      mimeType: blob.type || 'image/jpeg',
+      size: blob.size,
+      cachedAt: Date.now()
+    };
+    store.put(record);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Cache write failed'));
+      tx.onabort = () => reject(tx.error || new Error('Cache write aborted'));
+    });
+    void enforceBudget();
+  } catch (error) {
+    console.warn('[imageCache] Failed to cache blob by key:', error);
+  }
+};
+
+export const getCachedBlobByKey = async (key: string): Promise<Blob | null> => {
+  if (!isBrowser() || !key) return null;
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const record = await promisifyRequest<CachedImageRecord | undefined>(
+      tx.objectStore(STORE_NAME).get(key)
+    );
+    return record?.blob || null;
+  } catch (error) {
+    console.warn('[imageCache] Failed to read cached blob by key:', error);
+    return null;
+  }
+};
+
+export const getCachedBlobUrlByKey = async (key: string): Promise<string | null> => {
+  const blob = await getCachedBlobByKey(key);
+  if (!blob) return null;
+  try {
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.warn('[imageCache] Failed to create object URL by key:', error);
+    return null;
+  }
+};
+
+const cachedKeysSnapshot = async (): Promise<Set<string>> => {
+  if (!isBrowser()) return new Set();
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const allKeys = (await promisifyRequest(tx.objectStore(STORE_NAME).getAllKeys())) as string[];
+    return new Set(allKeys);
+  } catch {
+    return new Set();
+  }
+};
+
+// Single-key backfill. If the URL is reachable (no VPN block, CORS ok, etc.)
+// the blob is stashed under `key`. Idempotent and de-duplicated per key.
+const inflightBackfillsByKey = new Map<string, Promise<void>>();
+
+export const backfillBlobByKey = (key: string, url: string): Promise<void> => {
+  if (!isBrowser() || !key || !url || !/^https?:/i.test(url)) return Promise.resolve();
+  const existing = inflightBackfillsByKey.get(key);
+  if (existing) return existing;
+
+  const work = (async () => {
+    try {
+      const cached = await cachedKeysSnapshot();
+      if (cached.has(key)) return;
+      const response = await fetchWithTimeout(url, BACKFILL_TIMEOUT_MS);
+      if (!response.ok) return;
+      const blob = await response.blob();
+      if (blob.size === 0) return;
+      await cacheBlobByKey(key, blob);
+    } catch {
+      // VPN block / CORS / network drop — silently skip. Next session retries.
+    } finally {
+      inflightBackfillsByKey.delete(key);
+    }
+  })();
+
+  inflightBackfillsByKey.set(key, work);
+  return work;
 };
 
 // Evict oldest entries until total `size` falls below CACHE_BUDGET_BYTES.

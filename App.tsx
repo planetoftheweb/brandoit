@@ -50,6 +50,8 @@ import {
 } from './services/timeEstimationService';
 import { detectLikelyCanvasPadding } from './services/recomposeQualityService';
 import { toMarkLabel } from './services/versionUtils';
+import { buildProfileImageCacheKey } from './services/imageCache';
+import { CachedImage } from './components/CachedImage';
 // import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
 import { resourceService } from './services/resourceService'; // Import resource service
@@ -2065,7 +2067,12 @@ const App: React.FC = () => {
                >
                  <div className="w-8 h-8 rounded-full bg-brand-red flex items-center justify-center text-white text-xs font-bold overflow-hidden">
                     {user.photoURL ? (
-                      <img src={user.photoURL} alt={user.name} className="w-full h-full object-cover" />
+                      <CachedImage
+                        src={user.photoURL}
+                        cacheKey={buildProfileImageCacheKey(user.id)}
+                        alt={user.name}
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       user.name.charAt(0).toUpperCase()
                     )}
