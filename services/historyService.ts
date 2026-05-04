@@ -9,7 +9,10 @@ import {
   deleteDoc,
   doc,
   updateDoc,
-  where
+  where,
+  startAfter,
+  type QueryDocumentSnapshot,
+  type DocumentData
 } from "firebase/firestore";
 import { User, Generation, GenerationVersion, GeneratedImage, GenerationConfig, INBOX_FOLDER_ID } from "../types";
 import { toMarkLabel } from "./versionUtils";
@@ -30,6 +33,10 @@ const USER_REMOTE_CACHE_KEY_PREFIX = 'brandoit_remote_history_cache_v1';
 const LOCAL_LIMIT = 20;
 const REMOTE_LIMIT = 20;
 const REMOTE_SCAN_LIMIT = REMOTE_LIMIT * 3;
+/** Admins keep full Firestore history; fetch in pages (Firestore query limits). */
+const ADMIN_REMOTE_PAGE_SIZE = 200;
+/** Cap for the per-user localStorage mirror of remote history (admins only). */
+const ADMIN_REMOTE_CACHE_LIMIT = 2000;
 const MAX_REMOTE_DOC_BYTES = 980_000; // Keep below Firestore 1 MiB per-doc hard limit.
 const EMPTY_CONFIG: GenerationConfig = {
   prompt: '',
@@ -238,7 +245,10 @@ const primeImageCacheForHistory = (history: Generation[]): void => {
   }
 };
 
-const mergeGenerationCollections = (collections: Generation[][], maxItems: number): Generation[] => {
+const mergeGenerationCollections = (
+  collections: Generation[][],
+  maxItems?: number
+): Generation[] => {
   const byId = new Map<string, Generation>();
 
   for (const collection of collections) {
@@ -249,10 +259,12 @@ const mergeGenerationCollections = (collections: Generation[][], maxItems: numbe
     }
   }
 
-  return Array.from(byId.values())
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, maxItems);
+  const sorted = Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
+  return maxItems === undefined ? sorted : sorted.slice(0, maxItems);
 };
+
+const getRemoteCacheCap = (isAdmin: boolean): number =>
+  isAdmin ? ADMIN_REMOTE_CACHE_LIMIT : REMOTE_LIMIT;
 
 const readJsonArray = (key: string): unknown[] => {
   try {
@@ -278,27 +290,30 @@ const readMergeBackup = (): Generation[] =>
     .map((item) => normalizeGeneration(item as Partial<Generation>))
     .slice(0, LOCAL_LIMIT);
 
-const readUserRemoteCache = (userId: string): Generation[] =>
+const readUserRemoteCache = (userId: string, isAdmin: boolean): Generation[] =>
   readJsonArray(getUserRemoteCacheKey(userId))
     .map((item) => normalizeGeneration(item as Partial<Generation>))
-    .slice(0, REMOTE_LIMIT);
+    .slice(0, getRemoteCacheCap(isAdmin));
 
-const writeUserRemoteCache = (userId: string, history: Generation[]) => {
-  writeJsonArray(getUserRemoteCacheKey(userId), history.slice(0, REMOTE_LIMIT));
+const writeUserRemoteCache = (userId: string, history: Generation[], isAdmin: boolean) => {
+  writeJsonArray(getUserRemoteCacheKey(userId), history.slice(0, getRemoteCacheCap(isAdmin)));
 };
 
-const upsertUserRemoteCache = (userId: string, generation: Generation) => {
-  const merged = mergeGenerationCollections([readUserRemoteCache(userId), [generation]], REMOTE_LIMIT);
-  writeUserRemoteCache(userId, merged);
+const upsertUserRemoteCache = (userId: string, generation: Generation, isAdmin: boolean) => {
+  const merged = mergeGenerationCollections(
+    [readUserRemoteCache(userId, isAdmin), [generation]],
+    getRemoteCacheCap(isAdmin)
+  );
+  writeUserRemoteCache(userId, merged, isAdmin);
 };
 
 // Remove a single generation from the per-user remote cache so it cannot
 // resurrect itself the next time `getHistory` merges remote + cache. Without
 // this scrub a deleted item is removed from Firestore but pulled back in from
 // the cache and re-written, making delete look like a no-op to the user.
-const removeFromUserRemoteCache = (userId: string, generationId: string) => {
-  const filtered = readUserRemoteCache(userId).filter((gen) => gen.id !== generationId);
-  writeUserRemoteCache(userId, filtered);
+const removeFromUserRemoteCache = (userId: string, generationId: string, isAdmin: boolean) => {
+  const filtered = readUserRemoteCache(userId, isAdmin).filter((gen) => gen.id !== generationId);
+  writeUserRemoteCache(userId, filtered, isAdmin);
 };
 
 // Remove a single generation from the merge backup so a tombstoned item never
@@ -440,6 +455,31 @@ const mapRemoteDocToGeneration = (docId: string, data: any): Generation => {
     currentVersionIndex: 0,
     folderId: data.folderId,
   });
+};
+
+/** Paginate Firestore reads so admins can load their full (unbounded) history. */
+const fetchAllRemoteHistoryPages = async (userId: string): Promise<Generation[]> => {
+  const historyRef = collection(db, 'users', userId, 'history');
+  const batches: Generation[][] = [];
+  let lastDoc: QueryDocumentSnapshot<DocumentData> | null = null;
+
+  while (true) {
+    const q = lastDoc
+      ? query(
+          historyRef,
+          orderBy('createdAt', 'desc'),
+          startAfter(lastDoc),
+          limit(ADMIN_REMOTE_PAGE_SIZE)
+        )
+      : query(historyRef, orderBy('createdAt', 'desc'), limit(ADMIN_REMOTE_PAGE_SIZE));
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) break;
+    batches.push(snapshot.docs.map((d) => mapRemoteDocToGeneration(d.id, d.data())));
+    if (snapshot.docs.length < ADMIN_REMOTE_PAGE_SIZE) break;
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  }
+
+  return mergeGenerationCollections(batches, undefined);
 };
 
 export const createVersionFromImage = async (
@@ -612,7 +652,7 @@ export const historyService = {
   saveGeneration: async (user: User | null, generation: Generation): Promise<void> => {
     const normalized = normalizeGeneration(generation);
     if (user) {
-      upsertUserRemoteCache(user.id, normalized);
+      upsertUserRemoteCache(user.id, normalized, user.isAdmin === true);
       try {
         await historyService.saveToRemote(user.id, normalized, user.isAdmin === true);
         historyService.deleteFromLocal(normalized.id);
@@ -629,7 +669,7 @@ export const historyService = {
   updateGeneration: async (user: User | null, generation: Generation): Promise<void> => {
     const normalized = normalizeGeneration(generation);
     if (user) {
-      upsertUserRemoteCache(user.id, normalized);
+      upsertUserRemoteCache(user.id, normalized, user.isAdmin === true);
       try {
         await historyService.updateRemote(user.id, normalized, user.isAdmin === true);
         historyService.deleteFromLocal(normalized.id);
@@ -680,10 +720,11 @@ export const historyService = {
 
   getHistory: async (user: User | null): Promise<Generation[]> => {
     if (user) {
+      const isAdmin = user.isAdmin === true;
       const [remoteHistory, localPending, remoteCache, mergeBackup] = await Promise.all([
-        historyService.getFromRemote(user.id),
+        historyService.getFromRemote(user.id, isAdmin),
         Promise.resolve(historyService.getFromLocal()),
-        Promise.resolve(readUserRemoteCache(user.id)),
+        Promise.resolve(readUserRemoteCache(user.id, isAdmin)),
         Promise.resolve(readMergeBackup())
       ]);
       const knownIds = new Set<string>([
@@ -694,9 +735,9 @@ export const historyService = {
       const recoveryFromBackup = mergeBackup.filter((generation) => knownIds.has(generation.id));
       const merged = mergeGenerationCollections(
         [remoteHistory, remoteCache, localPending, recoveryFromBackup],
-        Math.max(REMOTE_LIMIT, LOCAL_LIMIT)
+        isAdmin ? undefined : Math.max(REMOTE_LIMIT, LOCAL_LIMIT)
       );
-      writeUserRemoteCache(user.id, merged);
+      writeUserRemoteCache(user.id, merged, isAdmin);
       // Best-effort: pull every history image into IndexedDB so VPN-blocked
       // sessions still have raster bytes to render. Also drop stale cache
       // entries for items that no longer exist in history. Both are
@@ -720,7 +761,9 @@ export const historyService = {
       return localCandidate;
     }
 
-    const remoteCacheCandidate = readUserRemoteCache(user.id).find((generation) => generation.id === generationId) || null;
+    const remoteCacheCandidate =
+      readUserRemoteCache(user.id, user.isAdmin === true).find((generation) => generation.id === generationId) ||
+      null;
     const backupCandidate = readMergeBackup().find((generation) => generation.id === generationId) || null;
 
     const remoteCandidates: Generation[] = [];
@@ -773,7 +816,7 @@ export const historyService = {
 
     const generation = merged[0] || null;
     if (generation) {
-      upsertUserRemoteCache(user.id, generation);
+      upsertUserRemoteCache(user.id, generation, user.isAdmin === true);
     }
     return generation;
   },
@@ -895,8 +938,16 @@ export const historyService = {
 
   updateRemote: async (userId: string, generation: Generation, isAdmin: boolean = false) => {
     const historyRef = collection(db, "users", userId, "history");
-    // Admins may have grown beyond REMOTE_SCAN_LIMIT, so widen the lookup for
-    // them. Regular accounts stay on the bounded scan to keep reads cheap.
+    const genId = generation.id;
+    const byIdQ = query(historyRef, where("id", "==", genId), limit(5));
+    const byIdSnap = await getDocs(byIdQ);
+    const byIdMatch = byIdSnap.docs[0];
+    if (byIdMatch) {
+      const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
+      await updateDoc(doc(db, "users", userId, "history", byIdMatch.id), payload);
+      return;
+    }
+    // Fallback: legacy docs missing `id` in payload — scan recent docs only.
     const scanLimit = isAdmin ? Math.max(REMOTE_SCAN_LIMIT, 500) : REMOTE_SCAN_LIMIT;
     const q = query(historyRef, orderBy("createdAt", "desc"), limit(scanLimit));
     const snapshot = await getDocs(q);
@@ -909,8 +960,11 @@ export const historyService = {
     }
   },
 
-  getFromRemote: async (userId: string): Promise<Generation[]> => {
+  getFromRemote: async (userId: string, isAdmin: boolean = false): Promise<Generation[]> => {
     try {
+      if (isAdmin) {
+        return await fetchAllRemoteHistoryPages(userId);
+      }
       const historyRef = collection(db, "users", userId, "history");
       const q = query(historyRef, orderBy("createdAt", "desc"), limit(REMOTE_SCAN_LIMIT));
       const snapshot = await getDocs(q);
@@ -923,15 +977,24 @@ export const historyService = {
     }
   },
 
-  deleteFromRemote: async (userId: string, generationId: string) => {
+  deleteFromRemote: async (userId: string, generationId: string, isAdmin: boolean = false) => {
     try {
       const historyRef = collection(db, "users", userId, "history");
-      const q = query(historyRef, orderBy("createdAt", "desc"), limit(REMOTE_SCAN_LIMIT));
-      const snapshot = await getDocs(q);
-      const target = snapshot.docs.find(d => {
-        const data = d.data();
-        return data.id === generationId || d.id === generationId;
-      });
+      const byIdQ = query(historyRef, where("id", "==", generationId), limit(10));
+      const byIdSnap = await getDocs(byIdQ);
+      let target = byIdSnap.docs[0];
+      if (!target) {
+        const scan = query(
+          historyRef,
+          orderBy("createdAt", "desc"),
+          limit(isAdmin ? 500 : REMOTE_SCAN_LIMIT)
+        );
+        const snapshot = await getDocs(scan);
+        target = snapshot.docs.find(d => {
+          const data = d.data();
+          return data.id === generationId || d.id === generationId;
+        });
+      }
       if (target) {
         await deleteDoc(doc(db, "users", userId, "history", target.id));
         await deleteGenerationImages(userId, generationId);
@@ -946,7 +1009,7 @@ export const historyService = {
       // local-pending list, or the merge backup. We do this in `finally` so
       // that even if the Firestore delete partially failed, we don't leave
       // a phantom client-side entry that the user keeps trying to retry.
-      removeFromUserRemoteCache(userId, generationId);
+      removeFromUserRemoteCache(userId, generationId, isAdmin);
       historyService.deleteFromLocal(generationId);
       removeFromMergeBackup(generationId);
     }
@@ -966,7 +1029,7 @@ export const historyService = {
     let synced = 0;
 
     for (const gen of [...localHistory].reverse()) {
-      upsertUserRemoteCache(userId, gen);
+      upsertUserRemoteCache(userId, gen, isAdmin);
       try {
         await historyService.saveToRemote(userId, gen, isAdmin);
         synced += 1;

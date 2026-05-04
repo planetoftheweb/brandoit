@@ -765,7 +765,7 @@ const App: React.FC = () => {
 
   const executeDeleteHistory = async (generationId: string) => {
     if (user) {
-      await historyService.deleteFromRemote(user.id, generationId);
+      await historyService.deleteFromRemote(user.id, generationId, user.isAdmin === true);
       const updatedHistory = await historyService.getHistory(user);
       setHistory(updatedHistory);
     } else {

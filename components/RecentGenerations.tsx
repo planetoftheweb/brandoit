@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, MoreHorizontal, Pencil, FolderInput, X as XIcon, Check } from 'lucide-react';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, GalleryHorizontal, Folder as FolderIcon, FolderPlus, Pin, PinOff, MoreHorizontal, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
@@ -28,6 +28,15 @@ const THUMBNAIL_SIZE_OPTIONS: RichSelectOption[] = [
   { value: 'sm', label: 'Small', description: 'Compact grid' },
   { value: 'md', label: 'Medium', description: 'Default — balanced size' },
   { value: 'lg', label: 'Large', description: 'Bigger thumbnails, fewer per row' },
+];
+
+/** When a folder has more than this many tiles, the gallery paginates. */
+const GALLERY_PAGE_THRESHOLD = 50;
+const GALLERY_PAGE_SIZE_OPTIONS: RichSelectOption[] = [
+  { value: '25', label: '25 / page' },
+  { value: '50', label: '50 / page' },
+  { value: '100', label: '100 / page' },
+  { value: '200', label: '200 / page' },
 ];
 
 interface RecentGenerationsMarkRef {
@@ -120,6 +129,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   // flip the toggle and the choice survives reloads via localStorage.
   const DETAILS_PREF_KEY = 'recentGenerations.showDetails';
   const SIZE_PREF_KEY = 'recentGenerations.thumbnailSize';
+  const PAGE_SIZE_PREF_KEY = 'recentGenerations.galleryPageSize';
   const [showDetails, setShowDetails] = React.useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -143,6 +153,19 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
     return 'sm';
   });
+  const [galleryPage, setGalleryPage] = React.useState(1);
+  const [galleryPageSize, setGalleryPageSize] = React.useState<number>(() => {
+    if (typeof window === 'undefined') return 50;
+    try {
+      const stored = window.localStorage.getItem(PAGE_SIZE_PREF_KEY);
+      if (stored === '25' || stored === '50' || stored === '100' || stored === '200') {
+        return parseInt(stored, 10);
+      }
+    } catch {
+      // ignore
+    }
+    return 50;
+  });
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -159,6 +182,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       // ignore
     }
   }, [thumbnailSize]);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(PAGE_SIZE_PREF_KEY, String(galleryPageSize));
+    } catch {
+      // ignore
+    }
+  }, [galleryPageSize]);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
 
@@ -255,6 +286,33 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     () => history.filter((g) => (g.folderId || INBOX_FOLDER_ID) === viewFolderId),
     [history, viewFolderId]
   );
+
+  const galleryPaginationEnabled = visibleHistory.length > GALLERY_PAGE_THRESHOLD;
+  const pagedVisibleHistory = React.useMemo(() => {
+    if (!galleryPaginationEnabled) return visibleHistory;
+    const start = (galleryPage - 1) * galleryPageSize;
+    return visibleHistory.slice(start, start + galleryPageSize);
+  }, [visibleHistory, galleryPaginationEnabled, galleryPage, galleryPageSize]);
+
+  const galleryTotalPages = React.useMemo(() => {
+    if (!galleryPaginationEnabled) return 1;
+    return Math.max(1, Math.ceil(visibleHistory.length / galleryPageSize));
+  }, [galleryPaginationEnabled, visibleHistory.length, galleryPageSize]);
+
+  const galleryRangeStart =
+    visibleHistory.length === 0 ? 0 : (galleryPage - 1) * galleryPageSize + 1;
+  const galleryRangeEnd = galleryPaginationEnabled
+    ? Math.min(visibleHistory.length, galleryPage * galleryPageSize)
+    : visibleHistory.length;
+
+  React.useEffect(() => {
+    setGalleryPage(1);
+  }, [viewFolderId]);
+
+  React.useEffect(() => {
+    if (!galleryPaginationEnabled) return;
+    setGalleryPage((p) => Math.min(Math.max(1, p), galleryTotalPages));
+  }, [galleryPaginationEnabled, galleryTotalPages, visibleHistory.length, galleryPageSize]);
 
   // Per-folder counts shown on the tab chips. Built from the full history
   // (not the filtered slice) so every chip stays accurate while the user
@@ -465,8 +523,17 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           <Clock size={18} />
           <h3 className="text-sm font-bold uppercase tracking-wider">Recent Generations</h3>
           <span className="text-xs text-slate-400 dark:text-slate-500">
-            ({visibleHistory.length} {visibleHistory.length === 1 ? 'item' : 'items'} in folder
-            {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
+            {galleryPaginationEnabled && visibleHistory.length > 0 ? (
+              <>
+                (Items {galleryRangeStart}–{galleryRangeEnd} of {visibleHistory.length} in folder
+                {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
+              </>
+            ) : (
+              <>
+                ({visibleHistory.length} {visibleHistory.length === 1 ? 'item' : 'items'} in folder
+                {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
+              </>
+            )}
           </span>
           {selectionMode && selectedIds.length > 0 && (
             <span className="text-xs font-semibold text-brand-teal" aria-live="polite">
@@ -869,6 +936,61 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         )}
       </div>
 
+      {galleryPaginationEnabled && visibleHistory.length > 0 && (
+        <div
+          className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between mb-4 rounded-lg border border-gray-200 dark:border-[#30363d] bg-slate-50/80 dark:bg-[#161b22]/80 px-3 py-2.5"
+          role="navigation"
+          aria-label="Gallery pages"
+        >
+          <p className="text-xs text-slate-600 dark:text-slate-300">
+            Large folders are split into pages so the grid stays responsive.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            <div className="w-36 shrink-0">
+              <RichSelect
+                value={String(galleryPageSize)}
+                onChange={(value) => {
+                  const next = parseInt(value, 10);
+                  if (next === 25 || next === 50 || next === 100 || next === 200) {
+                    setGalleryPageSize(next);
+                    setGalleryPage(1);
+                  }
+                }}
+                options={GALLERY_PAGE_SIZE_OPTIONS}
+                placeholder="Page size"
+                icon={GalleryHorizontal}
+                compact
+                buttonClassName="rounded-lg min-h-11"
+                menuClassName="max-w-[12rem] z-[40]"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setGalleryPage((p) => Math.max(1, p - 1))}
+                disabled={galleryPage <= 1}
+                aria-label="Previous page"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <ChevronLeft size={18} aria-hidden />
+              </button>
+              <span className="text-xs tabular-nums text-slate-600 dark:text-slate-300 px-1 min-w-[5.5rem] text-center">
+                {galleryPage} / {galleryTotalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setGalleryPage((p) => Math.min(galleryTotalPages, p + 1))}
+                disabled={galleryPage >= galleryTotalPages}
+                aria-label="Next page"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <ChevronRight size={18} aria-hidden />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {visibleHistory.length === 0 && (
         <div className="text-center py-12 text-sm text-slate-500 dark:text-slate-400 border border-dashed border-gray-300 dark:border-[#30363d] rounded-xl mb-4">
           This folder is empty.
@@ -879,7 +1001,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       )}
 
       <div className={THUMBNAIL_GRID_CLASS[thumbnailSize]}>
-        {visibleHistory.map((gen) => {
+        {pagedVisibleHistory.map((gen) => {
           const latestVersion = getLatestVersion(gen);
           const versionCount = gen.versions.length;
           const batchId = gen.comparisonBatchId;
