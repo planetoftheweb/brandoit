@@ -207,13 +207,21 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const canNavigate = !!onNavigateToGeneration && !isComparing && !isCompareMode;
   const canGoNewer = canNavigate && !!newerGeneration;
   const canGoOlder = canNavigate && !!olderGeneration;
+  // Carousel arrows always land on the newest mark of the next generation.
+  // Without this override, restoring would re-show whatever `currentVersionIndex`
+  // was stored on the doc (often Mark 1) — surprising when the user is browsing
+  // history and expects the latest refinement.
+  const withLatestVersion = (gen: Generation): Generation => ({
+    ...gen,
+    currentVersionIndex: Math.max(0, gen.versions.length - 1),
+  });
   const goNewer = useCallback(() => {
     if (!onNavigateToGeneration || !newerGeneration) return;
-    onNavigateToGeneration(newerGeneration);
+    onNavigateToGeneration(withLatestVersion(newerGeneration));
   }, [onNavigateToGeneration, newerGeneration]);
   const goOlder = useCallback(() => {
     if (!onNavigateToGeneration || !olderGeneration) return;
-    onNavigateToGeneration(olderGeneration);
+    onNavigateToGeneration(withLatestVersion(olderGeneration));
   }, [onNavigateToGeneration, olderGeneration]);
 
   const versionCount = generation?.versions.length ?? 0;
