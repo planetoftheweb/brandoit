@@ -216,6 +216,27 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     onNavigateToGeneration(olderGeneration);
   }, [onNavigateToGeneration, olderGeneration]);
 
+  const versionCount = generation?.versions.length ?? 0;
+  const canCycleVersions =
+    !!generation &&
+    versionCount > 1 &&
+    !isComparing &&
+    !isCompareMode;
+
+  const goNextVersion = useCallback(() => {
+    if (!generation || versionCount < 2) return;
+    const idx = generation.currentVersionIndex;
+    const next = (idx + 1) % versionCount;
+    onVersionChange(next);
+  }, [generation, versionCount, onVersionChange]);
+
+  const goPrevVersion = useCallback(() => {
+    if (!generation || versionCount < 2) return;
+    const idx = generation.currentVersionIndex;
+    const next = (idx - 1 + versionCount) % versionCount;
+    onVersionChange(next);
+  }, [generation, versionCount, onVersionChange]);
+
   useEffect(() => {
     return () => {
       if (noticeTimer) window.clearTimeout(noticeTimer);
@@ -248,13 +269,19 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   }, []);
 
   // Keyboard carousel: ←/→ steps the main viewport to the neighboring
-  // generation. We deliberately attach this at the window level so users
-  // don't have to focus the image first, but we bail out whenever the user
-  // is typing somewhere or another modal/picker owns the keyboard.
+  // generation; ↑/↓ cycles Marks (Mark I, II, …) on the current tile, with
+  // wrap (last ↓ → Mark I). Same window listener and focus guards as ←/→.
   useEffect(() => {
-    if (!canNavigate) return;
+    if (!canNavigate && !canCycleVersions) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight' &&
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown'
+      ) {
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isPromptEditorOpen) return;
       const target = e.target as HTMLElement | null;
@@ -269,6 +296,17 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
           return;
         }
       }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (!canCycleVersions) return;
+        e.preventDefault();
+        if (e.key === 'ArrowDown') {
+          goNextVersion();
+        } else {
+          goPrevVersion();
+        }
+        return;
+      }
+      if (!canNavigate) return;
       if (e.key === 'ArrowLeft' && canGoNewer) {
         e.preventDefault();
         goNewer();
@@ -279,7 +317,17 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [canNavigate, canGoNewer, canGoOlder, goNewer, goOlder, isPromptEditorOpen]);
+  }, [
+    canNavigate,
+    canCycleVersions,
+    canGoNewer,
+    canGoOlder,
+    goNewer,
+    goOlder,
+    goNextVersion,
+    goPrevVersion,
+    isPromptEditorOpen,
+  ]);
 
   useEffect(() => {
     return () => {
