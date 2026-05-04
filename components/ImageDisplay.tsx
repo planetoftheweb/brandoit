@@ -873,6 +873,28 @@ ${version.svgCode}
   }, [generation?.id, generation?.config.aspectRatio, version?.id, version?.aspectRatio, resizeAspectRatios]);
 
   if (!generation || !version) {
+    // When a brand-new batch is starting (`isRefining`), show a clear
+    // "Generating…" state instead of the static "Ready to Create"
+    // placeholder. Without this, users couldn't tell whether their click
+    // had registered, because the previous result had already been
+    // cleared from the canvas but no first result has come back yet.
+    if (isRefining) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center h-full min-h-[60vh] text-slate-900 dark:text-white">
+          <div className="w-24 h-24 rounded-3xl bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] flex items-center justify-center mb-6 shadow-xl shadow-slate-200 dark:shadow-black/50">
+            <span
+              className="h-10 w-10 rounded-full border-[3px] border-brand-teal/25 border-t-brand-teal animate-spin"
+              role="progressbar"
+              aria-label="Generating"
+            />
+          </div>
+          <h2 className="text-2xl font-bold tracking-tight">Generating…</h2>
+          <p className="text-slate-500 dark:text-slate-400 max-w-md mt-3 text-sm leading-relaxed">
+            Your first result will land here as soon as the model responds. Track progress in the Active Generations panel.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center h-full min-h-[60vh] text-slate-900 dark:text-white">
         <div className="w-24 h-24 rounded-3xl bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] flex items-center justify-center mb-6 shadow-xl shadow-slate-200 dark:shadow-black/50 rotate-3 transition-transform hover:rotate-0">

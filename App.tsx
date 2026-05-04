@@ -80,7 +80,8 @@ import {
   Settings as SettingsIcon,
   Globe,
   Github,
-  ShieldCheck
+  ShieldCheck,
+  Minimize2
 } from 'lucide-react';
 
 interface ToolbarSelectionCache {
@@ -301,6 +302,9 @@ const App: React.FC = () => {
   const hasRunningGenerationJobs = activeGenerationJobs.some((job) =>
     job.status === 'running' || job.status === 'stopping'
   );
+  // Active Generations panel can be docked to a small floating pill so it
+  // doesn't cover the main preview while batches run.
+  const [isGenerationsPanelCollapsed, setIsGenerationsPanelCollapsed] = useState(false);
   // Ticks once per second while background generations are running so the
   // monitor's elapsed/remaining labels stay live.
   const [batchClockTick, setBatchClockTick] = useState(0);
@@ -914,6 +918,9 @@ const App: React.FC = () => {
   const openAuthModal = (mode: 'login' | 'signup' = 'login') => {
     setAuthModalMode(mode);
     setIsAuthModalOpen(true);
+    // Close the Quick Start / Setup modal so it doesn't sit on top of
+    // the auth modal (the setup modal has a higher z-index).
+    setIsSetupModalOpen(false);
   };
 
   const updateGenerationJob = (
@@ -957,6 +964,17 @@ const App: React.FC = () => {
     setComparisonState({ mode: 'idle', a: null, b: null });
     setError(null);
     setBatchClockTick(0);
+    // Clear the main preview so the user gets immediate visual feedback that
+    // a brand-new run is starting. Without this, the previous result keeps
+    // showing for several seconds while the first API call resolves and the
+    // user can't tell whether their click registered. The "Generating…"
+    // placeholder kicks in via `hasRunningGenerationJobs` below.
+    setCurrentGeneration(null);
+    // Re-open the Active Generations panel for every new submit, even if the
+    // user docked it during a previous run. They explicitly asked for this
+    // run, so showing progress by default is the right call; they can dock
+    // it again with the minimize button.
+    setIsGenerationsPanelCollapsed(false);
 
     let jobId = '';
     try {
@@ -2307,19 +2325,13 @@ const App: React.FC = () => {
           ) : (
             <div className="flex items-center gap-2 mr-2">
               <button 
-                onClick={() => {
-                  setAuthModalMode('login');
-                  setIsAuthModalOpen(true);
-                }}
+                onClick={() => openAuthModal('login')}
                 className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
               >
                 Log In
               </button>
               <button 
-                onClick={() => {
-                  setAuthModalMode('signup');
-                  setIsAuthModalOpen(true);
-                }}
+                onClick={() => openAuthModal('signup')}
                 className="text-sm font-bold text-white bg-brand-red hover:bg-red-700 px-4 py-2 rounded-lg shadow-lg shadow-brand-red/20 transition-all active:scale-95 hidden sm:block"
               >
                 Sign Up
@@ -2431,6 +2443,49 @@ const App: React.FC = () => {
               const runningCount = activeGenerationJobs.filter((job) =>
                 job.status === 'running' || job.status === 'stopping'
               ).length;
+              // Aggregate counts for the docked pill so the user knows at a
+              // glance how much work is still pending without expanding the
+              // full panel. "In flight" is what an API key is actively
+              // producing right now; "queued" is everything still waiting on
+              // a worker (these are the rows that don't show up in
+              // `currentJobs`, which is why a 3-image batch with concurrency
+              // 2 looked like only 2 generations were happening).
+              const totalInFlight = activeGenerationJobs.reduce(
+                (sum, job) => sum + job.inFlight,
+                0
+              );
+              const totalQueued = activeGenerationJobs.reduce((sum, job) => {
+                if (job.status !== 'running' && job.status !== 'stopping') return sum;
+                const done = job.completed + job.failed;
+                return sum + Math.max(0, job.total - done - job.inFlight);
+              }, 0);
+              const docLabel = totalQueued > 0
+                ? `${totalInFlight} running · ${totalQueued} queued`
+                : `${totalInFlight || runningCount} running`;
+              if (isGenerationsPanelCollapsed) {
+                return (
+                  <div
+                    className="absolute top-6 right-4 z-40"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setIsGenerationsPanelCollapsed(false)}
+                      className="inline-flex items-center gap-2 rounded-full border border-gray-200 dark:border-[#30363d] bg-white/95 dark:bg-[#161b22]/95 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:border-brand-teal hover:text-brand-teal transition-colors"
+                      title="Show active generations"
+                      aria-label={`Show active generations panel (${docLabel})`}
+                    >
+                      {runningCount > 0 ? (
+                        <span className="h-3.5 w-3.5 rounded-full border-2 border-brand-teal/30 border-t-brand-teal animate-spin" />
+                      ) : (
+                        <Sparkles size={13} className="text-brand-teal" />
+                      )}
+                      <span className="tabular-nums">{docLabel}</span>
+                    </button>
+                  </div>
+                );
+              }
               return (
                 <div
                   className="absolute top-6 right-4 z-40 w-[min(440px,calc(100%-2rem))]"
@@ -2445,9 +2500,20 @@ const App: React.FC = () => {
                           Active Generations
                         </span>
                       </div>
-                      <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        {runningCount} running
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                          {docLabel}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsGenerationsPanelCollapsed(true)}
+                          className="inline-flex items-center justify-center h-6 w-6 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                          title="Dock to corner"
+                          aria-label="Minimize active generations panel"
+                        >
+                          <Minimize2 size={13} />
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
                       {activeGenerationJobs.map((job) => {
@@ -2568,7 +2634,7 @@ const App: React.FC = () => {
                                 <span>{statusLabel}</span>
                               )}
                             </div>
-                            {job.currentJobs.length > 0 && (
+                            {(job.currentJobs.length > 0 || (running && remainingJobs > job.inFlight)) && (
                               <div className="mt-1.5 space-y-1">
                                 {job.currentJobs.slice(0, 3).map((currentJob) => (
                                   <div
@@ -2581,6 +2647,19 @@ const App: React.FC = () => {
                                     <span className="truncate text-right">{currentJob.prompt}</span>
                                   </div>
                                 ))}
+                                {/* Queued items aren't tracked individually in
+                                    state (the batch runner only emits the
+                                    in-flight set), but we can derive how many
+                                    are still waiting from total - done -
+                                    inFlight. Without this row, a batch of 3
+                                    with concurrency 2 looked like only 2
+                                    generations were happening. */}
+                                {running && remainingJobs > job.inFlight && (
+                                  <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 italic">
+                                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+                                    {remainingJobs - job.inFlight} queued
+                                  </div>
+                                )}
                               </div>
                             )}
                             {modelChips.length > 1 && (
@@ -2609,12 +2688,14 @@ const App: React.FC = () => {
               );
             })()}
 
-            {/* Display — only render the viewer when we have something to show
-                or there's no history at all (true first-run). When the viewer
-                is empty but the user already has prior generations, skip the
+            {/* Display — render the viewer when we have something to show,
+                a new generation is starting up (so the "Generating…"
+                placeholder is visible instead of stale art), or there's no
+                history at all (true first-run). When the viewer is empty but
+                the user already has prior generations, skip the
                 "Ready to Create" placeholder so the Recent Generations gallery
                 lands at the top of the page on load. */}
-            {(currentGeneration || history.length === 0) && (
+            {(currentGeneration || hasRunningGenerationJobs || history.length === 0) && (
               <ImageDisplay
                 generation={currentGeneration}
                 onRefine={handleRefine}
