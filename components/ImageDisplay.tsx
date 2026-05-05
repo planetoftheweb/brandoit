@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare, Plus } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getCurrentVersion } from '../services/historyService';
@@ -147,14 +147,23 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [deletingRefinementId, setDeletingRefinementId] = useState<string | null>(null);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [resizeAspectRatio, setResizeAspectRatio] = useState('');
+  // True while the user is actively dragging the JuxtaposeSlider divider.
+  // Used to mute the in-image overlays (rail, version chip, action buttons,
+  // compare overlay, etc.) so the user gets a clean before/after read while
+  // they scrub. Reset by JuxtaposeSlider on pointerup / unmount.
+  const [isSliderDragging, setIsSliderDragging] = useState(false);
   // Thumbnail strip hover: while hovering a thumbnail, the main viewport
   // mirrors that version without committing it. Null = show the committed
   // `currentVersionIndex`.
   const [hoveredVersionIdx, setHoveredVersionIdx] = useState<number | null>(null);
-  // Vertical anchor (in rail-outer coordinates) for the floating hover
-  // popover. Rendered at the rail-outer level so it can escape the inner
-  // scroller's overflow clip without needing position: fixed.
-  const [popoverTop, setPopoverTop] = useState<number>(0);
+  // Viewport coordinates for the floating hover popover. We use
+  // `position: fixed` because the rail lives deep inside a stack of
+  // absolutely-positioned + overflow:auto ancestors and the page header
+  // (z-50) was painting on top of the popover image when its `absolute`
+  // ancestor's top fell near the viewport top. Fixed positioning + a
+  // viewport-aware clamp keeps the popover fully visible no matter where
+  // the rail is on the page.
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   // Ephemeral "shift-click another to compare" hint shown for ~4s after the
   // user clicks a thumbnail normally. Resets every time a new thumbnail is
   // clicked. Intentionally suppressed while already in compare-picker mode.
@@ -442,6 +451,27 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       return { width: MAX_W, aspectRatio: `${w} / ${h}` };
     }
     return { width: Math.round(MAX_H * r), aspectRatio: `${w} / ${h}` };
+  };
+
+  /**
+   * Estimated total height of the rail's hover preview card, including the
+   * bottom label footer. Used by the rail to clamp the preview's vertical
+   * position so it never extends above the rail's visible scroll area
+   * (which would clip the top of the image — the original bug) or below
+   * it (which would clip the label / footer when hovering the bottom-most
+   * thumb). Footer is ~36px (px-3 py-2 + 12px text + a hairline border).
+   */
+  const FOOTER_H = 36;
+  const getHoverPreviewHeight = (ratioStr?: string | null): number => {
+    const style = getHoverPreviewStyle(ratioStr);
+    const width = typeof style.width === 'number' ? style.width : 320;
+    const aspect = String(style.aspectRatio || '1 / 1');
+    const m = /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/.exec(aspect);
+    if (!m) return width + FOOTER_H;
+    const aw = parseFloat(m[1]);
+    const ah = parseFloat(m[2]);
+    if (!aw || !ah) return width + FOOTER_H;
+    return Math.round(width * (ah / aw)) + FOOTER_H;
   };
 
   const getColors = (id: string | undefined) => {
@@ -968,116 +998,15 @@ ${version.svgCode}
     </button>
   );
 
+  // Roman-numeral suffix of `version.label`. Labels look like "Mark III"
+  // (see `toMarkLabel` in versionUtils), so stripping the prefix gives us
+  // just the numeral for the compact in-image chip.
+  const versionRomanNumeral = version
+    ? version.label.replace(/^Mark\s+/, '')
+    : '';
+
   return (
     <div className="flex-1 flex flex-col h-full relative">
-      {/* Version Navigator */}
-      {hasMultipleVersions && (
-        <div className="w-full flex justify-center pt-4 px-4 relative z-10">
-          <div className="relative inline-flex items-center gap-2 bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] px-3 py-1.5 rounded-full shadow-sm">
-            <Layers size={14} className="text-slate-400" />
-            <button
-              onClick={() => setVersionDropdownOpen(!versionDropdownOpen)}
-              className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-            >
-              {version.label}
-              <ChevronDown size={14} className={`transition-transform ${versionDropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-            <span className="text-xs text-slate-400">
-              {version.type === 'refinement' ? 'Refinement' : 'Original'}
-            </span>
-
-            {versionDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setVersionDropdownOpen(false)} />
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-20 overflow-hidden p-1">
-                  {generation.versions.map((v, idx) => (
-                    <div
-                      key={v.id}
-                      className={`flex items-center gap-1 rounded-lg ${
-                        idx === generation.currentVersionIndex
-                          ? 'bg-brand-teal/10'
-                          : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
-                      }`}
-                    >
-                      <button
-                        onClick={() => {
-                          onVersionChange(idx);
-                          setVersionDropdownOpen(false);
-                        }}
-                        className={`flex-1 min-w-0 text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                          idx === generation.currentVersionIndex
-                            ? 'text-brand-teal font-semibold'
-                            : 'text-slate-700 dark:text-slate-300'
-                        }`}
-                      >
-                        <span className="font-mono text-xs w-16 shrink-0">{v.label}</span>
-                        <span className="text-xs text-slate-400">{v.type === 'refinement' ? 'Refinement' : 'Original'}</span>
-                      </button>
-                      {/* Allow deleting any version, not just refinements.
-                          When a generation contains only one version, the
-                          handler would throw "Cannot delete the last version"
-                          — surface that as a disabled state instead so the
-                          button is informative rather than error-producing.
-                          This is what lets users remove blank/failed Mark I
-                          and Mark II tiles left over from compare runs or
-                          variation runs that returned empty payloads. */}
-                      {(() => {
-                        const isOnlyVersion = generation.versions.length <= 1;
-                        const isBusy = Boolean(deletingRefinementId);
-                        const disabled = isOnlyVersion || isBusy;
-                        const tooltip = isOnlyVersion
-                          ? 'Cannot delete the only version — use the tile trash to remove the whole generation'
-                          : `Delete ${v.label}`;
-                        return (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void handleDeleteRefinementClick(v.id);
-                            }}
-                            disabled={disabled}
-                            className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
-                              disabled
-                                ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                                : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
-                            }`}
-                            aria-label={tooltip}
-                            title={tooltip}
-                          >
-                            {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                          </button>
-                        );
-                      })()}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {isCompareMode && (
-        <div className="mx-4 md:mx-8 mt-2 px-3 py-2 rounded-lg border border-brand-teal/40 bg-brand-teal/10 text-brand-teal text-sm font-medium flex items-center justify-between gap-3 animate-in fade-in duration-150">
-          <span className="inline-flex items-center gap-2">
-            <GitCompare size={15} />
-            {comparisonA
-              ? 'Pick the second mark to compare'
-              : 'Pick two marks to compare — click any thumbnail in the rail or a tile below'}
-          </span>
-          {onExitComparePicker && (
-            <button
-              type="button"
-              onClick={onExitComparePicker}
-              className="text-[11px] uppercase tracking-wider font-bold text-brand-teal/80 hover:text-brand-teal underline-offset-2 hover:underline"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Main Viewport — the thumbnail rail (when multiple versions exist)
           lives inside the same centered row as the image card so its height
           tracks the image, not the full viewport. This avoids a tall,
@@ -1085,21 +1014,41 @@ ${version.svgCode}
       <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center min-h-0">
         {/* Keep a concrete row width so compare mode can't shrink-wrap around
             the slider surface. Without `w-full`, this row can collapse to the
-            intrinsic width of its children (`rail + constrained slider`). */}
+            intrinsic width of its children. `group` drives the hover-reveal
+            behavior of the in-image overlays AND the rail — hover anywhere
+            over the preview area to surface the chrome. The rail is
+            absolutely positioned (see below) so it floats over the image's
+            left edge instead of reserving width; the image card therefore
+            reclaims the rail's footprint at rest and gets the full row
+            width to render itself. `relative` is needed for the absolute
+            rail to anchor against this row. */}
         <div
-          className={`w-full min-w-0 flex items-stretch gap-3 max-h-full ${
+          className={`group relative w-full min-w-0 flex items-stretch gap-3 max-h-full ${
             hasMultipleVersions
-              ? 'mx-auto max-w-[calc(80rem+124px+0.75rem)]'
+              ? 'mx-auto max-w-7xl'
               : 'justify-center'
           }`}
+          data-dragging={isSliderDragging ? 'true' : undefined}
         >
 
-          {/* Thumbnail rail — outer div has no intrinsic height (its scroller
-              is absolutely positioned out of flow), so `items-stretch` above
-              pins the rail's height to the image card's height. When the
-              batch has more thumbs than fit, the inner scroller handles it. */}
+          {/* Thumbnail rail — absolutely positioned so it floats on top of
+              the row's left edge instead of taking 124px out of layout.
+              At rest the image card therefore renders edge-to-edge and the
+              rail is invisible; rolling over the preview row reveals the
+              rail with a small slide-in. While picking/comparing the rail
+              stays at full opacity (and pointer-events on) so the user can
+              drive the two-mark flow without their cursor having to
+              babysit the image. The inner scroller is `absolute inset-0`
+              against THIS wrapper, so the wrapper still needs a concrete
+              height — `top-0 bottom-0` does that against the row. */}
           {hasMultipleVersions && (
-            <div className="relative w-[124px] shrink-0 self-stretch">
+            <div
+              className={`absolute top-0 bottom-0 left-0 w-[124px] z-30 transition-all duration-200 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
+                isCompareMode || isComparing
+                  ? 'opacity-100 translate-x-0 pointer-events-auto'
+                  : 'opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto'
+              }`}
+            >
               <div
                 ref={railInnerRef}
                 onScroll={() => setHoveredVersionIdx(null)}
@@ -1112,7 +1061,12 @@ ${version.svgCode}
                     Clicking toggles compare-picker mode so users who don't
                     realize the hidden toolbar button or the shift-click
                     shortcut exist still have a visible path to the slider.
-                    Sticky so it stays anchored while scrolling long rails. */}
+                    Sticky so it stays anchored while scrolling long rails.
+                    Docked (faded out) at rest so it doesn't compete with
+                    the large image; reveals when the user rolls over the
+                    preview row. While actively in compare/picking mode the
+                    button stays at full opacity so the user can always
+                    bail out. */}
                 {onEnterComparePicker && onExitComparePicker && (
                   <button
                     type="button"
@@ -1130,10 +1084,10 @@ ${version.svgCode}
                           ? 'Close the comparison viewer'
                           : 'Open compare: click two marks (or Shift-click to pick without toggling)'
                     }
-                    className={`sticky top-0 z-10 -mx-2 -mt-2 mb-1 px-2 py-1.5 flex items-center gap-1.5 justify-center text-[11px] font-bold uppercase tracking-wider border-b transition-colors ${
+                    className={`sticky top-0 z-10 -mx-2 -mt-2 mb-1 px-2 py-1.5 flex items-center gap-1.5 justify-center text-[11px] font-bold uppercase tracking-wider border-b transition-all ${
                       isCompareMode || isComparing
-                        ? 'bg-brand-teal text-white border-brand-teal hover:bg-brand-teal/90'
-                        : 'bg-gray-100 dark:bg-[#161b22] text-slate-600 dark:text-slate-300 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal/10 hover:text-brand-teal hover:border-brand-teal/40'
+                        ? 'opacity-100 bg-brand-teal text-white border-brand-teal hover:bg-brand-teal/90'
+                        : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 bg-gray-100 dark:bg-[#161b22] text-slate-600 dark:text-slate-300 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal/10 hover:text-brand-teal hover:border-brand-teal/40'
                     }`}
                   >
                     <GitCompare size={12} />
@@ -1159,25 +1113,34 @@ ${version.svgCode}
                     markLabel: v.label,
                     aspectRatio: v.aspectRatio || generation.config.aspectRatio,
                   };
+                  // Anchor the popover so its TOP edge lines up with the
+                  // hovered thumbnail's TOP edge — i.e. it tracks the
+                  // square thumbnails as the user scrubs the rail. We
+                  // compute viewport coordinates (used with
+                  // `position: fixed`) so the popover can sit anywhere on
+                  // screen without being clipped by overflow:auto ancestors
+                  // or covered by the higher-z page header. The vertical
+                  // position is clamped to keep the entire card within an
+                  // 8px safe area at the top and bottom of the viewport.
+                  const positionPreview = (btn: HTMLButtonElement) => {
+                    const ratio = v.aspectRatio || generation.config.aspectRatio;
+                    const previewHeight = getHoverPreviewHeight(ratio);
+                    const rect = btn.getBoundingClientRect();
+                    const safeTop = 8;
+                    const safeBottom = 8;
+                    const minTop = safeTop;
+                    const maxTop = Math.max(safeTop, window.innerHeight - previewHeight - safeBottom);
+                    const top = Math.min(Math.max(rect.top, minTop), maxTop);
+                    const left = rect.right + 12;
+                    setPopoverPos({ top, left });
+                  };
                   const handleEnter: React.MouseEventHandler<HTMLButtonElement> = (event) => {
                     setHoveredVersionIdx(idx);
-                    const btn = event.currentTarget;
-                    const scroller = railInnerRef.current;
-                    if (scroller) {
-                      // Anchor the popover to the thumb's vertical center in
-                      // the rail's coordinate space. offsetTop is relative to
-                      // the scroller, so we subtract scrollTop to translate
-                      // into the visible area.
-                      setPopoverTop(btn.offsetTop - scroller.scrollTop + btn.offsetHeight / 2);
-                    }
+                    positionPreview(event.currentTarget);
                   };
                   const handleFocus: React.FocusEventHandler<HTMLButtonElement> = (event) => {
                     setHoveredVersionIdx(idx);
-                    const btn = event.currentTarget;
-                    const scroller = railInnerRef.current;
-                    if (scroller) {
-                      setPopoverTop(btn.offsetTop - scroller.scrollTop + btn.offsetHeight / 2);
-                    }
+                    positionPreview(event.currentTarget);
                   };
                   // Hover-delete affordance on the rail. Sits absolutely on
                   // top of the thumb button as a sibling (not nested) so it
@@ -1284,6 +1247,51 @@ ${version.svgCode}
                     </div>
                   );
                 })}
+
+                {/* "Add a new Mark" affordance — sits after the last thumb so
+                    users can iterate on the current image without hunting for
+                    the refine bar. One-click "do it again": re-runs the last
+                    prompt (current version's refinement prompt, or the
+                    generation's original prompt) through the refinement
+                    pipeline to add a fresh Mark. Shift-click opens the full
+                    prompt editor for users who want to tweak before sending.
+                    Hidden in compare-pick / comparing mode so it can't fight
+                    with the two-mark selection flow. */}
+                {!isCompareMode && !isComparing && (() => {
+                  const lastPrompt =
+                    (version?.refinementPrompt && version.refinementPrompt.trim()) ||
+                    (generation.config.prompt && generation.config.prompt.trim()) ||
+                    '';
+                  const hasLastPrompt = Boolean(lastPrompt);
+                  const handleAddMarkClick = (event: React.MouseEvent) => {
+                    if (event.shiftKey || !hasLastPrompt) {
+                      setIsPromptEditorOpen(true);
+                      return;
+                    }
+                    onRefine(lastPrompt);
+                  };
+                  const titleText = hasLastPrompt
+                    ? 'Add a new Mark — re-run the last prompt (Shift-click to edit)'
+                    : 'Add a new Mark — open the refine editor';
+                  return (
+                    <button
+                      type="button"
+                      onClick={handleAddMarkClick}
+                      onMouseEnter={() => setHoveredVersionIdx(null)}
+                      onFocus={() => setHoveredVersionIdx(null)}
+                      disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                      aria-label={hasLastPrompt ? 'Add a new Mark using the last prompt' : 'Add a new Mark'}
+                      title={titleText}
+                      className="shrink-0 w-full aspect-square rounded-md border-2 border-dashed border-gray-300 dark:border-[#30363d] flex items-center justify-center text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-[#161b22]/60 hover:border-brand-teal hover:text-brand-teal hover:bg-brand-teal/5 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isRefining ? (
+                        <RefreshCw size={24} strokeWidth={2.5} className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Plus size={28} strokeWidth={2.5} aria-hidden="true" />
+                      )}
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Ephemeral "shift-click another to compare" hint. Pops up for
@@ -1306,10 +1314,13 @@ ${version.svgCode}
                 </div>
               )}
 
-              {/* Floating hover/focus preview — rendered at the rail-outer
-                  level so the inner scroller's overflow clip can't eat it.
-                  Purely visual (pointer-events: none) so it never steals
-                  clicks from the next thumb. */}
+              {/* Floating hover/focus preview — uses `position: fixed` so
+                  the page header (z-50) and the main viewport's
+                  overflow:auto can't clip or cover it. Coordinates are
+                  computed from the hovered thumb's bounding rect and
+                  clamped to stay fully on-screen. Purely visual
+                  (pointer-events: none) so it never steals clicks from
+                  the next thumb. */}
               {hoveredVersionIdx !== null && generation.versions[hoveredVersionIdx] && (() => {
                 const v = generation.versions[hoveredVersionIdx];
                 const isCommitted = hoveredVersionIdx === generation.currentVersionIndex;
@@ -1318,8 +1329,8 @@ ${version.svgCode}
                 const previewImageUrl = getVersionDisplayImageUrl(generation.id, v);
                 return (
                   <div
-                    className="pointer-events-none absolute left-full ml-3 -translate-y-1/2 z-30 animate-in fade-in zoom-in-95 duration-150"
-                    style={{ top: popoverTop }}
+                    className="pointer-events-none fixed z-[60] animate-in fade-in zoom-in-95 duration-150"
+                    style={{ top: popoverPos.top, left: popoverPos.left }}
                     aria-hidden="true"
                   >
                     <div
@@ -1364,70 +1375,93 @@ ${version.svgCode}
               makes `items-start` look like a global left align and
               `items-center` create a big gap from the rail. */}
           <div className="min-w-0 w-full max-w-7xl flex flex-col items-center">
-            {/* Comparison header lives OUTSIDE the shadow card so the card itself
-                stays dedicated to the image surface. The old layout nested the
-                header + an inner p-4 wrapper INSIDE the card, which robbed the
-                slider of a meaningful chunk of its own footprint. */}
-            {isComparing && comparisonA && comparisonB && (
-              <div className="mb-3 w-full flex items-center justify-between gap-3 flex-wrap">
-                <div className="inline-flex items-center gap-2 text-sm font-semibold text-brand-teal min-w-0 flex-wrap">
-                  <GitCompare size={16} />
-                  <span>Comparing</span>
-                  <span className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs truncate max-w-[280px]">
-                    {modelLabelMap[comparisonA.modelId] || comparisonA.modelId} · {comparisonA.markLabel}
-                  </span>
-                  <span className="text-slate-400">vs</span>
-                  <span className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs truncate max-w-[280px]">
-                    {modelLabelMap[comparisonB.modelId] || comparisonB.modelId} · {comparisonB.markLabel}
-                  </span>
-                </div>
-                {onExitComparePicker && (
-                  <button
-                    type="button"
-                    onClick={onExitComparePicker}
-                    title="Close the comparison viewer"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 bg-gray-100 dark:bg-[#21262d] hover:bg-gray-200 dark:hover:bg-[#30363d] transition-colors border border-gray-200 dark:border-[#30363d]"
-                  >
-                    <X size={14} />
-                    Close comparison
-                  </button>
-                )}
-              </div>
-            )}
-
-          <div className={`relative group ${isSvg || isComparing ? 'w-full' : 'max-w-full max-h-full'}`}>
+          <div className={`relative ${isSvg || isComparing ? 'w-full' : 'max-w-full max-h-full'}`}>
           <div className="absolute inset-0 bg-brand-red/20 blur-3xl rounded-full opacity-20 pointer-events-none"></div>
           <div className="relative shadow-2xl shadow-slate-300 dark:shadow-black rounded-lg overflow-visible border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
 
             {/* Carousel arrows — step to a neighboring generation in history.
                 Hidden while the comparison slider is active so we don't pile
                 on top of its own controls, and individually disabled at the
-                edges of the history list. Mirrors the keyboard ←/→ shortcut. */}
+                edges of the history list. Mirrors the keyboard ←/→ shortcut.
+                The LEFT arrow used to sit at `left-3` of the card, but now
+                that the rail floats over the row's leftmost 124px the arrow
+                would get hidden behind it. Pushing the arrow past the
+                rail's footprint (left-[136px] = 124px rail + 12px gap)
+                keeps it reachable when the row is hovered and the rail is
+                visible alongside the navigation controls. */}
             {canNavigate && (canGoNewer || canGoOlder) && (
               <>
-                <button
-                  type="button"
-                  onClick={goNewer}
-                  disabled={!canGoNewer}
-                  aria-label="Previous generation (newer)"
-                  title={canGoNewer ? 'Previous generation (←)' : 'No newer generation'}
-                  className="hidden sm:inline-flex absolute top-1/2 -translate-y-1/2 left-3 z-20 items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                >
-                  <ChevronLeft size={22} />
-                </button>
-                <button
-                  type="button"
-                  onClick={goOlder}
-                  disabled={!canGoOlder}
-                  aria-label="Next generation (older)"
-                  title={canGoOlder ? 'Next generation (→)' : 'No older generation'}
-                  className="hidden sm:inline-flex absolute top-1/2 -translate-y-1/2 right-3 z-20 items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                >
-                  <ChevronRight size={22} />
-                </button>
+                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 left-[136px] z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none">
+                  <button
+                    type="button"
+                    onClick={goNewer}
+                    disabled={!canGoNewer}
+                    aria-label="Previous generation (newer)"
+                    className="inline-flex items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition"
+                  >
+                    <ChevronLeft size={22} />
+                  </button>
+                  <div
+                    className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 w-60 px-3 py-2.5 rounded-xl bg-black/90 text-white shadow-xl opacity-0 group-hover/arrowBtn:opacity-100 group-focus-within/arrowBtn:opacity-100 transition-opacity z-30"
+                    role="tooltip"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Previous generation</div>
+                    <div className="text-[11px] leading-relaxed text-slate-100 mb-2">
+                      {canGoNewer ? 'Step back to the previous tile in your history.' : 'No newer generation in history.'}
+                    </div>
+                    <div className="pt-2 border-t border-white/10 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex items-center gap-2">
+                        <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">←</kbd>
+                        <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">→</kbd>
+                        <span>switch generations</span>
+                      </div>
+                      {hasMultipleVersions && (
+                        <div className="flex items-center gap-2">
+                          <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">↑</kbd>
+                          <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">↓</kbd>
+                          <span>cycle Marks</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 right-3 z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none">
+                  <button
+                    type="button"
+                    onClick={goOlder}
+                    disabled={!canGoOlder}
+                    aria-label="Next generation (older)"
+                    className="inline-flex items-center justify-center h-11 w-11 rounded-full border border-gray-300/80 dark:border-white/15 bg-white/90 dark:bg-[#1f252d]/90 text-slate-800 dark:text-slate-200 shadow-lg backdrop-blur-sm hover:bg-brand-teal hover:border-brand-teal hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#0d1117] disabled:opacity-30 disabled:pointer-events-none transition"
+                  >
+                    <ChevronRight size={22} />
+                  </button>
+                  <div
+                    className="pointer-events-none absolute right-full mr-3 top-1/2 -translate-y-1/2 w-60 px-3 py-2.5 rounded-xl bg-black/90 text-white shadow-xl opacity-0 group-hover/arrowBtn:opacity-100 group-focus-within/arrowBtn:opacity-100 transition-opacity z-30"
+                    role="tooltip"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Next generation</div>
+                    <div className="text-[11px] leading-relaxed text-slate-100 mb-2">
+                      {canGoOlder ? 'Step forward to the next tile in your history.' : 'No older generation in history.'}
+                    </div>
+                    <div className="pt-2 border-t border-white/10 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex items-center gap-2">
+                        <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">←</kbd>
+                        <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">→</kbd>
+                        <span>switch generations</span>
+                      </div>
+                      {hasMultipleVersions && (
+                        <div className="flex items-center gap-2">
+                          <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">↑</kbd>
+                          <kbd className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">↓</kbd>
+                          <span>cycle Marks</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
                 {/* Position counter — small, unobtrusive label so users know
                     where they are in the history without scrolling down. */}
-                <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-black/60 text-white backdrop-blur-sm shadow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition pointer-events-none">
+                <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-black/60 text-white backdrop-blur-sm shadow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition pointer-events-none group-data-[dragging=true]:!opacity-0">
                   {currentIdxInHistory + 1} / {history.length}
                 </div>
               </>
@@ -1443,12 +1477,13 @@ ${version.svgCode}
               <JuxtaposeSlider
                 imageA={comparisonA.imageUrl}
                 imageB={comparisonB.imageUrl}
-                labelA={`${modelLabelMap[comparisonA.modelId] || comparisonA.modelId} · ${comparisonA.markLabel}`}
-                labelB={`${modelLabelMap[comparisonB.modelId] || comparisonB.modelId} · ${comparisonB.markLabel}`}
+                labelA={comparisonA.markLabel}
+                labelB={comparisonB.markLabel}
                 aspectRatio={comparisonA.aspectRatio || comparisonB.aspectRatio}
                 maxHeight="78vh"
                 toolbarOverlay
                 className="block"
+                onDraggingChange={setIsSliderDragging}
               />
             ) : isSvg && version.svgCode ? (
               <div
@@ -1552,16 +1587,213 @@ ${version.svgCode}
             </div>
           )}
             
+            {/* Docked compare overlay (top-center). The pick-mode banner
+                ("Pick the second mark to compare") and the active-comparison
+                header ("Comparing A vs B" + Close) used to live ABOVE the
+                preview, eating vertical space. They're now in-image
+                overlays that follow the same hover-reveal pattern as the
+                action buttons and version chip — invisible by default,
+                fade in when the user rolls over the preview area. */}
+            {(isCompareMode || (isComparing && comparisonA && comparisonB)) && (
+              <div
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-20 max-w-[calc(100%-7rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none transition-opacity"
+                role="status"
+                aria-live="polite"
+              >
+                {isComparing && comparisonA && comparisonB ? (
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/90 dark:bg-[#161b22]/90 border border-gray-200 dark:border-white/15 shadow-lg backdrop-blur-md text-sm font-semibold text-brand-teal max-w-full">
+                    <GitCompare size={14} className="shrink-0" />
+                    {/* Compact label: just the two Mark names. Hovering the
+                        corner chips on the slider surface still surfaces the
+                        full model + mark identity if the user needs it. */}
+                    <span
+                      className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs whitespace-nowrap"
+                      title={`${modelLabelMap[comparisonA.modelId] || comparisonA.modelId} · ${comparisonA.markLabel}`}
+                    >
+                      {comparisonA.markLabel}
+                    </span>
+                    <span className="text-slate-400 shrink-0">vs</span>
+                    <span
+                      className="px-2 py-0.5 rounded bg-brand-teal/15 border border-brand-teal/40 text-brand-teal text-xs whitespace-nowrap"
+                      title={`${modelLabelMap[comparisonB.modelId] || comparisonB.modelId} · ${comparisonB.markLabel}`}
+                    >
+                      {comparisonB.markLabel}
+                    </span>
+                    {onExitComparePicker && (
+                      <button
+                        type="button"
+                        onClick={onExitComparePicker}
+                        title="Close the comparison viewer"
+                        aria-label="Close the comparison viewer"
+                        className="ml-1 inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-slate-500 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] hover:text-slate-900 dark:hover:text-white transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-brand-teal/40 bg-brand-teal/10 backdrop-blur-md text-brand-teal text-sm font-medium shadow-lg max-w-full">
+                    <GitCompare size={14} className="shrink-0" />
+                    <span className="truncate">
+                      {comparisonA
+                        ? 'Pick the second mark to compare'
+                        : 'Pick two marks to compare'}
+                    </span>
+                    {onExitComparePicker && (
+                      <button
+                        type="button"
+                        onClick={onExitComparePicker}
+                        title="Cancel compare"
+                        aria-label="Cancel compare"
+                        className="ml-1 text-[11px] uppercase tracking-wider font-bold text-brand-teal/80 hover:text-brand-teal underline-offset-2 hover:underline shrink-0"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* In-image version chip (top-left). Replaces the standalone
+                "Mark III · Original" pill that previously sat above the
+                preview and ate vertical space. Compact icon-only display
+                with just the Roman numeral; hover/focus expands the chip
+                to reveal the full label and a rich switcher menu listing
+                every version with delete affordances. */}
+            {hasMultipleVersions && !isComparing && (
+              <div
+                className={`absolute top-4 left-4 z-20 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
+                  versionDropdownOpen
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                }`}
+              >
+                <div className="relative group/version">
+                  <button
+                    type="button"
+                    onClick={() => setVersionDropdownOpen(!versionDropdownOpen)}
+                    aria-label={`Switch version (current: ${version.label}${version.type === 'refinement' ? ', refinement' : ''})`}
+                    aria-haspopup="menu"
+                    aria-expanded={versionDropdownOpen}
+                    className={`inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full border backdrop-blur-md shadow-lg transition-colors ${
+                      versionDropdownOpen
+                        ? 'bg-brand-teal text-white border-brand-teal'
+                        : 'bg-white/90 dark:bg-[#161b22]/90 border-gray-200/80 dark:border-white/15 text-slate-900 dark:text-white hover:bg-brand-teal hover:text-white hover:border-brand-teal'
+                    } focus:outline-none focus:ring-2 focus:ring-brand-teal/70`}
+                  >
+                    <Layers size={14} className="shrink-0" />
+                    <span className="font-mono text-xs font-bold leading-none tracking-wider">{versionRomanNumeral}</span>
+                    <ChevronDown size={13} className={`transition-transform ${versionDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {/* Rich hover popover — only visible while the menu is
+                      closed, so it doesn't fight with the open dropdown. */}
+                  {!versionDropdownOpen && (
+                    <div className="pointer-events-none absolute top-full left-0 mt-2 w-60 origin-top-left rounded-xl bg-black/90 text-white shadow-xl ring-1 ring-white/10 px-3 py-2.5 opacity-0 group-hover/version:opacity-100 transition-opacity duration-150 z-30">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Version</span>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {(generation.currentVersionIndex ?? 0) + 1} / {generation.versions.length}
+                        </span>
+                      </div>
+                      <div className="text-sm font-semibold">{version.label}</div>
+                      {version.type === 'refinement' && version.refinementPrompt && (
+                        <div className="mt-1 text-[11px] leading-snug text-amber-200 line-clamp-3">
+                          Refined: {version.refinementPrompt}
+                        </div>
+                      )}
+                      <div className="mt-2 pt-2 border-t border-white/10 text-[10px] text-slate-400">
+                        Click to switch versions
+                      </div>
+                    </div>
+                  )}
+
+                  {versionDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setVersionDropdownOpen(false)} />
+                      <div className="absolute top-full left-0 mt-2 w-auto min-w-[10rem] bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-20 overflow-hidden p-1">
+                        {generation.versions.map((v, idx) => (
+                          <div
+                            key={v.id}
+                            className={`flex items-center gap-0.5 rounded-lg ${
+                              idx === generation.currentVersionIndex
+                                ? 'bg-brand-teal/10'
+                                : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
+                            }`}
+                          >
+                            <button
+                              onClick={() => {
+                                onVersionChange(idx);
+                                setVersionDropdownOpen(false);
+                              }}
+                              title={v.type === 'refinement' && v.refinementPrompt ? `Refined: ${v.refinementPrompt}` : v.label}
+                              className={`flex-1 min-w-0 text-left pl-3 pr-2 py-2 text-sm font-mono inline-flex items-center gap-1.5 transition-colors ${
+                                idx === generation.currentVersionIndex
+                                  ? 'text-brand-teal font-semibold'
+                                  : 'text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              <span className="whitespace-nowrap">{v.label}</span>
+                              {v.type === 'refinement' && (
+                                <span
+                                  className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0"
+                                  aria-label="Refinement"
+                                />
+                              )}
+                            </button>
+                            {/* Allow deleting any version, not just refinements.
+                                When a generation contains only one version, the
+                                handler would throw "Cannot delete the last version"
+                                — surface that as a disabled state instead so the
+                                button is informative rather than error-producing. */}
+                            {(() => {
+                              const isOnlyVersion = generation.versions.length <= 1;
+                              const isBusy = Boolean(deletingRefinementId);
+                              const disabled = isOnlyVersion || isBusy;
+                              const tooltip = isOnlyVersion
+                                ? 'Cannot delete the only version — use the tile trash to remove the whole generation'
+                                : `Delete ${v.label}`;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleDeleteRefinementClick(v.id);
+                                  }}
+                                  disabled={disabled}
+                                  className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
+                                    disabled
+                                      ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                                      : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
+                                  }`}
+                                  aria-label={tooltip}
+                                  title={tooltip}
+                                >
+                                  {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                                </button>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Action buttons (top right). Hidden while the inline
                 comparison slider is active — they target a single version
                 (download, refine, info, etc.) which doesn't apply to the
                 two-up view, and their absolute position was overlapping the
                 slider's own Close / Swap / Side-by-side controls. */}
             <div
-              className={`absolute top-4 right-4 flex flex-wrap justify-end items-center gap-2 lg:gap-3 max-w-[calc(100%-2rem)] transition-opacity ${
+              className={`absolute top-4 right-4 flex flex-wrap justify-end items-center gap-2 lg:gap-3 max-w-[calc(100%-2rem)] transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
                 isComparing
                   ? 'opacity-0 pointer-events-none'
-                  : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
               }`}
             >
               {onEnterComparePicker && onExitComparePicker && (

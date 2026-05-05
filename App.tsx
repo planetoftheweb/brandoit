@@ -81,7 +81,8 @@ import {
   Globe,
   Github,
   ShieldCheck,
-  Minimize2
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 
 interface ToolbarSelectionCache {
@@ -305,6 +306,11 @@ const App: React.FC = () => {
   // Active Generations panel can be docked to a small floating pill so it
   // doesn't cover the main preview while batches run.
   const [isGenerationsPanelCollapsed, setIsGenerationsPanelCollapsed] = useState(false);
+  // Toolbar (Type/Style/Colors/Size/Model row) can be collapsed so the user
+  // can focus on previews. We auto-collapse on scroll-down past the toolbar
+  // and restore on scroll-up; a header button lets the user pin the choice
+  // ("user override" wins until the next scroll past the threshold).
+  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   // Ticks once per second while background generations are running so the
   // monitor's elapsed/remaining labels stay live.
   const [batchClockTick, setBatchClockTick] = useState(0);
@@ -486,18 +492,16 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []); // Run once on mount
 
-  // Sync preferences to Auth Service when they change AND a user is logged in
+  // Sync preferences to Auth Service when they change AND a user is logged in.
+  // We pass the full `user.preferences` (not a hand-picked subset) because
+  // `authService.updateUserPreferences` fully replaces the `preferences` map
+  // in Firestore. Sending a subset wipes any field we forgot to include —
+  // historically this clobbered `presets` / `folders` / `activeFolderId` on
+  // every page load, so a saved preset would vanish on the next refresh.
+  // `sanitizePreferences` already strips icons, arrays, and the admin flag.
   useEffect(() => {
     if (user) {
-      // Only sync settings/API keys now. Custom items are saved directly via resourceService.
-      // This runs when preferences change, not on every user load
-      authService.updateUserPreferences(user.id, {
-        geminiApiKey: user.preferences.geminiApiKey,
-        apiKeys: user.preferences.apiKeys,
-        selectedModel: user.preferences.selectedModel,
-        systemPrompt: user.preferences.systemPrompt,
-        settings: user.preferences.settings
-      }).catch(err => {
+      authService.updateUserPreferences(user.id, user.preferences).catch(err => {
         // Silently fail if it's just a sync issue (not a critical error)
         console.warn("Failed to sync preferences:", err);
       });
@@ -610,6 +614,64 @@ const App: React.FC = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [comparisonState.mode]);
+
+  // Auto-collapse the toolbar options row when the user scrolls down to look
+  // at images, restore it when they scroll back up. The intent is "give me
+  // back vertical pixels while I'm browsing previews" without removing the
+  // controls entirely. The threshold is small (just enough to avoid flicker
+  // from focusing the prompt textarea) so even a tiny scroll while viewing
+  // a large preview docks the toolbar — otherwise an image that fills the
+  // viewport never triggers the collapse because the user has nothing to
+  // scroll past. Manual header toggles still work because the next
+  // scroll-up restores them anyway.
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const COLLAPSE_THRESHOLD = 16;
+    // Skip auto-collapse while the user is actively typing in any text
+    // field. Now that the prompt input itself is part of the collapsible
+    // group, yanking it away mid-keystroke would feel like the cursor
+    // jumped or the page swallowed the prompt — both are jarring.
+    // Manual toggles (header button, scroll-back-to-top) still work.
+    const isTextInputFocused = (): boolean => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onScroll = () => {
+      const y = window.scrollY;
+      const delta = y - lastY;
+      if (delta > 2 && y > COLLAPSE_THRESHOLD) {
+        if (isTextInputFocused()) {
+          lastY = y;
+          return;
+        }
+        setIsToolbarCollapsed(true);
+      } else if (delta < -2 && y <= COLLAPSE_THRESHOLD) {
+        // Only restore once the user has come (almost) all the way back to
+        // the top. A casual mid-scroll wiggle shouldn't pop the toolbar back
+        // into view while they're still browsing the gallery below.
+        setIsToolbarCollapsed(false);
+      }
+      lastY = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Auto-collapse whenever the user lands on a new large preview. Without
+  // this, a freshly-selected image that fits inside the viewport never
+  // triggers the scroll-based collapse — the user would have to manually
+  // scroll past the (already-tall) toolbar just to get the focus mode they
+  // were after. Keying on the generation id (not the object) avoids
+  // re-collapsing on every refinement-version change for the same image.
+  useEffect(() => {
+    if (currentGeneration?.id) {
+      setIsToolbarCollapsed(true);
+    }
+  }, [currentGeneration?.id]);
 
   useEffect(() => {
     setConfig(prev => {
@@ -2341,6 +2403,24 @@ const App: React.FC = () => {
 
            <div className="h-6 w-px bg-gray-200 dark:bg-[#30363d]"></div>
 
+           {/* Focus mode toggle — collapses BOTH the toolbar options row
+               and the prompt input so the user can see more of the
+               preview/gallery. Only meaningful in the main view (not
+               admin/settings/catalog), where the ControlPanel is mounted.
+               The header itself stays z-50 so the click target sits
+               above the (z-40) toolbar even mid-collapse. */}
+           {!adminMode && !settingsMode && !catalogMode && (
+             <button
+               onClick={() => setIsToolbarCollapsed(prev => !prev)}
+               className="hidden md:inline-flex p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+               title={isToolbarCollapsed ? 'Show toolbar and prompt' : 'Hide toolbar and prompt to focus on preview'}
+               aria-pressed={isToolbarCollapsed}
+               aria-label={isToolbarCollapsed ? 'Show toolbar and prompt' : 'Hide toolbar and prompt'}
+             >
+               {isToolbarCollapsed ? <Maximize2 size={18} /> : <Minimize2 size={18} />}
+             </button>
+           )}
+
            <button 
              onClick={() => setIsHelpOpen(true)}
              className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
@@ -2421,6 +2501,8 @@ const App: React.FC = () => {
             onApplyPreset={handleApplyPreset}
             onSavePreset={user ? handleSavePreset : undefined}
             onDeletePreset={user ? handleDeletePreset : undefined}
+            isOptionsCollapsed={isToolbarCollapsed}
+            hasGenerated={!!currentGeneration}
           />
 
           {/* Main Content Area */}

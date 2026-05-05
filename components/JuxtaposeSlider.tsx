@@ -35,6 +35,14 @@ export interface JuxtaposeSliderProps {
    * doesn't feel like it's shrinking the moment the user enters compare mode.
    */
   toolbarOverlay?: boolean;
+  /**
+   * Notifies the parent whenever the user starts/stops dragging the divider.
+   * The main viewport uses this to mute every other overlay (rail, action
+   * buttons, labels, etc.) while the user is actively scrubbing — so they
+   * see ONLY the two images and the divider during the drag, and the chrome
+   * fades back in as soon as they release.
+   */
+  onDraggingChange?: (dragging: boolean) => void;
 }
 
 const parseAspectRatio = (value?: string): number | null => {
@@ -78,6 +86,7 @@ export const JuxtaposeSlider: React.FC<JuxtaposeSliderProps> = ({
   initialPercent = 50,
   maxHeight,
   toolbarOverlay = false,
+  onDraggingChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [percent, setPercent] = useState<number>(() => clamp(initialPercent, 0, 100));
@@ -130,6 +139,7 @@ export const JuxtaposeSlider: React.FC<JuxtaposeSliderProps> = ({
     event.preventDefault();
     (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
     setIsDragging(true);
+    onDraggingChange?.(true);
     updatePercentFromClientX(event.clientX);
   };
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -139,7 +149,23 @@ export const JuxtaposeSlider: React.FC<JuxtaposeSliderProps> = ({
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     (event.target as HTMLElement).releasePointerCapture?.(event.pointerId);
     setIsDragging(false);
+    onDraggingChange?.(false);
   };
+
+  // Belt-and-braces: if the parent unmounts the slider while the user is
+  // mid-drag (e.g. they hit Escape and the comparison closes), the
+  // pointerup we'd otherwise rely on never fires — so the parent would
+  // stay stuck thinking the user is still scrubbing. Reset on unmount.
+  useEffect(() => {
+    return () => {
+      if (isDragging) {
+        onDraggingChange?.(false);
+      }
+    };
+    // We intentionally only fire on unmount; reading the latest
+    // `isDragging` via closure is fine because the cleanup runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'ArrowLeft') {
@@ -261,24 +287,28 @@ export const JuxtaposeSlider: React.FC<JuxtaposeSliderProps> = ({
           <ArrowLeftRight size={16} className="text-slate-700" />
         </div>
 
-        {/* Corner chips */}
-        <div className="absolute top-3 left-3 px-2 py-1 rounded-md bg-black/60 text-white text-[11px] font-semibold backdrop-blur-sm">
+        {/* Corner chips — fade out while the user is actively scrubbing so
+            the divider read is unobstructed; back to full opacity when the
+            pointer is released. */}
+        <div className={`absolute top-3 left-3 px-2 py-1 rounded-md bg-black/60 text-white text-[11px] font-semibold backdrop-blur-sm transition-opacity duration-150 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
           {leftLabel}
         </div>
-        <div className="absolute top-3 right-3 px-2 py-1 rounded-md bg-black/60 text-white text-[11px] font-semibold backdrop-blur-sm">
+        <div className={`absolute top-3 right-3 px-2 py-1 rounded-md bg-black/60 text-white text-[11px] font-semibold backdrop-blur-sm transition-opacity duration-150 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
           {rightLabel}
         </div>
         {sizesDiffer && (
-          <div className={`absolute ${toolbarOverlay ? 'bottom-16' : 'bottom-3'} left-1/2 -translate-x-1/2 px-2 py-1 rounded-md bg-amber-500/90 text-white text-[11px] font-medium backdrop-blur-sm`}>
+          <div className={`absolute ${toolbarOverlay ? 'bottom-16' : 'bottom-3'} left-1/2 -translate-x-1/2 px-2 py-1 rounded-md bg-amber-500/90 text-white text-[11px] font-medium backdrop-blur-sm transition-opacity duration-150 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
             Sizes differ — letterboxed
           </div>
         )}
 
         {/* Overlay toolbar — lives INSIDE the slider surface so the card
             footprint equals a plain image preview. Toggled by the parent when
-            the comparison viewer is inlined into the main viewport. */}
+            the comparison viewer is inlined into the main viewport. Hidden
+            while the user drags so the toolbar doesn't compete with the
+            divider for attention. */}
         {toolbarOverlay && (
-          <div className="absolute bottom-3 right-3 flex items-center gap-2 pointer-events-auto">
+          <div className={`absolute bottom-3 right-3 flex items-center gap-2 pointer-events-auto transition-opacity duration-150 ${isDragging ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
             <button
               type="button"
               onClick={swap}

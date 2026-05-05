@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, GalleryHorizontal, Folder as FolderIcon, FolderPlus, Pin, PinOff, MoreHorizontal, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Clock, Copy, ArrowUpRight, Trash2, Download, Link, Image as ImageIcon, FileCode, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, GalleryHorizontal, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { describeImagePrompt } from '../services/geminiService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
@@ -23,8 +23,12 @@ const THUMBNAIL_GRID_CLASS: Record<ThumbnailSize, string> = {
   lg: 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4',
 };
 
+// Single-word labels keep the compact RichSelect trigger from wrapping
+// onto two lines at narrow widths (the trigger is `w-28 xl:w-32`, which
+// the hyphenated "X-Small" couldn't fit). The menu items still pair the
+// label with a longer description so the meaning stays obvious.
 const THUMBNAIL_SIZE_OPTIONS: RichSelectOption[] = [
-  { value: 'xs', label: 'X-Small', description: 'Pack the most thumbnails per row' },
+  { value: 'xs', label: 'Tiny', description: 'X-Small — most thumbnails per row' },
   { value: 'sm', label: 'Small', description: 'Compact grid' },
   { value: 'md', label: 'Medium', description: 'Default — balanced size' },
   { value: 'lg', label: 'Large', description: 'Bigger thumbnails, fewer per row' },
@@ -101,25 +105,39 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   // Folder UI state. `viewFolderId` is the folder whose tiles are currently
-  // shown in the grid; defaults to the sticky `activeFolderId` (or Inbox).
-  // The user can switch views without changing the sticky pin.
-  const [viewFolderId, setViewFolderId] = React.useState<string>(
-    activeFolderId || INBOX_FOLDER_ID
-  );
+  // shown in the grid. We persist it to localStorage so the gallery returns
+  // to the last-viewed folder on reload — without that, every refresh
+  // dropped the user back into Inbox even if they were deep in another
+  // folder. The activeFolderId pin (sticky for new generations) is a
+  // *separate* concept; user can be viewing folder A while pinning folder B.
+  const VIEW_FOLDER_PREF_KEY = 'recentGenerations.viewFolderId';
+  const [viewFolderId, setViewFolderId] = React.useState<string>(() => {
+    if (typeof window === 'undefined') return activeFolderId || INBOX_FOLDER_ID;
+    try {
+      const stored = window.localStorage.getItem(VIEW_FOLDER_PREF_KEY);
+      if (stored) return stored;
+    } catch {
+      // ignore
+    }
+    return activeFolderId || INBOX_FOLDER_ID;
+  });
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(VIEW_FOLDER_PREF_KEY, viewFolderId);
+    } catch {
+      // ignore — quota / private mode shouldn't break the UI
+    }
+  }, [viewFolderId]);
   const [renamingFolderId, setRenamingFolderId] = React.useState<string | null>(null);
   const [renameDraft, setRenameDraft] = React.useState('');
   const [pendingDeleteFolderId, setPendingDeleteFolderId] = React.useState<string | null>(null);
-  // The folder tab strip uses `overflow-x-auto`, which forces overflow-y to
-  // `auto` per CSS spec — that would clip an inline `absolute` dropdown below
-  // each chip. We instead remember the open kebab's button rect and render
-  // the menu through a portal at fixed coords so it floats above the strip.
-  const [openFolderMenu, setOpenFolderMenu] = React.useState<
-    { id: string; rect: DOMRect } | null
-  >(null);
-  const openFolderMenuId = openFolderMenu?.id ?? null;
-  const setOpenFolderMenuId = (id: string | null) => {
-    if (id === null) setOpenFolderMenu(null);
-  };
+  // Folder picker dropdown: combines the folder-name "label" with the
+  // count chip and the (formerly chip-strip) folder list into a single
+  // trigger + menu. Keeping it inside this component avoids having to
+  // teach RichSelect about per-row pin/rename/delete actions.
+  const [isFolderPickerOpen, setIsFolderPickerOpen] = React.useState(false);
+  const folderPickerRef = React.useRef<HTMLDivElement>(null);
   const [isCreatingFolder, setIsCreatingFolder] = React.useState(false);
   const [newFolderDraft, setNewFolderDraft] = React.useState('');
   const [folderBusy, setFolderBusy] = React.useState(false);
@@ -192,6 +210,43 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   }, [galleryPageSize]);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
+  // Hover preview: floats a large, full-aspect-ratio version of the tile's
+  // image above the grid. We capture the tile's bounding rect so the
+  // preview can be docked to the opposite side of the viewport — that way
+  // the source tile stays visible and the user can sweep across to other
+  // tiles without the preview ever covering the thing they're inspecting.
+  // Activation is gated to hover-capable pointing devices so touch users
+  // (who can't really "roll over" anything) don't get a preview that
+  // appears on tap and blocks subsequent taps.
+  const [hoverPreview, setHoverPreview] = React.useState<{ id: string; rect: DOMRect } | null>(null);
+  const hoverTimerRef = React.useRef<number | null>(null);
+  const clearHoverPreview = React.useCallback(() => {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoverPreview(null);
+  }, []);
+  const scheduleHoverPreview = React.useCallback(
+    (genId: string, element: HTMLElement) => {
+      if (typeof window === 'undefined') return;
+      // Skip on touch / coarse-pointer devices where the user can't truly
+      // hover. We check both `hover: hover` and `pointer: fine` to avoid
+      // false positives on hybrid devices in tablet mode.
+      if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+      // Selection mode and compare-pick mode already overlay the tile, and
+      // popping a large preview on top of those affordances would obscure
+      // the very thing the user is trying to interact with.
+      if (selectionMode || isComparePicking) return;
+      if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = window.setTimeout(() => {
+        // Re-read the rect at fire time so it reflects any layout that
+        // shifted during the show delay (lazy images settling, etc.).
+        setHoverPreview({ id: genId, rect: element.getBoundingClientRect() });
+      }, 320);
+    },
+    [selectionMode, isComparePicking]
+  );
 
   const exitSelectionMode = React.useCallback(() => {
     setSelectionMode(false);
@@ -229,45 +284,21 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
   }, [folders, viewFolderId]);
 
-  // Reposition the portal-rendered folder kebab menu when the page or any
-  // scrollable ancestor scrolls (the folder strip itself scrolls horizontally),
-  // and close it if the anchor button is no longer in the DOM.
+  // Close the folder picker and the move-to-folder picker on outside
+  // clicks / Escape, mirroring the existing toast lifecycle. Both menus
+  // tag themselves with `data-folder-menu` so a click *inside* either menu
+  // (or its trigger) is left alone.
   React.useEffect(() => {
-    if (!openFolderMenu) return;
-    const update = () => {
-      const button = document.querySelector(
-        `[data-folder-kebab="${openFolderMenu.id}"]`
-      ) as HTMLElement | null;
-      if (!button) {
-        setOpenFolderMenu(null);
-        return;
-      }
-      const rect = button.getBoundingClientRect();
-      setOpenFolderMenu((prev) =>
-        prev && prev.id === openFolderMenu.id ? { id: prev.id, rect } : prev
-      );
-    };
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
-    return () => {
-      window.removeEventListener('scroll', update, true);
-      window.removeEventListener('resize', update);
-    };
-  }, [openFolderMenu?.id]);
-
-  // Close the per-folder kebab and the move-to-folder picker on outside
-  // clicks / Escape, mirroring the existing toast lifecycle.
-  React.useEffect(() => {
-    if (!openFolderMenuId && !moveMenuOpen) return;
+    if (!isFolderPickerOpen && !moveMenuOpen) return;
     const onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && target.closest('[data-folder-menu]')) return;
-      setOpenFolderMenuId(null);
+      setIsFolderPickerOpen(false);
       setMoveMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setOpenFolderMenuId(null);
+        setIsFolderPickerOpen(false);
         setMoveMenuOpen(false);
       }
     };
@@ -277,7 +308,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       window.removeEventListener('mousedown', onClick);
       window.removeEventListener('keydown', onKey);
     };
-  }, [openFolderMenuId, moveMenuOpen]);
+  }, [isFolderPickerOpen, moveMenuOpen]);
 
   // Visible history is the slice of tiles that live in the currently-viewed
   // folder. Legacy items without a `folderId` are normalized into Inbox via
@@ -343,6 +374,35 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  // Drop the hover preview the moment the user enters a mode where it
+  // would interfere (selection, compare-pick), or when the underlying tile
+  // disappears from the visible page.
+  React.useEffect(() => {
+    if (selectionMode || isComparePicking) clearHoverPreview();
+  }, [selectionMode, isComparePicking, clearHoverPreview]);
+
+  React.useEffect(() => {
+    if (!hoverPreview) return;
+    const stillVisible = pagedVisibleHistory.some((g) => g.id === hoverPreview.id);
+    if (!stillVisible) clearHoverPreview();
+  }, [hoverPreview, pagedVisibleHistory, clearHoverPreview]);
+
+  // The preview is anchored relative to the tile's captured rect, so any
+  // scroll movement would leave it visually disconnected from the tile
+  // that triggered it. Dismissing on scroll mirrors OS-level tooltips.
+  React.useEffect(() => {
+    if (!hoverPreview) return;
+    const onScroll = () => clearHoverPreview();
+    window.addEventListener('scroll', onScroll, true);
+    return () => window.removeEventListener('scroll', onScroll, true);
+  }, [hoverPreview, clearHoverPreview]);
 
   React.useEffect(() => {
     return () => {
@@ -516,76 +576,468 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
   };
 
+  // Folder picker — combined trigger + dropdown menu replacing the prior
+  // chip-strip. The trigger shows the currently-viewed folder's name, item
+  // count, and a small pin badge if it's also the sticky default for new
+  // generations. The menu lists every folder with inline pin/rename/delete
+  // actions and a "+ New folder" affordance at the bottom. Per-row icons
+  // (pencil/trash) are always visible so touch users don't need a hover to
+  // surface them — only the rename pencil and delete trash are inline; the
+  // rest of the row click switches the view (and closes the menu).
+  const renderFolderPicker = () => {
+    const activeFolder =
+      folders.find((f) => f.id === viewFolderId) ??
+      folders.find((f) => f.id === INBOX_FOLDER_ID) ??
+      folders[0];
+    const activeName = activeFolder?.name ?? 'Inbox';
+    const activeCount = activeFolder
+      ? folderCounts.get(activeFolder.id) || 0
+      : 0;
+
+    const handleSelectFolder = (folderId: string) => {
+      setViewFolderId(folderId);
+      setIsFolderPickerOpen(false);
+      setRenamingFolderId(null);
+      setRenameDraft('');
+      setIsCreatingFolder(false);
+      setNewFolderDraft('');
+    };
+
+    const handleTogglePin = async (folder: Folder) => {
+      const wasPinned = folder.id === activeFolderId;
+      try {
+        setFolderBusy(true);
+        await onSetActiveFolder(wasPinned ? null : folder.id);
+        showToast(
+          wasPinned
+            ? 'Sticky folder cleared'
+            : `New tiles will save to ${folder.name}`
+        );
+      } catch (err) {
+        console.error('Toggle sticky folder failed:', err);
+        showToast('Could not update sticky folder');
+      } finally {
+        setFolderBusy(false);
+      }
+    };
+
+    return (
+      <div
+        className="relative"
+        ref={folderPickerRef}
+        data-folder-menu
+      >
+        <button
+          type="button"
+          onClick={() => setIsFolderPickerOpen((open) => !open)}
+          aria-haspopup="listbox"
+          aria-expanded={isFolderPickerOpen}
+          aria-label={`Folder: ${activeName}, ${activeCount} item${activeCount === 1 ? '' : 's'}. Click to switch folders.`}
+          className="inline-flex items-center gap-2 pl-2.5 pr-2 py-1.5 min-h-9 rounded-full border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal transition"
+        >
+          <FolderIcon size={14} aria-hidden />
+          <span className="truncate max-w-[10rem]">{activeName}</span>
+          <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300">
+            {activeCount}
+          </span>
+          {/* Pin badge intentionally omitted from the trigger — the menu
+              still shows which folder is the sticky default via the
+              highlighted pin button on its row. Showing it twice (here
+              *and* in the menu) was redundant and added visual noise. */}
+          <ChevronDown
+            size={14}
+            aria-hidden
+            className={`text-slate-400 transition-transform ${
+              isFolderPickerOpen ? 'rotate-180' : ''
+            }`}
+          />
+        </button>
+
+        {isFolderPickerOpen && (
+          <div
+            role="listbox"
+            aria-label="Switch folder"
+            data-folder-menu
+            className="absolute left-0 top-full mt-2 z-30 w-72 max-h-[min(70vh,440px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
+          >
+            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Folders
+            </div>
+            {folders.map((folder) => {
+              const isViewing = folder.id === viewFolderId;
+              const isPinned = folder.id === activeFolderId;
+              const isInbox = folder.id === INBOX_FOLDER_ID;
+              const count = folderCounts.get(folder.id) || 0;
+              const isRenaming = renamingFolderId === folder.id;
+
+              if (isRenaming) {
+                return (
+                  <form
+                    key={folder.id}
+                    className="flex items-center gap-1 px-2 py-1"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const next = renameDraft.trim();
+                      if (!next) return;
+                      try {
+                        setFolderBusy(true);
+                        await onRenameFolder(folder.id, next);
+                        setRenamingFolderId(null);
+                        setRenameDraft('');
+                        showToast('Folder renamed');
+                      } catch (err) {
+                        console.error('Rename folder failed:', err);
+                        showToast('Rename failed');
+                      } finally {
+                        setFolderBusy(false);
+                      }
+                    }}
+                  >
+                    <FolderIcon
+                      size={14}
+                      aria-hidden
+                      className="text-brand-teal shrink-0"
+                    />
+                    <input
+                      autoFocus
+                      type="text"
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setRenamingFolderId(null);
+                          setRenameDraft('');
+                        }
+                      }}
+                      className="flex-1 min-w-0 text-xs font-semibold bg-transparent border border-brand-teal rounded-md px-2 py-1 min-h-8 focus:outline-none focus:ring-2 focus:ring-brand-teal/40 text-slate-900 dark:text-slate-100"
+                      aria-label={`Rename ${folder.name}`}
+                      maxLength={60}
+                    />
+                    <button
+                      type="submit"
+                      disabled={folderBusy || !renameDraft.trim()}
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
+                      aria-label="Save folder name"
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenamingFolderId(null);
+                        setRenameDraft('');
+                      }}
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
+                      aria-label="Cancel rename"
+                    >
+                      <XIcon size={14} />
+                    </button>
+                  </form>
+                );
+              }
+
+              return (
+                <div
+                  key={folder.id}
+                  className={`group flex items-center gap-1 rounded-md px-1 py-0.5 ${
+                    isViewing
+                      ? 'bg-brand-teal/10'
+                      : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={isViewing}
+                    onClick={() => handleSelectFolder(folder.id)}
+                    className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left px-2 py-1.5 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
+                      isViewing
+                        ? 'text-brand-teal'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    <FolderIcon size={14} aria-hidden />
+                    <span className="truncate flex-1">{folder.name}</span>
+                    <span
+                      className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums ${
+                        isViewing
+                          ? 'bg-brand-teal text-white'
+                          : 'bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleTogglePin(folder)}
+                    title={
+                      isPinned
+                        ? 'Sticky for new generations — click to clear'
+                        : 'Pin as sticky folder for new generations'
+                    }
+                    aria-label={
+                      isPinned
+                        ? `Clear sticky pin on ${folder.name}`
+                        : `Pin ${folder.name} as sticky folder`
+                    }
+                    aria-pressed={isPinned}
+                    disabled={folderBusy}
+                    className={`inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md transition ${
+                      isPinned
+                        ? 'text-amber-500 hover:bg-amber-100/40 dark:hover:bg-amber-500/10'
+                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                    }`}
+                  >
+                    {isPinned ? (
+                      <Pin size={14} fill="currentColor" />
+                    ) : (
+                      <PinOff size={14} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenamingFolderId(folder.id);
+                      setRenameDraft(folder.name);
+                    }}
+                    title={`Rename ${folder.name}`}
+                    aria-label={`Rename ${folder.name}`}
+                    className="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  {!isInbox ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsFolderPickerOpen(false);
+                        setPendingDeleteFolderId(folder.id);
+                      }}
+                      title={`Delete ${folder.name}`}
+                      aria-label={`Delete ${folder.name}`}
+                      className="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  ) : (
+                    // Spacer keeps Inbox's row aligned with the others so
+                    // the trash columns line up across rows.
+                    <span className="h-8 w-8 shrink-0" aria-hidden />
+                  )}
+                </div>
+              );
+            })}
+
+            <div
+              className="my-1 border-t border-gray-200 dark:border-[#30363d]"
+              aria-hidden
+            />
+
+            {isCreatingFolder ? (
+              <form
+                className="flex items-center gap-1 px-2 py-1"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const next = newFolderDraft.trim();
+                  if (!next) return;
+                  try {
+                    setFolderBusy(true);
+                    const created = await onCreateFolder(next);
+                    setIsCreatingFolder(false);
+                    setNewFolderDraft('');
+                    setViewFolderId(created.id);
+                    setIsFolderPickerOpen(false);
+                    showToast(`Created ${created.name}`);
+                  } catch (err) {
+                    console.error('Create folder failed:', err);
+                    showToast('Could not create folder');
+                  } finally {
+                    setFolderBusy(false);
+                  }
+                }}
+              >
+                <FolderPlus
+                  size={14}
+                  aria-hidden
+                  className="text-brand-teal shrink-0"
+                />
+                <input
+                  autoFocus
+                  type="text"
+                  value={newFolderDraft}
+                  onChange={(e) => setNewFolderDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setIsCreatingFolder(false);
+                      setNewFolderDraft('');
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="flex-1 min-w-0 text-xs font-semibold bg-transparent border border-brand-teal rounded-md px-2 py-1 min-h-8 focus:outline-none focus:ring-2 focus:ring-brand-teal/40 text-slate-900 dark:text-slate-100"
+                  maxLength={60}
+                />
+                <button
+                  type="submit"
+                  disabled={folderBusy || !newFolderDraft.trim()}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
+                  aria-label="Create folder"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreatingFolder(false);
+                    setNewFolderDraft('');
+                  }}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
+                  aria-label="Cancel"
+                >
+                  <XIcon size={14} />
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatingFolder(true);
+                  setNewFolderDraft('');
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-teal rounded-md hover:bg-brand-teal/10 transition"
+              >
+                <FolderPlus size={14} aria-hidden />
+                New folder
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 md:px-6 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 border-t border-gray-200 dark:border-[#30363d] mt-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-        <div className="flex flex-wrap items-center gap-2 text-slate-500 dark:text-slate-400">
-          <Clock size={18} />
-          <h3 className="text-sm font-bold uppercase tracking-wider">Recent Generations</h3>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
-            {galleryPaginationEnabled && visibleHistory.length > 0 ? (
-              <>
-                (Items {galleryRangeStart}–{galleryRangeEnd} of {visibleHistory.length} in folder
-                {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
-              </>
-            ) : (
-              <>
-                ({visibleHistory.length} {visibleHistory.length === 1 ? 'item' : 'items'} in folder
-                {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''})
-              </>
-            )}
-          </span>
+        <div className="flex flex-wrap items-center gap-3 text-slate-500 dark:text-slate-400">
+          <div className="flex items-center gap-2">
+            {/* Section is self-evident from context (it's right under the
+                generator and shows the gallery). The clock icon alone reads
+                as "Recent" at narrow widths; on md+ we add the short
+                "Recent" word for a touch more clarity. The full
+                "Recent Generations" wording was redundant. */}
+            <Clock size={18} aria-label="Recent" />
+            <h3 className="hidden md:block text-sm font-bold uppercase tracking-wider">
+              Recent
+            </h3>
+          </div>
+          {/* Folder picker — combines the prior "Inbox" chip and "(N items in
+              folder)" text into one dropdown. The trigger surfaces the active
+              view's name + count + sticky-pin state; the menu lists every
+              folder with inline pin/rename/delete actions and a "+ New
+              folder" affordance at the bottom. The wrapping container sets
+              `position: relative` so the absolutely-positioned menu anchors
+              under the trigger, and `data-folder-menu` keeps the global
+              outside-click handler from closing the menu when the user
+              interacts with anything inside it (rename input, etc). */}
+          {renderFolderPicker()}
+          {/* Pagination context survives because it's about the visible
+              window of items, not which folder we're in (the dropdown
+              already conveys that). When not paginated we omit the count
+              entirely — the dropdown trigger already shows it. */}
+          {galleryPaginationEnabled && visibleHistory.length > 0 && (
+            <span className="text-xs text-slate-400 dark:text-slate-500">
+              Items {galleryRangeStart}–{galleryRangeEnd} of {visibleHistory.length}
+              {history.length !== visibleHistory.length ? ` · ${history.length} total` : ''}
+            </span>
+          )}
           {selectionMode && selectedIds.length > 0 && (
             <span className="text-xs font-semibold text-brand-teal" aria-live="polite">
               {selectedIds.length} selected
             </span>
           )}
         </div>
-        {/* Toolbar — `flex-nowrap` so action buttons never break onto a second
-            row. Each button collapses its text label to icon-only below `xl`
-            (1280px), which is roughly the width at which all four buttons +
-            the heading on the left fit comfortably without wrapping. The
-            buttons keep their accessible names via `aria-label`/`title`. */}
-        <div className="flex flex-nowrap items-center gap-2">
+        {/* Toolbar — `flex-nowrap` so action buttons never break onto a
+            second row. Buttons are fully icon-only at every breakpoint;
+            each one renders the dark `bg-black/90` floating tooltip used
+            elsewhere in the app (see `ControlPanel` Reset / Upload brand)
+            so the meaning is still discoverable on hover or keyboard
+            focus. Going icon-only at all widths frees ~150px the gallery
+            heading + selection counter need on the left. The DownloadMenu
+            count is folded into its tooltip text — the leading "X selected"
+            indicator already exposes the same number visibly. Tooltips
+            sit *below* the button (`top-full mt-2`) so they don't get
+            clipped by the sticky control panel that floats above the
+            gallery. Every button uses a distinct named group
+            (`group/tip-<id>`) so a single hovered button never lights up
+            siblings. */}
+        <div className="flex flex-nowrap items-center gap-1.5">
           {selectionMode ? (
             <>
               <button
                 type="button"
                 onClick={() => setSelectedIds(visibleHistory.map((g) => g.id))}
-                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+                aria-label="Select all items in this folder"
+                className="group/tip-selectall relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
               >
-                Select all
+                <CheckSquare size={16} aria-hidden />
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-selectall:opacity-100 group-focus-visible/tip-selectall:opacity-100 transition-opacity z-20"
+                >
+                  Select all
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedIds([])}
-                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition"
+                aria-label="Clear current selection"
+                className="group/tip-clear relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
               >
-                Clear
+                <Square size={16} aria-hidden />
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-clear:opacity-100 group-focus-visible/tip-clear:opacity-100 transition-opacity z-20"
+                >
+                  Clear selection
+                </span>
               </button>
               <DownloadMenu
                 mode="all-only"
                 allGenerations={downloadScope}
                 allLabel={downloadScopeLabel}
-                triggerLabel={downloadScopeLabel}
                 triggerTitle={downloadScopeLabel}
+                triggerTooltip={downloadScopeLabel}
+                // Hide the visible label on the trigger; the count still
+                // shows on the left ("X selected") and inside the open
+                // dropdown's section header. Without this, the menu's own
+                // fallback would render `allLabel` as a visible span.
+                triggerLabelClassName="hidden"
                 icon={<Archive size={16} aria-hidden />}
-                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 min-h-11 rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition"
+                triggerClassName="inline-flex items-center justify-center gap-1 text-xs font-semibold px-3 py-2 min-h-11 rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition shrink-0"
                 disabled={downloadScope.length === 0}
                 onNotify={showToast}
                 align="right"
               />
-              <div className="relative" data-folder-menu>
+              <div className="relative shrink-0" data-folder-menu>
                 <button
                   type="button"
                   onClick={() => setMoveMenuOpen((prev) => !prev)}
                   disabled={selectedIds.length === 0 || folderBusy}
                   aria-haspopup="menu"
                   aria-expanded={moveMenuOpen}
-                  className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none"
+                  aria-label="Move selected items to a folder"
+                  className="group/tip-move relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <FolderInput size={16} aria-hidden />
-                  Move to folder
+                  <span
+                    role="tooltip"
+                    className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-move:opacity-100 group-focus-visible/tip-move:opacity-100 transition-opacity z-20"
+                  >
+                    Move to folder
+                  </span>
                 </button>
                 {moveMenuOpen && (
                   <div
@@ -636,14 +1088,28 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 type="button"
                 onClick={exitSelectionMode}
-                className="text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-slate-500 transition"
+                aria-label="Exit selection mode"
+                className="group/tip-cancel relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-slate-500 transition shrink-0"
               >
-                Cancel
+                <XIcon size={16} aria-hidden />
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-cancel:opacity-100 group-focus-visible/tip-cancel:opacity-100 transition-opacity z-20"
+                >
+                  Exit selection mode
+                </span>
               </button>
             </>
           ) : (
             <>
-              <div className="w-32 xl:w-36 shrink-0">
+              {/* Thumbnail-size selector — icon-only by default to match the
+                  other icon buttons in this row. The current value name
+                  (Tiny / Small / Medium / Large) only appears at xl+ where
+                  there's plenty of horizontal room; below that the
+                  LayoutGrid icon plus chevron are enough to signal a size
+                  picker, and the open menu still surfaces the active
+                  selection clearly. */}
+              <div className="w-auto xl:w-32 shrink-0">
                 <RichSelect
                   value={thumbnailSize}
                   onChange={(value) => setThumbnailSize(value as ThumbnailSize)}
@@ -653,22 +1119,25 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   compact
                   buttonClassName="rounded-lg min-h-11"
                   menuClassName="max-w-[16rem] z-[40]"
+                  triggerLabelClassName="hidden xl:inline"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => setShowDetails((v) => !v)}
                 aria-pressed={showDetails}
-                aria-label={showDetails ? 'Hide details' : 'Show details'}
-                title={showDetails ? 'Hide prompt and tag details under each thumbnail' : 'Show prompt and tag details under each thumbnail'}
-                className={`inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border transition shrink-0 ${
+                aria-label={showDetails ? 'Hide prompt and tag details under each thumbnail' : 'Show prompt and tag details under each thumbnail'}
+                className={`group/tip-details relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border transition shrink-0 ${
                   showDetails
                     ? 'border-brand-teal bg-brand-teal/10 text-brand-teal'
                     : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal'
                 }`}
               >
                 {showDetails ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-                <span className="hidden xl:inline">
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-details:opacity-100 group-focus-visible/tip-details:opacity-100 transition-opacity z-20"
+                >
                   {showDetails ? 'Hide details' : 'Show details'}
                 </span>
               </button>
@@ -676,11 +1145,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 mode="all-only"
                 allGenerations={visibleHistory}
                 allLabel={`Download all (${visibleHistory.length})`}
-                triggerLabel={`Download all (${visibleHistory.length})`}
-                triggerTitle="Download all in folder as ZIP"
-                triggerLabelClassName="hidden xl:inline"
+                triggerTitle={`Download all (${visibleHistory.length}) in folder as ZIP`}
+                triggerTooltip={`Download all (${visibleHistory.length}) in folder as ZIP`}
+                // Hide the visible "Download all (N)" label on the trigger;
+                // the gallery heading already shows the count next to the
+                // folder name, and the open dropdown still surfaces it in
+                // its section header. Without this, DownloadMenu's own
+                // fallback would render `allLabel` as a visible span.
+                triggerLabelClassName="hidden"
                 icon={<Archive size={16} aria-hidden />}
-                triggerClassName="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none shrink-0"
+                triggerClassName="inline-flex items-center justify-center gap-1 text-xs font-semibold px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition disabled:opacity-50 disabled:pointer-events-none shrink-0"
                 disabled={visibleHistory.length === 0}
                 onNotify={showToast}
                 align="right"
@@ -688,253 +1162,28 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectionMode(true)}
-                aria-label="Select for export"
-                title="Select for export"
-                className="inline-flex items-center justify-center gap-2 text-xs font-semibold px-3 xl:px-4 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
+                aria-label="Select items to move to a folder or export"
+                className="group/tip-select relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
               >
                 <CheckSquare size={16} aria-hidden />
-                <span className="hidden xl:inline">Select for export</span>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-select:opacity-100 group-focus-visible/tip-select:opacity-100 transition-opacity z-20"
+                >
+                  Select items
+                </span>
               </button>
             </>
           )}
         </div>
       </div>
 
-      {/* Folder tab strip. Each chip filters the grid to its folder; the
-          pin icon next to the folder name controls which folder is the
-          sticky default for new generations. The kebab opens rename /
-          delete actions (Inbox hides Delete). The trailing chip starts a
-          folder-creation flow with an inline name input. */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-4 border-b border-gray-200 dark:border-[#30363d]">
-        {folders.map((folder) => {
-          const isViewing = folder.id === viewFolderId;
-          // The pin lights up only when the user has explicitly pinned a
-          // folder. When `activeFolderId` is undefined we don't auto-light
-          // Inbox so users can tell at a glance whether stickiness is
-          // currently set or cleared.
-          const isPinned = folder.id === activeFolderId;
-          const isInbox = folder.id === INBOX_FOLDER_ID;
-          const count = folderCounts.get(folder.id) || 0;
-          const isRenaming = renamingFolderId === folder.id;
-          return (
-            <div
-              key={folder.id}
-              data-folder-menu
-              className={`group flex items-center gap-1 rounded-full border px-1 py-1 transition shrink-0 ${
-                isViewing
-                  ? 'border-brand-teal bg-brand-teal/10 text-brand-teal'
-                  : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal'
-              }`}
-            >
-              {isRenaming ? (
-                <form
-                  className="flex items-center gap-1 px-2"
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    const next = renameDraft.trim();
-                    if (!next) return;
-                    try {
-                      setFolderBusy(true);
-                      await onRenameFolder(folder.id, next);
-                      setRenamingFolderId(null);
-                      setRenameDraft('');
-                      showToast('Folder renamed');
-                    } catch (err) {
-                      console.error('Rename folder failed:', err);
-                      showToast('Rename failed');
-                    } finally {
-                      setFolderBusy(false);
-                    }
-                  }}
-                >
-                  <input
-                    autoFocus
-                    type="text"
-                    value={renameDraft}
-                    onChange={(e) => setRenameDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        setRenamingFolderId(null);
-                        setRenameDraft('');
-                      }
-                    }}
-                    className="text-xs font-semibold bg-transparent border border-brand-teal rounded-md px-2 py-1 min-h-9 focus:outline-none focus:ring-2 focus:ring-brand-teal/40 text-slate-900 dark:text-slate-100"
-                    aria-label={`Rename ${folder.name}`}
-                    maxLength={60}
-                  />
-                  <button
-                    type="submit"
-                    disabled={folderBusy || !renameDraft.trim()}
-                    className="inline-flex items-center justify-center h-9 w-9 rounded-md text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
-                    aria-label="Save folder name"
-                  >
-                    <Check size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenamingFolderId(null);
-                      setRenameDraft('');
-                    }}
-                    className="inline-flex items-center justify-center h-9 w-9 rounded-md text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
-                    aria-label="Cancel rename"
-                  >
-                    <XIcon size={14} />
-                  </button>
-                </form>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setViewFolderId(folder.id)}
-                    aria-pressed={isViewing}
-                    className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 min-h-9 rounded-full text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal"
-                  >
-                    <FolderIcon size={14} aria-hidden />
-                    <span className="truncate max-w-[10rem]">{folder.name}</span>
-                    <span className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums ${
-                      isViewing ? 'bg-brand-teal text-white' : 'bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300'
-                    }`}>
-                      {count}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        setFolderBusy(true);
-                        // Toggle: pinning the already-sticky folder clears
-                        // the pin (new tiles fall back to Inbox).
-                        await onSetActiveFolder(isPinned ? null : folder.id);
-                        showToast(
-                          isPinned
-                            ? 'Sticky folder cleared'
-                            : `New tiles will save to ${folder.name}`
-                        );
-                      } catch (err) {
-                        console.error('Toggle sticky folder failed:', err);
-                        showToast('Could not update sticky folder');
-                      } finally {
-                        setFolderBusy(false);
-                      }
-                    }}
-                    title={
-                      isPinned
-                        ? 'Sticky for new generations — click to clear'
-                        : 'Pin as sticky folder for new generations'
-                    }
-                    aria-label={
-                      isPinned
-                        ? `Clear sticky pin on ${folder.name}`
-                        : `Pin ${folder.name} as sticky folder`
-                    }
-                    aria-pressed={isPinned}
-                    disabled={folderBusy}
-                    className={`inline-flex items-center justify-center h-9 w-9 rounded-full transition ${
-                      isPinned
-                        ? 'text-amber-500 hover:bg-amber-100/40 dark:hover:bg-amber-500/10'
-                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
-                    }`}
-                  >
-                    {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      if (openFolderMenu?.id === folder.id) {
-                        setOpenFolderMenu(null);
-                        return;
-                      }
-                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      setOpenFolderMenu({ id: folder.id, rect });
-                    }}
-                    aria-haspopup="menu"
-                    aria-expanded={openFolderMenuId === folder.id}
-                    aria-label={`Folder actions for ${folder.name}`}
-                    data-folder-kebab={folder.id}
-                    className="inline-flex items-center justify-center h-9 w-9 rounded-full text-slate-500 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]"
-                  >
-                    <MoreHorizontal size={14} />
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-
-        {isCreatingFolder ? (
-          <form
-            data-folder-menu
-            className="flex items-center gap-1 rounded-full border border-brand-teal bg-white dark:bg-[#161b22] px-2 py-1 shrink-0"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const next = newFolderDraft.trim();
-              if (!next) return;
-              try {
-                setFolderBusy(true);
-                const created = await onCreateFolder(next);
-                setIsCreatingFolder(false);
-                setNewFolderDraft('');
-                setViewFolderId(created.id);
-                showToast(`Created ${created.name}`);
-              } catch (err) {
-                console.error('Create folder failed:', err);
-                showToast('Could not create folder');
-              } finally {
-                setFolderBusy(false);
-              }
-            }}
-          >
-            <FolderPlus size={14} className="text-brand-teal" aria-hidden />
-            <input
-              autoFocus
-              type="text"
-              value={newFolderDraft}
-              onChange={(e) => setNewFolderDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  setIsCreatingFolder(false);
-                  setNewFolderDraft('');
-                }
-              }}
-              placeholder="Folder name"
-              className="text-xs font-semibold bg-transparent border-0 px-1 py-1 min-h-9 focus:outline-none text-slate-900 dark:text-slate-100 w-32"
-              maxLength={60}
-            />
-            <button
-              type="submit"
-              disabled={folderBusy || !newFolderDraft.trim()}
-              className="inline-flex items-center justify-center h-9 w-9 rounded-full text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
-              aria-label="Create folder"
-            >
-              <Check size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsCreatingFolder(false);
-                setNewFolderDraft('');
-              }}
-              className="inline-flex items-center justify-center h-9 w-9 rounded-full text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
-              aria-label="Cancel"
-            >
-              <XIcon size={14} />
-            </button>
-          </form>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              setIsCreatingFolder(true);
-              setNewFolderDraft('');
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1 min-h-9 rounded-full border border-dashed border-gray-300 dark:border-[#30363d] text-xs font-semibold text-slate-600 dark:text-slate-300 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
-          >
-            <FolderPlus size={14} aria-hidden />
-            New folder
-          </button>
-        )}
-      </div>
+      {/* Folder tab strip removed — replaced by the inline folder-picker
+          dropdown rendered above by `renderFolderPicker`. The dropdown is
+          denser (one trigger vs. a horizontally-scrollable rail of chips),
+          persists the chosen view via localStorage so reloads return to
+          the user's last folder, and keeps every per-folder action
+          (pin/rename/delete + create) colocated in one menu. */}
 
       {galleryPaginationEnabled && visibleHistory.length > 0 && (
         <div
@@ -1041,6 +1290,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal'
               }`}
               data-comparison-batch={batchId || undefined}
+              onMouseEnter={(e) => scheduleHoverPreview(gen.id, e.currentTarget)}
+              onMouseLeave={clearHoverPreview}
             >
               {selectionMode && (
                 <div className="absolute top-2 left-2 z-20">
@@ -1365,52 +1616,130 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         );
       })()}
 
-      {/* Folder kebab dropdown — rendered through a portal so it isn't
-          clipped by the folder strip's `overflow-x-auto` (which CSS upgrades
-          to `overflow-y: auto` and hides anything that overflows below). */}
-      {openFolderMenu && (() => {
-        const target = folders.find((f) => f.id === openFolderMenu.id);
-        if (!target) return null;
-        const isInbox = target.id === INBOX_FOLDER_ID;
-        // Anchor the menu under the kebab's right edge, mirroring the prior
-        // `right-0 top-full mt-1` placement.
-        const menuWidth = 160;
-        const top = openFolderMenu.rect.bottom + 4;
-        const left = Math.max(8, openFolderMenu.rect.right - menuWidth);
+      {/* Folder kebab portal removed — rename / delete actions now live
+          inline in each row of the folder-picker dropdown, so we no longer
+          need the portal-based escape hatch that was working around the
+          chip rail's overflow clipping. */}
+
+      {/* Hover preview — a large, full-aspect-ratio render of whichever
+          tile the cursor is over. Rendered via a portal so it floats above
+          the gallery grid and folder strip without being clipped by their
+          overflow containers.
+          
+          Placement strategy: the preview docks to whichever side of the
+          viewport has more room around the hovered tile (right vs left,
+          falling back to bottom vs top on narrow viewports). This keeps
+          the source tile fully visible so the user can move on to the
+          next tile without the preview ever sitting on top of the image
+          they're inspecting. `pointer-events-none` keeps the underlying
+          tile's hover toolbar and click target fully usable, and
+          `aria-hidden` keeps it out of the a11y tree (the source tile
+          already exposes the same image via its `<img alt>` and the
+          "Restore" button). */}
+      {hoverPreview && (() => {
+        const gen = pagedVisibleHistory.find((g) => g.id === hoverPreview.id);
+        if (!gen) return null;
+        const latestVersion = getLatestVersion(gen);
+        const imageUrl = getDisplayImageUrl(gen);
+        const modelLabel = getModelLabel(latestVersion.modelId || gen.modelId);
+
+        const margin = 16;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const { rect } = hoverPreview;
+        // Available gutter on each side of the tile, minus the screen
+        // margin we always want to keep around the preview.
+        const spaceRight = Math.max(0, vw - rect.right - margin * 2);
+        const spaceLeft = Math.max(0, rect.left - margin * 2);
+        const spaceBelow = Math.max(0, vh - rect.bottom - margin * 2);
+        const spaceAbove = Math.max(0, rect.top - margin * 2);
+        const horizontalSpace = Math.max(spaceLeft, spaceRight);
+        const verticalSpace = Math.max(spaceAbove, spaceBelow);
+        // If neither side gutter is wide enough for a useful preview we
+        // dock above/below instead. ~360px is roughly the smallest size
+        // that still feels meaningfully larger than a tile.
+        const preferVertical = horizontalSpace < 360 && verticalSpace > horizontalSpace;
+        const placement: 'right' | 'left' | 'below' | 'above' = preferVertical
+          ? spaceBelow >= spaceAbove
+            ? 'below'
+            : 'above'
+          : spaceRight >= spaceLeft
+            ? 'right'
+            : 'left';
+
+        const style: React.CSSProperties = { position: 'fixed', zIndex: 60 };
+        if (placement === 'right' || placement === 'left') {
+          // Side dock — width fills the chosen gutter (capped) and the
+          // card vertically tracks the tile's center so the eye doesn't
+          // have to jump.
+          const width = Math.min(640, placement === 'right' ? spaceRight : spaceLeft);
+          const maxHeight = vh - margin * 2;
+          style.width = `${width}px`;
+          style.maxHeight = `${maxHeight}px`;
+          if (placement === 'right') style.left = `${rect.right + margin}px`;
+          else style.right = `${vw - rect.left + margin}px`;
+          // Center vertically on the tile, then clamp inside the viewport.
+          const tileCenterY = rect.top + rect.height / 2;
+          const desiredTop = tileCenterY - maxHeight / 2;
+          style.top = `${Math.max(margin, Math.min(desiredTop, vh - margin - maxHeight))}px`;
+        } else {
+          // Vertical dock (mostly mobile-ish viewports). Span most of the
+          // width and sit above or below the tile.
+          const width = Math.min(720, vw - margin * 2);
+          const maxHeight = (placement === 'below' ? spaceBelow : spaceAbove);
+          style.width = `${width}px`;
+          style.maxHeight = `${maxHeight}px`;
+          // Center horizontally on the tile, clamped to viewport.
+          const tileCenterX = rect.left + rect.width / 2;
+          const desiredLeft = tileCenterX - width / 2;
+          style.left = `${Math.max(margin, Math.min(desiredLeft, vw - margin - width))}px`;
+          if (placement === 'below') style.top = `${rect.bottom + margin}px`;
+          else style.bottom = `${vh - rect.top + margin}px`;
+        }
+
+        // The image has to leave room for the prompt/meta footer below it
+        // (~64px) plus the card's borders, so we shrink its max-height by
+        // a fixed gutter rather than letting it claim the full card.
+        const imageMaxHeight = `calc(${(style.maxHeight as string)} - 80px)`;
+
         return createPortal(
           <div
-            role="menu"
-            data-folder-menu
-            style={{ position: 'fixed', top, left, minWidth: menuWidth, zIndex: 50 }}
-            className="rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
+            aria-hidden
+            style={style}
+            className="pointer-events-none animate-in fade-in zoom-in-95 duration-150"
           >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setRenamingFolderId(target.id);
-                setRenameDraft(target.name);
-                setOpenFolderMenu(null);
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 rounded-md hover:bg-gray-100 dark:hover:bg-[#21262d]"
-            >
-              <Pencil size={14} aria-hidden />
-              Rename
-            </button>
-            {!isInbox && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpenFolderMenu(null);
-                  setPendingDeleteFolderId(target.id);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-red-600 dark:text-red-300 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20"
+            <div className="rounded-2xl overflow-hidden border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-2xl flex flex-col max-h-full">
+              <div
+                className="w-full bg-gray-50 dark:bg-[#0d1117] flex items-center justify-center min-h-0 flex-1"
+                style={{ maxHeight: imageMaxHeight }}
               >
-                <Trash2 size={14} aria-hidden />
-                Delete folder
-              </button>
-            )}
+                {latestVersion.mimeType === 'image/svg+xml' && latestVersion.svgCode ? (
+                  <div
+                    className="w-full h-full flex items-center justify-center p-4 [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
+                    dangerouslySetInnerHTML={{ __html: sanitizeSvg(latestVersion.svgCode) }}
+                  />
+                ) : (
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    className="block w-auto h-auto max-w-full max-h-full object-contain"
+                  />
+                )}
+              </div>
+              <div className="px-4 py-2.5 border-t border-gray-200 dark:border-[#30363d] bg-white/95 dark:bg-[#161b22]/95 shrink-0">
+                <p className="text-xs text-slate-700 dark:text-slate-200 line-clamp-2">
+                  {gen.config.prompt}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-brand-teal/10 text-brand-teal border border-brand-teal/40">
+                    {modelLabel}
+                  </span>
+                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 tabular-nums">
+                    {formatTimestamp(gen.createdAt)}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>,
           document.body
         );

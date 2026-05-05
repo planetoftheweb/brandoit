@@ -39,6 +39,18 @@ interface DownloadMenuProps {
    * its accessible name (which still reads `triggerTitle`/`triggerLabel`).
    */
   triggerLabelClassName?: string;
+  /**
+   * Optional styled tooltip text shown below the trigger on hover/focus.
+   * Uses the same dark `bg-black/90` pill style as the rest of the app
+   * (see `ControlPanel` reset / upload-brand buttons). When set, the
+   * native browser `title` tooltip is suppressed so they don't double up.
+   * The tooltip is always available — pair with `triggerLabel={undefined}`
+   * (or hide the label with `triggerLabelClassName="hidden"`) when you
+   * want a fully icon-only trigger; if a visible label is also rendered
+   * the tooltip simply provides extra context like a longer description
+   * or a count.
+   */
+  triggerTooltip?: string;
   icon?: React.ReactNode;
   disabled?: boolean;
   align?: "left" | "right";
@@ -54,6 +66,7 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
   triggerLabel,
   triggerTitle,
   triggerLabelClassName,
+  triggerTooltip,
   icon,
   disabled = false,
   align = "right",
@@ -138,17 +151,25 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
         type="button"
         onClick={() => !isDisabled && setIsOpen((v) => !v)}
         disabled={isDisabled}
-        title={triggerTitle || "Download"}
+        title={triggerTooltip ? undefined : triggerTitle || "Download"}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-label={triggerTitle || resolvedLabel || "Download"}
-        className={triggerClassName || defaultTriggerClasses}
+        className={`${triggerClassName || defaultTriggerClasses}${triggerTooltip ? " relative group/dl-tip" : ""}`}
       >
         {triggerIcon}
         {showTriggerText && resolvedLabel ? (
           <span className={triggerLabelClassName}>{resolvedLabel}</span>
         ) : null}
         <ChevronDown size={14} className="opacity-70" aria-hidden="true" />
+        {triggerTooltip && (
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/dl-tip:opacity-100 group-focus-visible/dl-tip:opacity-100 transition-opacity z-20"
+          >
+            {triggerTooltip}
+          </span>
+        )}
       </button>
 
       {isOpen && (

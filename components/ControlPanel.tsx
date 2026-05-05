@@ -103,6 +103,23 @@ interface ControlPanelProps {
   onSavePreset?: (name: string) => Promise<void> | void;
   /** Remove a preset by id. */
   onDeletePreset?: (presetId: string) => Promise<void> | void;
+  /**
+   * When true the secondary "options" row (Type/Style/Colors/Size/Model/etc)
+   * collapses to zero height so the user can focus on previews. The prompt
+   * input row stays visible so refinements remain one keystroke away. The
+   * App owns the state so a manual header toggle and an auto-hide-on-scroll
+   * effect can both drive it.
+   */
+  isOptionsCollapsed?: boolean;
+  /**
+   * True once the user has at least one finished generation showing in the
+   * main viewport. Used to hide the "Will run X generations…" predictive
+   * batch-info line once the user is past the planning phase — they're
+   * looking at a real result, not deciding what to queue. Predictive info
+   * still shows during the first-ever planning phase and during the run
+   * itself (so the user gets feedback while waiting).
+   */
+  hasGenerated?: boolean;
 }
 
 // Modal Component
@@ -492,7 +509,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   presets = [],
   onApplyPreset,
   onSavePreset,
-  onDeletePreset
+  onDeletePreset,
+  isOptionsCollapsed = false,
+  hasGenerated = false,
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [compareModelsMode, setCompareModelsMode] = useState(false);
@@ -655,7 +674,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     [perModelBatchRuns, selectedModel, isMultiModelActive, effectiveSelectedModelIds]
   );
   const estimatedLabel = formatDuration(durationEstimate.totalSeconds);
-  const hasBatchInfo = !!config.prompt && (totalBatchRuns > 0 || expansion.hasBraces || exceedsBatchCap);
+  // Predictive batch-info ("Will run X generations…") is most useful while
+  // the user is staging a request. Once a finished generation is on screen
+  // it's just visual noise reiterating numbers the user can already see in
+  // the gallery, so we suppress it once `hasGenerated` is true UNLESS a
+  // batch is actively running (then we still want the line to show progress
+  // expectations — concurrency, ETA, etc.). The exceeds-cap warning always
+  // surfaces because it blocks Generate.
+  const hasBatchInfo =
+    !!config.prompt &&
+    (totalBatchRuns > 0 || expansion.hasBraces || exceedsBatchCap) &&
+    (!hasGenerated || isGenerating || exceedsBatchCap);
   const [paletteCopyMessage, setPaletteCopyMessage] = useState<string | null>(null);
   const paletteCopyTimerRef = useRef<number | null>(null);
   const [bulkPaletteInput, setBulkPaletteInput] = useState('');
@@ -718,6 +747,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   useEffect(() => {
     setSearchTerm('');
   }, [activeDropdown]);
+
+  // Close any open toolbar dropdown when the options row collapses so the
+  // dropdown panel doesn't briefly clip during the height transition (and so
+  // it isn't left "ghosted" behind the collapsed bar after expanding).
+  useEffect(() => {
+    if (isOptionsCollapsed) {
+      setActiveDropdown(null);
+    }
+  }, [isOptionsCollapsed]);
 
   // Reset the inline preset-name input whenever the user closes the
   // presets dropdown or pivots to a different one. Without this, reopening
@@ -1454,16 +1492,35 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   return (
     <>
-      <div className="sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] p-4 transition-colors duration-200" ref={containerRef}>
+      <div
+        className={`sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] transition-[padding] duration-300 ${
+          isOptionsCollapsed ? 'px-4 py-0' : 'p-4'
+        }`}
+        ref={containerRef}
+      >
         <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
-          
-          {/* 1. Toolbar Controls — menu bar. No overflow clipping here because
-              dropdown panels are absolute children and must escape this box.
-              At lg+ the row is forced to a single line (`flex-nowrap`); the
-              dropdown buttons truncate their value labels via `lg:min-w-0`
-              when there isn't enough room. Below lg we still allow a wrap
-              fallback so tiny viewports never produce a horizontal scrollbar
-              that would clip the dropdown panels. */}
+
+          {/* 1. Toolbar Controls — menu bar. The collapsible wrapper hides
+              this row entirely so the user can focus on previews. We keep
+              `overflow:visible` while expanded so dropdown panels (which
+              are absolute children with `top-full`) can still escape this
+              box; only the brief collapsed state clips them. At lg+ the
+              row is forced to a single line (`flex-nowrap`); the dropdown
+              buttons truncate their value labels via `lg:min-w-0` when
+              there isn't enough room. Below lg we still allow a wrap
+              fallback so tiny viewports never produce a horizontal
+              scrollbar that would clip the dropdown panels. */}
+          <div
+            className={`transition-all duration-300 ease-in-out ${
+              isOptionsCollapsed
+                ? 'max-h-0 opacity-0 pointer-events-none overflow-hidden -mb-4'
+                : 'max-h-[500px] opacity-100'
+            }`}
+            aria-hidden={isOptionsCollapsed}
+            // `inert` keeps Tab focus from landing on the hidden controls;
+            // `aria-hidden` alone doesn't remove them from the focus order.
+            inert={isOptionsCollapsed}
+          >
           <div className="flex flex-wrap lg:flex-nowrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full lg:min-w-0">
             
             {/* Graphic Type */}
@@ -1960,9 +2017,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
             )}
           </div>
+          </div>
 
-          {/* 2. Prompt Input Area */}
-          <div className="w-full max-w-5xl mx-auto flex flex-col gap-1.5 min-w-0">
+          {/* 2. Prompt Input Area — also tucked away while the toolbar is
+              docked. The user explicitly OK'd hiding the prompt when
+              scrolling so the entire top bar shrinks to a thin glass
+              strip and the gallery / large preview gets every available
+              vertical pixel. The header's Maximize toggle (and scrolling
+              back to the top of the page) restores it. */}
+          <div
+            className={`w-full max-w-5xl mx-auto flex flex-col gap-1.5 min-w-0 transition-all duration-300 ease-in-out ${
+              isOptionsCollapsed
+                ? 'max-h-0 opacity-0 pointer-events-none overflow-hidden -mt-4'
+                : 'max-h-[400px] opacity-100'
+            }`}
+            aria-hidden={isOptionsCollapsed}
+            inert={isOptionsCollapsed}
+          >
             <div className="flex flex-nowrap items-stretch gap-2 min-w-0 w-full">
               <div className="relative flex-1 basis-0 min-w-0">
                 <textarea 

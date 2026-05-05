@@ -26,6 +26,13 @@ interface RichSelectProps {
   className?: string;
   buttonClassName?: string;
   menuClassName?: string;
+  /**
+   * Extra classes applied to the trigger's selected-label/placeholder span.
+   * Useful for hiding the label at smaller breakpoints (e.g. `"hidden
+   * xl:inline"`) so the trigger collapses to icon + chevron when toolbar
+   * real estate is tight, while still showing the text once there's room.
+   */
+  triggerLabelClassName?: string;
   hideOptionDescriptions?: boolean;
 }
 
@@ -45,6 +52,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
   className = '',
   buttonClassName = '',
   menuClassName = '',
+  triggerLabelClassName = '',
   hideOptionDescriptions = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -235,7 +243,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
                     selectedOption
                       ? 'text-brand-teal font-semibold'
                       : 'text-slate-400 dark:text-slate-500 font-medium'
-                  } ${compact ? 'text-[13px]' : 'text-[15px]'}`}
+                  } ${compact ? 'text-[13px]' : 'text-[15px]'} ${triggerLabelClassName}`}
                 >
                   {labelText}
                 </span>
@@ -246,7 +254,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
                   selectedOption
                     ? 'text-slate-900 dark:text-white font-medium'
                     : 'text-slate-400 dark:text-slate-500'
-                } ${compact ? 'text-xs' : 'text-sm'}`}
+                } ${compact ? 'text-xs' : 'text-sm'} ${triggerLabelClassName}`}
               >
                 {labelText}
               </span>
