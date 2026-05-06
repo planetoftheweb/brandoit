@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-06
+
+### Added
+
+- **Auxiliary BYOK routing for Run analysis and Expand prompt.** New `resolveAuxiliaryByokProvider` and `getApiKeyForModelFromUser` (`services/correctionAnalysisRouter.ts`) pick **OpenAI** vs **Gemini** the same way: prefer the toolbar’s provider when that key exists, otherwise fall back to whichever key is configured. Toolbar **Expand prompt** (`components/ControlPanel.tsx`) and refine-bar **Expand prompt** (`App.tsx`) both use this routing.
+- **OpenAI paths for analysis and expansion.** **Run analysis** can use **`gpt-4o-mini`** Chat Completions with vision + JSON (`analyzeImageForCorrectionPromptOpenAI` in `services/openaiService.ts`). **Expand prompt** uses **`gpt-4o-mini`** text chat (`expandPromptOpenAI`). Shared instruction text lives in `services/correctionAnalysisShared.ts` (`buildCorrectionAuditUserPrompt`, `buildExpandPromptInstructions`).
+- **Full-screen refine prompt modal** with backdrop click and **Escape** to close, optional hint for keyboard submit; **Run analysis** auto-opens the modal when a correction plan is ready; **Open full editor** link plus compact inline strip (`components/ImageDisplay.tsx`).
+
+### Changed
+
+- **Gemini Run analysis** reuses shared audit prompts and tries Flash fallbacks (`gemini-flash-latest` → `gemini-2.5-flash` → `gemini-2.0-flash`) when Google returns misleading enablement errors (`services/geminiService.ts`).
+- **Refine bar** inline prompt field restored to a **short single-row** height; long prompts are read/edited in the modal.
+
+### Fixed
+
+- **Run analysis / Expand prompt** no longer fail for **GPT Image** users who only configured an **OpenAI** key (previously calls always went through Gemini-only key slots).
+- **API keys** trimmed consistently when resolved from preferences (avoids stray whitespace breaking Gemini calls).
+- **Per-model Gemini overrides** vs shared `gemini` slot: auxiliary flows align with the active model’s resolved key where applicable.
+
 ## [0.12.0] - 2026-05-06
 
 ### Added
