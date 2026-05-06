@@ -41,7 +41,6 @@ import {
   Wand2,
   Copy,
   RotateCcw,
-  RotateCw,
   Play,
   Pause,
   MousePointer2,
@@ -54,6 +53,34 @@ import {
   BookmarkPlus
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
+
+/** Fields persisted when saving/updating a toolbar preset (see App `handleSavePreset`). */
+type ToolbarPresetSnapshot = Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'>;
+
+const normalizeOpenAIImageQuality = (
+  q: ToolbarPreset['openaiImageQuality']
+): NonNullable<ToolbarPreset['openaiImageQuality']> => q ?? 'auto';
+
+/**
+ * True when the live toolbar would write a different snapshot than `preset`
+ * currently stores. OpenAI quality treats missing preset value like `auto`
+ * so older presets without that field don't look perpetually "modified".
+ */
+const presetToolbarDiffersFromSnapshot = (
+  preset: ToolbarPreset,
+  current: ToolbarPresetSnapshot
+): boolean => {
+  return (
+    (preset.graphicTypeId || undefined) !== (current.graphicTypeId || undefined) ||
+    (preset.visualStyleId || undefined) !== (current.visualStyleId || undefined) ||
+    (preset.colorSchemeId || undefined) !== (current.colorSchemeId || undefined) ||
+    (preset.aspectRatio || undefined) !== (current.aspectRatio || undefined) ||
+    preset.svgMode !== current.svgMode ||
+    (preset.selectedModel || undefined) !== (current.selectedModel || undefined) ||
+    normalizeOpenAIImageQuality(preset.openaiImageQuality) !==
+      normalizeOpenAIImageQuality(current.openaiImageQuality)
+  );
+};
 
 interface ControlPanelProps {
   config: GenerationConfig;
@@ -637,6 +664,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       setUpdatingPresetId(null);
     }
   };
+
+  const currentToolbarPresetSnapshot = useMemo<ToolbarPresetSnapshot>(
+    () => ({
+      graphicTypeId: config.graphicTypeId || undefined,
+      visualStyleId: config.visualStyleId || undefined,
+      colorSchemeId: config.colorSchemeId || undefined,
+      aspectRatio: config.aspectRatio || undefined,
+      svgMode: config.svgMode,
+      selectedModel,
+      openaiImageQuality: openaiQuality,
+    }),
+    [
+      config.graphicTypeId,
+      config.visualStyleId,
+      config.colorSchemeId,
+      config.aspectRatio,
+      config.svgMode,
+      selectedModel,
+      openaiQuality,
+    ]
+  );
+
   const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
 
   // Batch generation controls: variations-per-prompt count and brace expansion preview.
@@ -1887,7 +1936,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   onClick={() => toggleDropdown('presets')}
                 />
                 {activeDropdown === 'presets' && (
-                  <div className="absolute top-full left-0 mt-2 w-72 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+                  <div className="absolute top-full left-0 mt-2 w-80 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
                     <div className="max-h-60 overflow-y-auto custom-scrollbar p-1">
                       {presets.length === 0 ? (
                         <div className="px-3 py-6 text-center text-xs text-slate-500">
@@ -1899,61 +1948,78 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       ) : (
                         [...presets]
                           .sort((a, b) => a.name.localeCompare(b.name))
-                          .map(preset => (
+                          .map(preset => {
+                            const isDirty = presetToolbarDiffersFromSnapshot(
+                              preset,
+                              currentToolbarPresetSnapshot
+                            );
+                            const isUpdatingThis = updatingPresetId === preset.id;
+                            const showOverwriteRow =
+                              onUpdatePreset &&
+                              (isDirty || isUpdatingThis || justUpdatedPresetId === preset.id);
+                            return (
                             <div
                               key={preset.id}
-                              className="group relative flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md cursor-pointer"
-                              onClick={() => handleApplyPreset(preset)}
-                              title={`Apply preset: ${preset.name}`}
+                              className="rounded-md hover:bg-gray-100 dark:hover:bg-[#21262d] border border-transparent"
                             >
-                              <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <Bookmark size={16} className="text-brand-teal shrink-0" />
-                                <div className="flex flex-col min-w-0">
-                                  <span className="text-xs truncate text-slate-700 dark:text-slate-200 font-semibold">
-                                    {preset.name}
-                                  </span>
-                                  <span className="text-[10px] text-slate-500 truncate">
-                                    {[
-                                      preset.selectedModel && (modelLabelMap[preset.selectedModel] || preset.selectedModel),
-                                      preset.aspectRatio,
-                                      preset.svgMode && preset.svgMode !== 'static' ? preset.svgMode : null
-                                    ].filter(Boolean).join(' · ') || 'Toolbar snapshot'}
-                                  </span>
+                              <div className="flex items-start justify-between gap-2 p-2">
+                                <div
+                                  className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                                  onClick={() => handleApplyPreset(preset)}
+                                  title={`Apply preset: ${preset.name}`}
+                                >
+                                  <Bookmark size={16} className="text-brand-teal shrink-0 mt-0.5" />
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-xs truncate text-slate-700 dark:text-slate-200 font-semibold">
+                                      {preset.name}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500 truncate">
+                                      {[
+                                        preset.selectedModel && (modelLabelMap[preset.selectedModel] || preset.selectedModel),
+                                        preset.aspectRatio,
+                                        preset.svgMode && preset.svgMode !== 'static' ? preset.svgMode : null
+                                      ].filter(Boolean).join(' · ') || 'Toolbar snapshot'}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-0.5 shrink-0">
-                                {onUpdatePreset && (
-                                  <button
-                                    onClick={(e) => handleUpdatePreset(e, preset.id)}
-                                    disabled={updatingPresetId === preset.id}
-                                    className={`p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md transition-colors opacity-60 group-hover:opacity-100 disabled:opacity-100 ${
-                                      justUpdatedPresetId === preset.id
-                                        ? 'text-brand-teal'
-                                        : 'text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal'
-                                    }`}
-                                    title="Update with current toolbar settings"
-                                    aria-label={`Update preset ${preset.name} with current settings`}
-                                  >
-                                    {updatingPresetId === preset.id ? (
-                                      <Loader2 size={12} className="animate-spin" />
-                                    ) : justUpdatedPresetId === preset.id ? (
-                                      <CheckIcon size={12} />
-                                    ) : (
-                                      <RotateCw size={12} />
-                                    )}
-                                  </button>
-                                )}
                                 <button
+                                  type="button"
                                   onClick={(e) => handleDeletePreset(e, preset.id)}
-                                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors opacity-60 group-hover:opacity-100"
+                                  className="p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
                                   title="Delete preset"
                                   aria-label={`Delete preset ${preset.name}`}
                                 >
                                   <Trash2 size={12} />
                                 </button>
                               </div>
+                              {showOverwriteRow && (
+                                <div className="px-2 pb-2 pt-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleUpdatePreset(e, preset.id)}
+                                    disabled={isUpdatingThis}
+                                    className="w-full text-left rounded-md px-2 py-2 sm:py-1.5 text-[11px] font-semibold text-brand-teal hover:bg-brand-teal/10 dark:hover:bg-brand-teal/15 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center gap-2 min-h-[44px] sm:min-h-0"
+                                    title="Replace this preset with your current toolbar settings"
+                                  >
+                                    {isUpdatingThis ? (
+                                      <>
+                                        <Loader2 size={14} className="animate-spin shrink-0" />
+                                        <span>Saving to preset…</span>
+                                      </>
+                                    ) : justUpdatedPresetId === preset.id ? (
+                                      <>
+                                        <CheckIcon size={14} className="shrink-0" />
+                                        <span>Preset updated</span>
+                                      </>
+                                    ) : (
+                                      <span>Overwrite with current toolbar</span>
+                                    )}
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                          ))
+                            );
+                          })
                       )}
                     </div>
 
