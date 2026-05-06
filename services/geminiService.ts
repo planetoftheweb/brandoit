@@ -1,6 +1,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
 import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioService";
+import {
+  buildCorrectionAuditUserPrompt,
+  parseStructuredJsonFromModelText,
+  type CorrectionAnalysisContext,
+} from "./correctionAnalysisShared";
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
@@ -58,11 +63,7 @@ const SUPPORTED_INPUT_IMAGE_MIME_TYPES = new Set([
   'image/heif'
 ]);
 
-interface GenerationContext {
-  brandColors: BrandColor[];
-  visualStyles: VisualStyle[];
-  graphicTypes: GraphicType[];
-}
+type GenerationContext = CorrectionAnalysisContext;
 
 export interface ImageCorrectionPlan {
   analysisSummary: string;
@@ -535,36 +536,7 @@ export const analyzeImageForCorrectionPrompt = async (
   const ai = getAiClient(customApiKey);
   const sourceImage = await resolveImageInputForRefinement(currentImage);
 
-  const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
-  const style = context.visualStyles.find(s => s.id === config.visualStyleId);
-  const type = context.graphicTypes.find(t => t.id === config.graphicTypeId);
-  const contextHint = [
-    `Original request: ${config.prompt || 'N/A'}`,
-    `Graphic type: ${type?.name || config.graphicTypeId || 'N/A'}`,
-    `Visual style: ${style?.name || config.visualStyleId || 'N/A'}${style?.description ? ` (${style.description})` : ''}`,
-    `Color palette: ${colorScheme ? `${colorScheme.name} [${colorScheme.colors.join(', ')}]` : 'N/A'}`,
-    `Aspect ratio: ${config.aspectRatio || 'N/A'}`,
-  ].join('\n');
-
-  const prompt = `
-    You are auditing a generated image for correctness and usability.
-
-    Tasks:
-    1. Detect textual problems: spelling, grammar, punctuation, capitalization, awkward wording.
-    2. Detect factual/semantic inaccuracies and visual mismatches (for example labels pointing to wrong parts, contradictory annotations, impossible claims).
-    3. Produce a single detailed image-edit prompt that corrects the issues while preserving the overall composition, style, and palette.
-
-    Context:
-    ${contextHint}
-
-    Output requirements:
-    - Return strict JSON.
-    - "analysisSummary": 1-2 concise sentences.
-    - "issues": array of concrete issue lines ("what is wrong -> what to change").
-    - "fixPrompt": a specific, ready-to-run editing prompt for a high-quality image model.
-    - In "fixPrompt", include: text correction instructions, factual correction instructions, label/annotation alignment, readability improvements.
-    - Keep the image concept intact; do not introduce unrelated new content.
-  `.trim();
+  const prompt = buildCorrectionAuditUserPrompt(config, context);
 
   const jsonConfig = withSystemInstruction({
     responseMimeType: "application/json",
@@ -602,7 +574,7 @@ export const analyzeImageForCorrectionPrompt = async (
       if (!response.text) throw new Error("No correction analysis generated");
       let parsed: Partial<ImageCorrectionPlan>;
       try {
-        parsed = parseJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
+        parsed = parseStructuredJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
       } catch {
         throw new Error(
           "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
@@ -732,7 +704,7 @@ const fetchImageAsBase64 = async (imageUrl: string): Promise<{ base64Data: strin
   return { base64Data, mimeType };
 };
 
-const resolveImageInputForRefinement = async (
+export const resolveImageInputForRefinement = async (
   currentImage: GeneratedImage
 ): Promise<{ base64Data: string; mimeType: string }> => {
   let base64Data = (currentImage.base64Data || '').trim();

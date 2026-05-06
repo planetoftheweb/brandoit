@@ -24,7 +24,8 @@ import {
   analyzeImageForCorrectionPrompt,
   expandPrompt
 } from './services/geminiService';
-import { generateOpenAIImage } from './services/openaiService';
+import { generateOpenAIImage, analyzeImageForCorrectionPromptOpenAI } from './services/openaiService';
+import { resolveCorrectionVisionProvider } from './services/correctionAnalysisRouter';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
@@ -1547,10 +1548,10 @@ const App: React.FC = () => {
       throw new Error('Create a free account and add your API key in Settings before running analysis.');
     }
 
-    const analysisKey = getGeminiAuxiliaryApiKey();
-    if (!analysisKey) {
+    const analysisRoute = resolveCorrectionVisionProvider(selectedModel, getApiKeyForModel);
+    if (!analysisRoute) {
       setSettingsMode(true);
-      throw new Error('Add a Gemini API key in Settings to run image analysis.');
+      throw new Error('Add an OpenAI or Gemini API key in Settings to run image analysis.');
     }
 
     const currentVersion = getCurrentVersion(currentGeneration);
@@ -1584,26 +1585,33 @@ const App: React.FC = () => {
 
     let plan;
     try {
-      plan = await analyzeImageForCorrectionPrompt(
-        currentImage,
-        currentGeneration.config,
-        context,
-        analysisKey,
-        user?.preferences.systemPrompt
-      );
+      plan =
+        analysisRoute.provider === 'openai'
+          ? await analyzeImageForCorrectionPromptOpenAI(
+              currentImage,
+              currentGeneration.config,
+              context,
+              analysisRoute.apiKey,
+              user?.preferences.systemPrompt
+            )
+          : await analyzeImageForCorrectionPrompt(
+              currentImage,
+              currentGeneration.config,
+              context,
+              analysisRoute.apiKey,
+              user?.preferences.systemPrompt
+            );
     } catch (err: unknown) {
       const raw =
         err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-      if (/API_KEY_INVALID|API key not valid|invalid api key/i.test(raw)) {
+      if (
+        /API_KEY_INVALID|API key not valid|invalid api key|invalid_api_key|Incorrect API key/i.test(raw)
+      ) {
         setSettingsMode(true);
-        const usesGeminiToolbar =
-          selectedModel === 'gemini' ||
-          selectedModel === 'gemini-3.1-flash-image-preview' ||
-          selectedModel === 'gemini-svg';
         throw new Error(
-          usesGeminiToolbar
-            ? 'Google rejected your Gemini API key. Open Settings → API keys, paste a fresh key from Google AI Studio (Generative Language API enabled for that project), save, then try Run analysis again.'
-            : 'Run analysis uses Google Gemini (vision), not your OpenAI key. Open Settings → API keys and add or fix the Gemini / Nano Banana key from Google AI Studio, save, then try again.'
+          analysisRoute.provider === 'openai'
+            ? 'OpenAI rejected your API key or refused this vision request. Open Settings → API keys, fix your OpenAI key, save, then try Run analysis again.'
+            : 'Google rejected your Gemini API key. Open Settings → API keys, paste a fresh key from Google AI Studio (Generative Language API enabled for that project), save, then try Run analysis again.'
         );
       }
       throw err;

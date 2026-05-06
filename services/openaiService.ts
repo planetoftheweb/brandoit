@@ -1,4 +1,11 @@
 import { GenerationConfig, GeneratedImage } from '../types';
+import type { ImageCorrectionPlan } from './geminiService';
+import { resolveImageInputForRefinement } from './geminiService';
+import {
+  buildCorrectionAuditUserPrompt,
+  parseStructuredJsonFromModelText,
+  type CorrectionAnalysisContext,
+} from './correctionAnalysisShared';
 
 export type OpenAIImageQuality = 'low' | 'medium' | 'high' | 'auto';
 
@@ -245,5 +252,108 @@ export const generateOpenAIImage = async (
     imageUrl,
     base64Data: base64Data!,
     mimeType
+  };
+};
+
+/** Fast vision model for image audit JSON (not GPT Image). BYOK OpenAI key from Settings. */
+const CORRECTION_VISION_CHAT_MODEL = 'gpt-4o-mini';
+
+/**
+ * Same structured correction plan as Gemini's analyzer, via Chat Completions + vision.
+ */
+export const analyzeImageForCorrectionPromptOpenAI = async (
+  currentImage: GeneratedImage,
+  config: GenerationConfig,
+  context: CorrectionAnalysisContext,
+  apiKey: string,
+  systemPrompt?: string
+): Promise<ImageCorrectionPlan> => {
+  if (!apiKey?.trim()) {
+    throw new Error('OpenAI API key required for image analysis.');
+  }
+
+  const sourceImage = await resolveImageInputForRefinement(currentImage);
+  const instructions = buildCorrectionAuditUserPrompt(config, context);
+  const dataUrl = `data:${sourceImage.mimeType};base64,${sourceImage.base64Data}`;
+
+  const messages: Record<string, unknown>[] = [];
+  if (systemPrompt?.trim()) {
+    messages.push({ role: 'system', content: systemPrompt.trim() });
+  }
+  messages.push({
+    role: 'user',
+    content: [
+      { type: 'text', text: instructions },
+      {
+        type: 'image_url',
+        image_url: {
+          url: dataUrl,
+          detail: 'low',
+        },
+      },
+    ],
+  });
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: JSON.stringify({
+      model: CORRECTION_VISION_CHAT_MODEL,
+      messages,
+      response_format: { type: 'json_object' },
+      max_completion_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let code: string | undefined;
+    let errorType: string | undefined;
+    let rawMessage = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      const errObj = parsed?.error || parsed;
+      code = errObj?.code || undefined;
+      errorType = errObj?.type || undefined;
+      rawMessage = errObj?.message || errText;
+    } catch {
+      // keep errText
+    }
+    const { message, fatal } = describeOpenAIError(response.status, code, errorType, rawMessage);
+    throw new OpenAIGenerationError({
+      message,
+      status: response.status,
+      code,
+      errorType,
+      fatal,
+    });
+  }
+
+  const json = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+  };
+  const text = json?.choices?.[0]?.message?.content;
+  if (!text?.trim()) {
+    throw new Error('OpenAI returned no analysis text.');
+  }
+
+  let parsed: Partial<ImageCorrectionPlan>;
+  try {
+    parsed = parseStructuredJsonFromModelText<Partial<ImageCorrectionPlan>>(text);
+  } catch {
+    throw new Error(
+      'Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output.'
+    );
+  }
+
+  return {
+    analysisSummary: (parsed.analysisSummary || '').trim(),
+    issues: Array.isArray(parsed.issues)
+      ? parsed.issues.map((issue) => String(issue).trim()).filter(Boolean)
+      : [],
+    fixPrompt: (parsed.fixPrompt || '').trim(),
   };
 };
