@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-06
+
+### Added
+
+- **Overwrite saved toolbar presets from the live toolbar.** Bookmark presets can be updated in place with a full-width **Overwrite with current toolbar** action (loading/success feedback). The affordance appears only when the current toolbar differs from that preset’s snapshot; legacy presets without an explicit OpenAI quality value normalize to **auto** so comparisons stay accurate (`components/ControlPanel.tsx`, `App.tsx`, `services/presetService.ts`).
+
+### Changed
+
+- **Gemini text/analysis uses `gemini-flash-latest`.** Brand analysis, correction analysis, prompt expansion, and image-description calls now use Google’s rolling Flash alias instead of a pinned model id, avoiding spurious `400 / API_KEY_INVALID` responses when a project enables Flash under a different version id (`services/geminiService.ts`, `README.md`, `agents.md`).
+
+### Fixed
+
+- **Personal Settings defaults no longer overwritten by everyday toolbar use.** Firestore `preferences.settings` default fields (graphic type, visual style, color palette, **aspect ratio**) are seeded only once when unset; subsequent toolbar changes no longer sync back into those saved defaults. Fixes the case where choosing Square on the toolbar for a one-off generation replaced a saved Widescreen default (`App.tsx`).
+- **Marks rail on single-version generations.** The left thumbnail rail (including **Add a new Mark**) renders whenever a generation has at least one version so fresh results stay iterable without hunting for the refine bar; layout uses a consistent max width with or without multiple marks (`components/ImageDisplay.tsx`).
+- **Compare discoverability.** The shift-click compare hint flashes only when the tile has more than one mark; the rail’s Compare control stays gated on multiple marks (`components/ImageDisplay.tsx`).
+
 ## [0.11.0] - 2026-05-04
 ### Added
 - **Focus mode for the main preview.** When a generation is loaded into the main viewer, the entire toolbar options row (Type / Style / Colors / Size / Model) **and** the prompt input collapse together so the image gets the full vertical real estate. A new `Minimize2` / `Maximize2` button in the page header pins the choice manually, the toolbar auto-collapses on every scroll-down past a tiny 16px threshold (and only restores when the user comes back to the top), and selecting a new generation tile auto-collapses the toolbar by id so even an image that fits inside the viewport without scrolling triggers the focus mode. Auto-collapse is suppressed while any `<input>` / `<textarea>` / `contenteditable` element is focused so the toolbar can't yank itself away mid-keystroke. Persistent `<button>` for the toggle in the header is hidden in admin / settings / catalog modes where the toolbar isn't mounted (`App.tsx`, `components/ControlPanel.tsx`).
