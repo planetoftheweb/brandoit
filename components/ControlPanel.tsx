@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset } from '../types';
 import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
+import { expandPromptOpenAI } from '../services/openaiService';
+import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser } from '../services/correctionAnalysisRouter';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
 import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
@@ -780,23 +782,33 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     if (!config.prompt || isExpandingPrompt) return;
     setIsExpandingPrompt(true);
     try {
-      // Prompt expansion always runs on Gemini's analysis model
-      // (gemini-2.5-flash), so it must use the Gemini key regardless of which
-      // image model the user has selected. Otherwise an OpenAI key would be
-      // handed to the Gemini SDK and the request fails.
-      const customKey =
-        user?.preferences?.apiKeys?.gemini ||
-        user?.preferences?.geminiApiKey;
-      const expanded = await expandPrompt(
-        config.prompt,
-        config,
-        { ...options, aspectRatios: options.aspectRatios as any },
-        customKey,
-        user?.preferences?.systemPrompt
+      const route = resolveAuxiliaryByokProvider(selectedModel, (id) =>
+        getApiKeyForModelFromUser(user, id)
       );
-      setConfig(prev => ({ ...prev, prompt: expanded }));
+      if (!route) {
+        console.warn('Expand prompt: no OpenAI or Gemini API key configured.');
+        return;
+      }
+      const ctx = { ...options, aspectRatios: options.aspectRatios };
+      const expanded =
+        route.provider === 'openai'
+          ? await expandPromptOpenAI(
+              config.prompt,
+              config,
+              ctx,
+              route.apiKey,
+              user?.preferences?.systemPrompt
+            )
+          : await expandPrompt(
+              config.prompt,
+              config,
+              ctx,
+              route.apiKey,
+              user?.preferences?.systemPrompt
+            );
+      setConfig((prev) => ({ ...prev, prompt: expanded }));
     } catch (err) {
-      console.error("Failed to expand prompt:", err);
+      console.error('Failed to expand prompt:', err);
     } finally {
       setIsExpandingPrompt(false);
     }

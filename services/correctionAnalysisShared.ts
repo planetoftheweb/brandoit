@@ -1,10 +1,18 @@
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType } from '../types';
+import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
 
 /** Context slice needed for correction audit (matches refine/generation context). */
 export interface CorrectionAnalysisContext {
   brandColors: BrandColor[];
   visualStyles: VisualStyle[];
   graphicTypes: GraphicType[];
+}
+
+/** Context for prompt expansion (includes aspect ratio labels). */
+export interface ExpandPromptContext {
+  brandColors: BrandColor[];
+  visualStyles: VisualStyle[];
+  graphicTypes: GraphicType[];
+  aspectRatios: AspectRatioOption[];
 }
 
 /** User task text for vision models auditing an image for correction prompts. */
@@ -50,4 +58,36 @@ export function parseStructuredJsonFromModelText<T>(raw: string): T {
   const fence = /^```(?:json)?\s*\n?([\s\S]*?)```\s*$/im.exec(s);
   if (fence) s = fence[1].trim();
   return JSON.parse(s) as T;
+}
+
+/** Instructions block shared by Gemini Flash and OpenAI expand-prompt. */
+export function buildExpandPromptInstructions(
+  config: GenerationConfig,
+  context: ExpandPromptContext
+): string {
+  const typeLabel = context.graphicTypes.find((g) => g.id === config.graphicTypeId)?.name || config.graphicTypeId;
+  const style = context.visualStyles.find((s) => s.id === config.visualStyleId);
+  const styleLabel = style?.name || config.visualStyleId;
+  const styleDesc = style?.description || '';
+  const palette = context.brandColors.find((c) => c.id === config.colorSchemeId);
+  const colors = palette ? `${palette.name}: ${palette.colors.join(', ')}` : '';
+  const aspect =
+    context.aspectRatios?.find((a) => a.value === config.aspectRatio)?.label || config.aspectRatio;
+
+  return `
+    You expand short text prompts into rich, creative, and visual image prompts.
+    Include and amplify:
+    - Topic and clear subject focus
+    - Environment: background + foreground details
+    - Emotion and mood
+    - Technical details: camera/view, depth of field, lighting, texture
+    - Nouns with size/age/state (large, tiny, old, weathered, pristine)
+    - Prepositions to relate objects (on top of, beneath, around, beside)
+    - Adjectives/materials (matte, glossy, metallic, wooden, fabric)
+    - Colors hinting at the palette: ${colors || 'use a cohesive palette'}
+    - Adverbs for action (soaring, gliding, drifting)
+    - Art style references: ${styleLabel}${styleDesc ? ` (${styleDesc})` : ''}
+    Keep it 2-4 sentences, vivid, and optimized for image generation. Do not mention any reference image.
+    Current choices: Type=${typeLabel}, Style=${styleLabel}, Palette=${colors || 'cohesive palette'}, Aspect=${aspect}.
+  `.trim();
 }

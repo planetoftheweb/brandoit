@@ -24,8 +24,8 @@ import {
   analyzeImageForCorrectionPrompt,
   expandPrompt
 } from './services/geminiService';
-import { generateOpenAIImage, analyzeImageForCorrectionPromptOpenAI } from './services/openaiService';
-import { resolveCorrectionVisionProvider } from './services/correctionAnalysisRouter';
+import { generateOpenAIImage, analyzeImageForCorrectionPromptOpenAI, expandPromptOpenAI } from './services/openaiService';
+import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser } from './services/correctionAnalysisRouter';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
@@ -782,44 +782,10 @@ const App: React.FC = () => {
     selectedModel,
   ]);
 
-  const getApiKeyForModel = (modelId: string): string | undefined => {
-    if (!user) return undefined;
-    const slot = user.preferences.apiKeys?.[modelId];
-    if (typeof slot === 'string') {
-      const t = slot.trim();
-      if (t) return t;
-    }
-    // Gemini-family models share the gemini key by default.
-    if (
-      modelId === 'gemini' ||
-      modelId === 'gemini-3.1-flash-image-preview' ||
-      modelId === 'gemini-svg'
-    ) {
-      const shared = user.preferences.apiKeys?.gemini;
-      if (typeof shared === 'string' && shared.trim()) return shared.trim();
-      const legacy = user.preferences.geminiApiKey;
-      if (typeof legacy === 'string' && legacy.trim()) return legacy.trim();
-    }
-    // All OpenAI-family models share one OpenAI API key slot.
-    if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
-      const k = user.preferences.apiKeys?.openai;
-      if (typeof k === 'string' && k.trim()) return k.trim();
-    }
-    return undefined;
-  };
+  const getApiKeyForModel = (modelId: string): string | undefined =>
+    getApiKeyForModelFromUser(user, modelId);
 
   const getActiveApiKey = (): string | undefined => getApiKeyForModel(selectedModel);
-
-  /** Flash-based helpers (Run analysis, expand) must use the same key as image gen when a Gemini model is selected; otherwise a per-model override can work while the shared `gemini` slot is stale. When OpenAI is selected, falls back to the shared Gemini key. */
-  const getGeminiAuxiliaryApiKey = (): string | undefined => {
-    if (!user) return undefined;
-    const geminiFamily = new Set<string>(['gemini', 'gemini-3.1-flash-image-preview', 'gemini-svg']);
-    if (geminiFamily.has(selectedModel)) {
-      const active = getActiveApiKey();
-      if (active) return active;
-    }
-    return getApiKeyForModel('gemini');
-  };
 
   const activeApiKey = getActiveApiKey();
   const needsSetup = !user || !activeApiKey;
@@ -1548,7 +1514,7 @@ const App: React.FC = () => {
       throw new Error('Create a free account and add your API key in Settings before running analysis.');
     }
 
-    const analysisRoute = resolveCorrectionVisionProvider(selectedModel, getApiKeyForModel);
+    const analysisRoute = resolveAuxiliaryByokProvider(selectedModel, getApiKeyForModel);
     if (!analysisRoute) {
       setSettingsMode(true);
       throw new Error('Add an OpenAI or Gemini API key in Settings to run image analysis.');
@@ -1646,22 +1612,42 @@ const App: React.FC = () => {
       openAuthModal('signup');
       throw new Error('Create a free account and add your API key in Settings before expanding prompts.');
     }
-    const expandKey = getGeminiAuxiliaryApiKey();
-    if (!expandKey) {
+    const expandRoute = resolveAuxiliaryByokProvider(selectedModel, getApiKeyForModel);
+    if (!expandRoute) {
       setSettingsMode(true);
-      throw new Error('Add a Gemini API key in Settings to expand prompts.');
+      throw new Error('Add an OpenAI or Gemini API key in Settings to expand prompts.');
     }
     const seed = draft.trim() || (currentGeneration.config.prompt || '').trim();
     if (!seed) {
       throw new Error('Type a refinement idea, or open a generation that still has its original prompt.');
     }
-    const expanded = await expandPrompt(
-      seed,
-      currentGeneration.config,
-      context,
-      expandKey,
-      user.preferences.systemPrompt
-    );
+    let expanded: string;
+    try {
+      expanded =
+        expandRoute.provider === 'openai'
+          ? await expandPromptOpenAI(
+              seed,
+              currentGeneration.config,
+              context,
+              expandRoute.apiKey,
+              user.preferences.systemPrompt
+            )
+          : await expandPrompt(seed, currentGeneration.config, context, expandRoute.apiKey, user.preferences.systemPrompt);
+    } catch (err: unknown) {
+      const raw =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+      if (
+        /API_KEY_INVALID|API key not valid|invalid api key|invalid_api_key|Incorrect API key/i.test(raw)
+      ) {
+        setSettingsMode(true);
+        throw new Error(
+          expandRoute.provider === 'openai'
+            ? 'OpenAI rejected your API key or refused expand prompt. Open Settings → API keys, fix your OpenAI key, save, then try again.'
+            : 'Google rejected your Gemini API key. Open Settings → API keys, paste a fresh key from Google AI Studio, save, then try Expand prompt again.'
+        );
+      }
+      throw err;
+    }
     return expanded.trim();
   };
 

@@ -4,7 +4,9 @@ import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioS
 import {
   buildCorrectionAuditUserPrompt,
   parseStructuredJsonFromModelText,
+  buildExpandPromptInstructions,
   type CorrectionAnalysisContext,
+  type ExpandPromptContext,
 } from "./correctionAnalysisShared";
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
@@ -614,36 +616,13 @@ export const analyzeImageForCorrectionPrompt = async (
 export const expandPrompt = async (
   prompt: string,
   config: GenerationConfig,
-  context: { brandColors: BrandColor[]; visualStyles: VisualStyle[]; graphicTypes: GraphicType[]; aspectRatios: GraphicType[] },
+  context: ExpandPromptContext,
   customApiKey?: string,
   userSystemPrompt?: string
 ): Promise<string> => {
   const ai = getAiClient(customApiKey);
 
-  const typeLabel = context.graphicTypes.find(g => g.id === config.graphicTypeId)?.name || config.graphicTypeId;
-  const style = context.visualStyles.find(s => s.id === config.visualStyleId);
-  const styleLabel = style?.name || config.visualStyleId;
-  const styleDesc = style?.description || '';
-  const palette = context.brandColors.find(c => c.id === config.colorSchemeId);
-  const colors = palette ? `${palette.name}: ${palette.colors.join(', ')}` : '';
-  const aspect = (context as any).aspectRatios?.find((a: any) => a.value === config.aspectRatio)?.label || config.aspectRatio;
-
-  const expansionInstructions = `
-    You expand short text prompts into rich, creative, and visual image prompts.
-    Include and amplify:
-    - Topic and clear subject focus
-    - Environment: background + foreground details
-    - Emotion and mood
-    - Technical details: camera/view, depth of field, lighting, texture
-    - Nouns with size/age/state (large, tiny, old, weathered, pristine)
-    - Prepositions to relate objects (on top of, beneath, around, beside)
-    - Adjectives/materials (matte, glossy, metallic, wooden, fabric)
-    - Colors hinting at the palette: ${colors || 'use a cohesive palette'}
-    - Adverbs for action (soaring, gliding, drifting)
-    - Art style references: ${styleLabel}${styleDesc ? ` (${styleDesc})` : ''}
-    Keep it 2-4 sentences, vivid, and optimized for image generation. Do not mention any reference image.
-    Current choices: Type=${typeLabel}, Style=${styleLabel}, Palette=${colors || 'cohesive palette'}, Aspect=${aspect}.
-  `.trim();
+  const expansionInstructions = buildExpandPromptInstructions(config, context);
 
   // Pass the user's Settings > System Prompt via the SDK's dedicated
   // `systemInstruction` field so it outranks the expansion task's own

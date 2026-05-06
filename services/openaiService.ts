@@ -4,7 +4,9 @@ import { resolveImageInputForRefinement } from './geminiService';
 import {
   buildCorrectionAuditUserPrompt,
   parseStructuredJsonFromModelText,
+  buildExpandPromptInstructions,
   type CorrectionAnalysisContext,
+  type ExpandPromptContext,
 } from './correctionAnalysisShared';
 
 export type OpenAIImageQuality = 'low' | 'medium' | 'high' | 'auto';
@@ -356,4 +358,85 @@ export const analyzeImageForCorrectionPromptOpenAI = async (
       : [],
     fixPrompt: (parsed.fixPrompt || '').trim(),
   };
+};
+
+/** Text-only chat model for prompt expansion (not GPT Image). */
+const EXPAND_PROMPT_CHAT_MODEL = 'gpt-4o-mini';
+
+/**
+ * Expand short refine text using OpenAI Chat Completions (same instruction block as Gemini Flash).
+ */
+export const expandPromptOpenAI = async (
+  prompt: string,
+  config: GenerationConfig,
+  context: ExpandPromptContext,
+  apiKey: string,
+  userSystemPrompt?: string
+): Promise<string> => {
+  if (!apiKey?.trim()) {
+    throw new Error('OpenAI API key required to expand prompts.');
+  }
+
+  const expansionInstructions = buildExpandPromptInstructions(config, context);
+  const userContent = `${expansionInstructions}
+
+Original prompt to expand:
+${prompt}
+
+Respond with ONLY the expanded image-generation prompt as plain text (2–4 vivid sentences). No title line, no preamble, no markdown code fences.`;
+
+  const messages: Record<string, unknown>[] = [];
+  if (userSystemPrompt?.trim()) {
+    messages.push({ role: 'system', content: userSystemPrompt.trim() });
+  }
+  messages.push({ role: 'user', content: userContent });
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: JSON.stringify({
+      model: EXPAND_PROMPT_CHAT_MODEL,
+      messages,
+      max_completion_tokens: 2048,
+      temperature: 0.75,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let code: string | undefined;
+    let errorType: string | undefined;
+    let rawMessage = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      const errObj = parsed?.error || parsed;
+      code = errObj?.code || undefined;
+      errorType = errObj?.type || undefined;
+      rawMessage = errObj?.message || errText;
+    } catch {
+      // keep errText
+    }
+    const { message, fatal } = describeOpenAIError(response.status, code, errorType, rawMessage);
+    throw new OpenAIGenerationError({
+      message,
+      status: response.status,
+      code,
+      errorType,
+      fatal,
+    });
+  }
+
+  const json = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+  };
+  let text = json?.choices?.[0]?.message?.content?.trim() || '';
+  if (!text) {
+    throw new Error('OpenAI returned no expanded prompt.');
+  }
+  const fence = /^```(?:\w+)?\s*\n([\s\S]*?)```\s*$/m.exec(text);
+  if (fence) text = fence[1].trim();
+  return text;
 };
