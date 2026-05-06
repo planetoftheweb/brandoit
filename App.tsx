@@ -1582,13 +1582,32 @@ const App: React.FC = () => {
       }
     }
 
-    const plan = await analyzeImageForCorrectionPrompt(
-      currentImage,
-      currentGeneration.config,
-      context,
-      analysisKey,
-      user?.preferences.systemPrompt
-    );
+    let plan;
+    try {
+      plan = await analyzeImageForCorrectionPrompt(
+        currentImage,
+        currentGeneration.config,
+        context,
+        analysisKey,
+        user?.preferences.systemPrompt
+      );
+    } catch (err: unknown) {
+      const raw =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+      if (/API_KEY_INVALID|API key not valid|invalid api key/i.test(raw)) {
+        setSettingsMode(true);
+        const usesGeminiToolbar =
+          selectedModel === 'gemini' ||
+          selectedModel === 'gemini-3.1-flash-image-preview' ||
+          selectedModel === 'gemini-svg';
+        throw new Error(
+          usesGeminiToolbar
+            ? 'Google rejected your Gemini API key. Open Settings → API keys, paste a fresh key from Google AI Studio (Generative Language API enabled for that project), save, then try Run analysis again.'
+            : 'Run analysis uses Google Gemini (vision), not your OpenAI key. Open Settings → API keys and add or fix the Gemini / Nano Banana key from Google AI Studio, save, then try again.'
+        );
+      }
+      throw err;
+    }
 
     const issueLines = plan.issues.length > 0
       ? plan.issues.map((issue, idx) => `${idx + 1}. ${issue.trim()}`).join('\n')

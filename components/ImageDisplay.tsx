@@ -85,6 +85,11 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onPickMark,
   onNavigateToGeneration,
 }) => {
+  const usesOpenAIForGeneration =
+    selectedModel === 'openai' ||
+    selectedModel === 'openai-2' ||
+    selectedModel === 'openai-mini';
+
   const isCompareMode = comparisonState?.mode === 'picking';
   const comparisonA = comparisonState?.a || null;
   const comparisonB = comparisonState?.b || null;
@@ -2117,8 +2122,11 @@ ${version.svgCode}
               <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
                 Run analysis
               </span>
-              <span className="pointer-events-none absolute top-full mt-2 right-0 w-64 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+              <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
                 Checks text accuracy, spelling, and label/factual issues, then drafts a detailed correction prompt and switches refine model to Nano Banana Pro.
+                {usesOpenAIForGeneration
+                  ? ' Uses your Gemini API key from Settings (not the OpenAI key used for GPT Image).'
+                  : ''}
               </span>
             </button>
             <button
