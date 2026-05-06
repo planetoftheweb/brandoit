@@ -804,6 +804,17 @@ const App: React.FC = () => {
 
   const getActiveApiKey = (): string | undefined => getApiKeyForModel(selectedModel);
 
+  /** Analysis / expand use Gemini Flash vision+text; they must use the same resolved key as image generation for the active Gemini-family model. Otherwise a per-model override (e.g. Nano Banana 2) can succeed while the shared `gemini` slot still holds an invalid legacy key and triggers API_KEY_INVALID. */
+  const getGeminiAuxiliaryApiKey = (): string | undefined => {
+    if (!user) return undefined;
+    const geminiFamily = new Set<string>(['gemini', 'gemini-3.1-flash-image-preview', 'gemini-svg']);
+    if (geminiFamily.has(selectedModel)) {
+      const forSelected = getApiKeyForModel(selectedModel);
+      if (forSelected) return forSelected;
+    }
+    return getApiKeyForModel('gemini');
+  };
+
   const activeApiKey = getActiveApiKey();
   const needsSetup = !user || !activeApiKey;
 
@@ -1531,7 +1542,7 @@ const App: React.FC = () => {
       throw new Error('Create a free account and add your API key in Settings before running analysis.');
     }
 
-    const analysisKey = getApiKeyForModel('gemini');
+    const analysisKey = getGeminiAuxiliaryApiKey();
     if (!analysisKey) {
       setSettingsMode(true);
       throw new Error('Add a Gemini API key in Settings to run image analysis.');
@@ -1603,7 +1614,7 @@ const App: React.FC = () => {
       openAuthModal('signup');
       throw new Error('Create a free account and add your API key in Settings before expanding prompts.');
     }
-    const expandKey = getApiKeyForModel('gemini');
+    const expandKey = getGeminiAuxiliaryApiKey();
     if (!expandKey) {
       setSettingsMode(true);
       throw new Error('Add a Gemini API key in Settings to expand prompts.');
