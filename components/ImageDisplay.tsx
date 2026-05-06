@@ -2095,14 +2095,14 @@ ${version.svgCode}
               Open full editor
             </button>
           </div>
-          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-end">
+          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-center">
             <textarea
               value={refinementInput}
               onChange={(e) => setRefinementInput(e.target.value)}
               onKeyDown={handleInlinePromptKeyDown}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              rows={6}
-              className="flex-1 min-h-[9rem] max-h-[min(50vh,28rem)] p-3 rounded-xl border border-gray-200/80 dark:border-[#30363d] bg-white/80 dark:bg-[#0d1117]/80 text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/50 resize-y overflow-y-auto"
+              rows={1}
+              className="flex-1 h-11 max-h-11 p-3 bg-transparent text-sm leading-snug text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
               disabled={refinementControlsLocked}
             />
             <button
