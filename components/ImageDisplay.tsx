@@ -363,6 +363,18 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   }, [fallbackBlobUrl]);
 
   useEffect(() => {
+    if (!isPromptEditorOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setIsPromptEditorOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isPromptEditorOpen]);
+
+  useEffect(() => {
     return () => {
       Object.values(versionBlobUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
       versionBlobUrlsRef.current = {};
@@ -743,6 +755,7 @@ ${version.svgCode}
       const prompt = await onAnalyzeRefinePrompt();
       if (prompt?.trim()) {
         setRefinementInput(prompt.trim());
+        setIsPromptEditorOpen(true);
         showNotice('Analysis complete. Detailed fix prompt added.');
       } else {
         showNotice('Analysis finished with no prompt.');
@@ -1955,17 +1968,25 @@ ${version.svgCode}
 
       {isPromptEditorOpen && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-auto">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsPromptEditorOpen(false)} />
-          <div className="relative w-full max-w-3xl bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Refine Prompt Editor</h3>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsPromptEditorOpen(false)} aria-hidden />
+          <div
+            id="refine-prompt-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="refine-prompt-modal-title"
+            className="relative w-full max-w-4xl max-h-[90vh] flex flex-col bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl p-4 sm:p-5"
+          >
+            <div className="flex items-center justify-between gap-3 mb-3 shrink-0">
+              <h3 id="refine-prompt-modal-title" className="text-base font-semibold text-slate-900 dark:text-white">
+                Refine prompt
+              </h3>
               <button
                 type="button"
                 onClick={() => setIsPromptEditorOpen(false)}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                className="h-11 min-w-11 shrink-0 inline-flex items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
                 aria-label="Close prompt editor"
               >
-                <X size={15} />
+                <X size={18} />
               </button>
             </div>
             <textarea
@@ -1973,15 +1994,18 @@ ${version.svgCode}
               onChange={(e) => setRefinementInput(e.target.value)}
               onKeyDown={handleModalPromptKeyDown}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              rows={14}
-              className="w-full p-4 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60"
+              rows={18}
+              className="w-full min-h-[min(70vh,28rem)] max-h-[min(70vh,36rem)] p-4 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 overflow-y-auto shrink"
               disabled={refinementControlsLocked}
             />
-            <div className="mt-3 flex justify-end gap-2">
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 shrink-0">
+              Press Esc to close. Cmd/Ctrl+Enter submits from this editor.
+            </p>
+            <div className="mt-4 flex justify-end gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsPromptEditorOpen(false)}
-                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-[#30363d] text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                className="min-h-11 px-4 rounded-lg border border-gray-200 dark:border-[#30363d] text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
               >
                 Close
               </button>
@@ -1993,7 +2017,7 @@ ${version.svgCode}
                   }
                 }}
                 disabled={(!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold text-white transition-colors ${
+                className={`min-h-11 px-4 rounded-lg text-sm font-semibold text-white transition-colors ${
                   (!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked
                     ? 'bg-gray-300 dark:bg-[#30363d] cursor-not-allowed'
                     : 'bg-brand-red hover:bg-red-700'
@@ -2057,8 +2081,19 @@ ${version.svgCode}
               </span>
             </button>
           </div>
-          <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400">
-            Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
+          <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsPromptEditorOpen(true)}
+              aria-expanded={isPromptEditorOpen}
+              aria-controls="refine-prompt-modal"
+              className="text-sm font-semibold text-brand-teal dark:text-teal-400 hover:underline decoration-brand-teal/60 underline-offset-2 min-h-11 px-2 rounded-lg hover:bg-brand-teal/10 dark:hover:bg-teal-950/40 transition-colors"
+            >
+              Open full editor
+            </button>
           </div>
           <form onSubmit={handleRefineSubmit} className="flex gap-2 items-end">
             <textarea
@@ -2096,8 +2131,8 @@ ${version.svgCode}
                   ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                   : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
               }`}
-              aria-label="Open full prompt editor"
-              title="Larger editor"
+              aria-label="Open refine prompt in full-screen editor"
+              title="Open full editor (modal)"
             >
               <Maximize2 size={16} />
             </button>
