@@ -783,8 +783,10 @@ const App: React.FC = () => {
 
   const getApiKeyForModel = (modelId: string): string | undefined => {
     if (!user) return undefined;
-    if (user.preferences.apiKeys && user.preferences.apiKeys[modelId]) {
-      return user.preferences.apiKeys[modelId];
+    const slot = user.preferences.apiKeys?.[modelId];
+    if (typeof slot === 'string') {
+      const t = slot.trim();
+      if (t) return t;
     }
     // Gemini-family models share the gemini key by default.
     if (
@@ -792,25 +794,28 @@ const App: React.FC = () => {
       modelId === 'gemini-3.1-flash-image-preview' ||
       modelId === 'gemini-svg'
     ) {
-      if (user.preferences.apiKeys?.gemini) return user.preferences.apiKeys.gemini;
-      if (user.preferences.geminiApiKey) return user.preferences.geminiApiKey;
+      const shared = user.preferences.apiKeys?.gemini;
+      if (typeof shared === 'string' && shared.trim()) return shared.trim();
+      const legacy = user.preferences.geminiApiKey;
+      if (typeof legacy === 'string' && legacy.trim()) return legacy.trim();
     }
     // All OpenAI-family models share one OpenAI API key slot.
     if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
-      if (user.preferences.apiKeys?.openai) return user.preferences.apiKeys.openai;
+      const k = user.preferences.apiKeys?.openai;
+      if (typeof k === 'string' && k.trim()) return k.trim();
     }
     return undefined;
   };
 
   const getActiveApiKey = (): string | undefined => getApiKeyForModel(selectedModel);
 
-  /** Analysis / expand use Gemini Flash vision+text; they must use the same resolved key as image generation for the active Gemini-family model. Otherwise a per-model override (e.g. Nano Banana 2) can succeed while the shared `gemini` slot still holds an invalid legacy key and triggers API_KEY_INVALID. */
+  /** Flash-based helpers (Run analysis, expand) must use the same key as image gen when a Gemini model is selected; otherwise a per-model override can work while the shared `gemini` slot is stale. When OpenAI is selected, falls back to the shared Gemini key. */
   const getGeminiAuxiliaryApiKey = (): string | undefined => {
     if (!user) return undefined;
     const geminiFamily = new Set<string>(['gemini', 'gemini-3.1-flash-image-preview', 'gemini-svg']);
     if (geminiFamily.has(selectedModel)) {
-      const forSelected = getApiKeyForModel(selectedModel);
-      if (forSelected) return forSelected;
+      const active = getActiveApiKey();
+      if (active) return active;
     }
     return getApiKeyForModel('gemini');
   };

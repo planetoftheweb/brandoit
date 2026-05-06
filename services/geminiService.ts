@@ -4,16 +4,44 @@ import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioS
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
-// `-latest` is Google's recommended alias for analysis-style calls — it
-// always resolves to the current stable Flash model, so the analyzer
-// keeps working as Google rotates the underlying version. Pinning to a
-// specific version (`gemini-2.5-flash`) caused 400 / API_KEY_INVALID
-// failures for users whose key/project didn't have that exact version
-// enabled even though their image-gen calls (e.g. Nano Banana Pro)
-// against the same key worked fine — Google returns API_KEY_INVALID
-// for "model not enabled on this project" rather than a clearer code.
-// See https://ai.google.dev/gemini-api/docs/models for the alias.
-const ANALYSIS_MODEL = 'gemini-flash-latest';
+// Vision/text analysis calls use Flash. Google sometimes returns API_KEY_INVALID
+// when the real issue is model enablement on the project — same key works for
+// image models. We try a short fallback list (alias first, then explicit ids).
+// See https://ai.google.dev/gemini-api/docs/models
+const FLASH_TEXT_MODEL_FALLBACKS = [
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+] as const;
+const ANALYSIS_MODEL = FLASH_TEXT_MODEL_FALLBACKS[0];
+
+const stringifyGeminiCallError = (err: unknown): string => {
+  if (err instanceof Error && err.message) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+};
+
+/** Prefer a short API message over a huge JSON blob in UI toasts. */
+const formatUserFacingGeminiError = (raw: string): string => {
+  const s = raw.trim();
+  try {
+    const j = JSON.parse(s) as { message?: string; error?: { message?: string } };
+    const inner = j?.error?.message || j?.message;
+    if (typeof inner === 'string' && inner.trim()) return inner.trim();
+  } catch {
+    /* not JSON */
+  }
+  return s.length > 900 ? `${s.slice(0, 900)}…` : s;
+};
+
+/** True when retrying with another Flash model id might succeed (Google often mislabels model/API enablement as API_KEY_INVALID). */
+const shouldRetryFlashModelAfterError = (err: unknown): boolean =>
+  /API_KEY_INVALID|INVALID_ARGUMENT|not found|not supported|is not available|Model .*not/i.test(
+    stringifyGeminiCallError(err)
+  );
 
 /** Strip optional ```json fences so structured-output parsing doesn't throw. */
 const parseJsonFromModelText = <T>(raw: string): T => {
@@ -538,55 +566,76 @@ export const analyzeImageForCorrectionPrompt = async (
     - Keep the image concept intact; do not introduce unrelated new content.
   `.trim();
 
-  try {
-    const response = await ai.models.generateContent({
-      model: ANALYSIS_MODEL,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: sourceImage.base64Data,
-              mimeType: sourceImage.mimeType,
-            },
-          },
-          { text: prompt }
-        ]
+  const jsonConfig = withSystemInstruction({
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        analysisSummary: { type: Type.STRING },
+        issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+        fixPrompt: { type: Type.STRING }
       },
-      config: withSystemInstruction({
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            analysisSummary: { type: Type.STRING },
-            issues: { type: Type.ARRAY, items: { type: Type.STRING } },
-            fixPrompt: { type: Type.STRING }
-          },
-          required: ["analysisSummary", "issues", "fixPrompt"]
-        }
-      }, systemPrompt)
-    });
+      required: ["analysisSummary", "issues", "fixPrompt"]
+    }
+  }, systemPrompt);
 
-    if (!response.text) throw new Error("No correction analysis generated");
-    let parsed: Partial<ImageCorrectionPlan>;
+  let lastError: unknown;
+  for (let mi = 0; mi < FLASH_TEXT_MODEL_FALLBACKS.length; mi++) {
+    const model = FLASH_TEXT_MODEL_FALLBACKS[mi];
     try {
-      parsed = parseJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
-    } catch {
+      const response = await ai.models.generateContent({
+        model,
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                data: sourceImage.base64Data,
+                mimeType: sourceImage.mimeType,
+              },
+            },
+            { text: prompt }
+          ]
+        },
+        config: jsonConfig
+      });
+
+      if (!response.text) throw new Error("No correction analysis generated");
+      let parsed: Partial<ImageCorrectionPlan>;
+      try {
+        parsed = parseJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
+      } catch {
+        throw new Error(
+          "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
+        );
+      }
+
+      return {
+        analysisSummary: (parsed.analysisSummary || '').trim(),
+        issues: Array.isArray(parsed.issues)
+          ? parsed.issues.map(issue => String(issue).trim()).filter(Boolean)
+          : [],
+        fixPrompt: (parsed.fixPrompt || '').trim()
+      };
+    } catch (error: unknown) {
+      lastError = error;
+      const moreModels = mi < FLASH_TEXT_MODEL_FALLBACKS.length - 1;
+      if (moreModels && shouldRetryFlashModelAfterError(error)) {
+        console.warn(`Correction analysis: model ${model} failed, retrying with next Flash id`, error);
+        continue;
+      }
+      console.error("Image Correction Analysis Error:", error);
+      const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
       throw new Error(
-        "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
+        msg || "Failed to analyze image for correction."
       );
     }
-
-    return {
-      analysisSummary: (parsed.analysisSummary || '').trim(),
-      issues: Array.isArray(parsed.issues)
-        ? parsed.issues.map(issue => String(issue).trim()).filter(Boolean)
-        : [],
-      fixPrompt: (parsed.fixPrompt || '').trim()
-    };
-  } catch (error: any) {
-    console.error("Image Correction Analysis Error:", error);
-    throw new Error(error.message || "Failed to analyze image for correction.");
   }
+
+  console.error("Image Correction Analysis Error:", lastError);
+  throw new Error(
+    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) ||
+      "Failed to analyze image for correction."
+  );
 };
 
 // Expand a short prompt into a richer, visual-focused description (text-only, no reference image)
