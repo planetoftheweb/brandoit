@@ -1973,8 +1973,8 @@ ${version.svgCode}
               onChange={(e) => setRefinementInput(e.target.value)}
               onKeyDown={handleModalPromptKeyDown}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              rows={12}
-              className="w-full p-3 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60"
+              rows={14}
+              className="w-full p-4 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60"
               disabled={refinementControlsLocked}
             />
             <div className="mt-3 flex justify-end gap-2">
@@ -2060,14 +2060,14 @@ ${version.svgCode}
           <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400">
             Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
           </div>
-          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-center">
+          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-end">
             <textarea
               value={refinementInput}
               onChange={(e) => setRefinementInput(e.target.value)}
               onKeyDown={handleInlinePromptKeyDown}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              rows={1}
-              className="flex-1 h-11 p-3 bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
+              rows={6}
+              className="flex-1 min-h-[9rem] max-h-[min(50vh,28rem)] p-3 rounded-xl border border-gray-200/80 dark:border-[#30363d] bg-white/80 dark:bg-[#0d1117]/80 text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/50 resize-y overflow-y-auto"
               disabled={refinementControlsLocked}
             />
             <button
