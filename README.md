@@ -48,7 +48,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   **Authentication:** Email/Password & Profile Management
     *   **Firestore:** Real-time NoSQL Database (Normalized Structure)
     *   **Storage:** Profile photos & Asset storage
-*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`, `gemini-2.5-flash`) and OpenAI (`gpt-image-2`, `gpt-image-1-mini`, `gpt-image-1.5`)
+*   **AI:** Google Gemini (`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`, `gemini-flash-latest`) and OpenAI (`gpt-image-2`, `gpt-image-1-mini`, `gpt-image-1.5`)
 *   **Icons:** Lucide React
 *   **Font:** Mona Sans & Inter
 

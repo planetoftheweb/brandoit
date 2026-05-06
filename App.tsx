@@ -705,29 +705,37 @@ const App: React.FC = () => {
     user?.id
   ]);
 
-  // Auto-promote the current toolbar selection to the user's persistent
-  // Firestore defaults so a fresh browser / private window / new device
-  // restores the same look-and-feel. The localStorage cache above handles
-  // the zero-latency hydrate; this backs it with durable server state so
-  // "I don't think it's remembering my preferences" never happens.
-  // Only runs once hydration is complete so we don't echo stale '' values
-  // back into Firestore during the initial clear-then-load cycle.
+  // First-time bootstrap of the user's persistent Firestore defaults from
+  // whatever is currently in the toolbar. This only fills in defaults the
+  // user has NEVER explicitly set — once a `default*` field exists in
+  // settings, it's owned by the Settings page and toolbar tweaks must not
+  // clobber it (otherwise picking 1:1 for a one-off generation would
+  // silently overwrite the user's saved Widescreen preference).
+  // The localStorage cache continues to remember the most recent toolbar
+  // state for fast hydration on reload; that's separate from the explicit
+  // user-set defaults synced to Firestore.
+  // Always runs after hydration so the selected model still syncs to
+  // Firestore when it changes (model is a live selection, not a default).
   useEffect(() => {
     if (!user || !hasHydratedToolbarState) return;
     const existingSettings = user.preferences.settings || { contributeByDefault: false };
-    const nextDefaults = {
-      defaultGraphicTypeId: config.graphicTypeId || undefined,
-      defaultVisualStyleId: config.visualStyleId || undefined,
-      defaultColorSchemeId: config.colorSchemeId || undefined,
-      defaultAspectRatio: config.aspectRatio || undefined,
-    };
-    const defaultsChanged =
-      nextDefaults.defaultGraphicTypeId !== existingSettings.defaultGraphicTypeId ||
-      nextDefaults.defaultVisualStyleId !== existingSettings.defaultVisualStyleId ||
-      nextDefaults.defaultColorSchemeId !== existingSettings.defaultColorSchemeId ||
-      nextDefaults.defaultAspectRatio !== existingSettings.defaultAspectRatio;
+    // Only seed defaults that don't have a saved value yet — never overwrite.
+    const seededDefaults: Partial<UserSettings> = {};
+    if (!existingSettings.defaultGraphicTypeId && config.graphicTypeId) {
+      seededDefaults.defaultGraphicTypeId = config.graphicTypeId;
+    }
+    if (!existingSettings.defaultVisualStyleId && config.visualStyleId) {
+      seededDefaults.defaultVisualStyleId = config.visualStyleId;
+    }
+    if (!existingSettings.defaultColorSchemeId && config.colorSchemeId) {
+      seededDefaults.defaultColorSchemeId = config.colorSchemeId;
+    }
+    if (!existingSettings.defaultAspectRatio && config.aspectRatio) {
+      seededDefaults.defaultAspectRatio = config.aspectRatio;
+    }
+    const defaultsSeeded = Object.keys(seededDefaults).length > 0;
     const modelChanged = selectedModel !== user.preferences.selectedModel;
-    if (!defaultsChanged && !modelChanged) return;
+    if (!defaultsSeeded && !modelChanged) return;
 
     setUser(prev =>
       prev
@@ -736,10 +744,9 @@ const App: React.FC = () => {
             preferences: {
               ...prev.preferences,
               selectedModel,
-              settings: {
-                ...existingSettings,
-                ...nextDefaults,
-              },
+              settings: defaultsSeeded
+                ? { ...existingSettings, ...seededDefaults }
+                : existingSettings,
             },
           }
         : prev
@@ -2140,6 +2147,25 @@ const App: React.FC = () => {
     setUser(prev => prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev);
   };
 
+  // Overwrite an existing preset with the current toolbar snapshot. Mirrors
+  // the same field set as `handleSavePreset` so updating produces an
+  // equivalent shape — keeping name + createdAt intact via presetService so
+  // the row identity (and sort order) survives the rewrite.
+  const handleUpdatePreset = async (presetId: string) => {
+    if (!user) throw new Error('Sign in to update presets.');
+    const snapshot: Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'> = {
+      graphicTypeId: config.graphicTypeId || undefined,
+      visualStyleId: config.visualStyleId || undefined,
+      colorSchemeId: config.colorSchemeId || undefined,
+      aspectRatio: config.aspectRatio || undefined,
+      svgMode: config.svgMode,
+      selectedModel,
+      openaiImageQuality: user.preferences.settings?.openaiImageQuality
+    };
+    const presets = await presetService.updatePreset(user, presetId, snapshot);
+    setUser(prev => prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev);
+  };
+
   // ----- Folder handlers -----
   // Folders group generation tiles for the gallery. Persistence routes
   // through `folderService` (Firestore for users, localStorage for guests).
@@ -2500,6 +2526,7 @@ const App: React.FC = () => {
             presets={user?.preferences.presets || []}
             onApplyPreset={handleApplyPreset}
             onSavePreset={user ? handleSavePreset : undefined}
+            onUpdatePreset={user ? handleUpdatePreset : undefined}
             onDeletePreset={user ? handleDeletePreset : undefined}
             isOptionsCollapsed={isToolbarCollapsed}
             hasGenerated={!!currentGeneration}

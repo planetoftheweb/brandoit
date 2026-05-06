@@ -27,7 +27,7 @@ This project is designed to be worked on by specialized AI agents.
 - **Authentication:** `authService.ts` (Firebase Auth & User Profile management).
 - **AI Integration:** `geminiService.ts`.
     - **Image Generation:** MUST use `gemini-3-pro-image-preview` for Gemini and `gpt-5` for OpenAI.
-    - **Text/Analysis:** Use `gemini-2.5-flash` for brand analysis and prompt expansion.
+    - **Text/Analysis:** Use `gemini-flash-latest` (Google's always-current Flash alias) for brand analysis, correction analysis, prompt expansion, and image-description calls. Pinning to a specific version like `gemini-2.5-flash` caused `400 / API_KEY_INVALID` rejections for users whose key/project didn't have that exact version enabled, even when image-gen against the same key worked fine.
     - **Multi-Model Support:** Architecture supports different API keys for different models via User Preferences.
 - **Data Persistence:** 
     - `resourceService.ts` (Fetches unified System + Custom resources with scoping).

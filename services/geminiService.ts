@@ -4,7 +4,16 @@ import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioS
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
-const ANALYSIS_MODEL = 'gemini-2.5-flash'; // DO NOT CHANGE
+// `-latest` is Google's recommended alias for analysis-style calls — it
+// always resolves to the current stable Flash model, so the analyzer
+// keeps working as Google rotates the underlying version. Pinning to a
+// specific version (`gemini-2.5-flash`) caused 400 / API_KEY_INVALID
+// failures for users whose key/project didn't have that exact version
+// enabled even though their image-gen calls (e.g. Nano Banana Pro)
+// against the same key worked fine — Google returns API_KEY_INVALID
+// for "model not enabled on this project" rather than a clearer code.
+// See https://ai.google.dev/gemini-api/docs/models for the alias.
+const ANALYSIS_MODEL = 'gemini-flash-latest';
 const SUPPORTED_INPUT_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',

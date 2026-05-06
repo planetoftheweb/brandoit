@@ -116,8 +116,11 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     // First-run discoverability nudge: the compare feature is otherwise easy
     // to miss. Flash a small hint when a thumbnail is normal-clicked so the
     // user learns the shift-click shortcut. Suppressed while already picking
-    // or while a comparison is already on screen.
-    if (onPickMark && !isCompareMode && !isComparing) {
+    // or while a comparison is already on screen, and skipped when there's
+    // only a single mark on the tile (nothing to shift-click against, so
+    // the hint would be misleading).
+    const hasSiblingsToCompare = (generation?.versions.length ?? 0) > 1;
+    if (onPickMark && !isCompareMode && !isComparing && hasSiblingsToCompare) {
       if (compareHintTimerRef.current) {
         window.clearTimeout(compareHintTimerRef.current);
       }
@@ -1023,11 +1026,7 @@ ${version.svgCode}
             width to render itself. `relative` is needed for the absolute
             rail to anchor against this row. */}
         <div
-          className={`group relative w-full min-w-0 flex items-stretch gap-3 max-h-full ${
-            hasMultipleVersions
-              ? 'mx-auto max-w-7xl'
-              : 'justify-center'
-          }`}
+          className="group relative w-full min-w-0 flex items-stretch gap-3 max-h-full mx-auto max-w-7xl"
           data-dragging={isSliderDragging ? 'true' : undefined}
         >
 
@@ -1040,8 +1039,16 @@ ${version.svgCode}
               drive the two-mark flow without their cursor having to
               babysit the image. The inner scroller is `absolute inset-0`
               against THIS wrapper, so the wrapper still needs a concrete
-              height — `top-0 bottom-0` does that against the row. */}
-          {hasMultipleVersions && (
+              height — `top-0 bottom-0` does that against the row.
+
+              Rendered for any generation with at least one version (i.e.
+              always) so the "Add a new Mark" plus button at the bottom of
+              the rail is reachable even on single-version generations —
+              that's how users iterate on a fresh result without hunting
+              for the refine bar. The Compare control inside the rail is
+              still gated on hasMultipleVersions below since you can't
+              compare a mark against itself. */}
+          {generation.versions.length >= 1 && (
             <div
               className={`absolute top-0 bottom-0 left-0 w-[124px] z-30 transition-all duration-200 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
                 isCompareMode || isComparing
@@ -1067,7 +1074,7 @@ ${version.svgCode}
                     preview row. While actively in compare/picking mode the
                     button stays at full opacity so the user can always
                     bail out. */}
-                {onEnterComparePicker && onExitComparePicker && (
+                {hasMultipleVersions && onEnterComparePicker && onExitComparePicker && (
                   <button
                     type="button"
                     onClick={() => {

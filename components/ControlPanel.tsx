@@ -41,6 +41,7 @@ import {
   Wand2,
   Copy,
   RotateCcw,
+  RotateCw,
   Play,
   Pause,
   MousePointer2,
@@ -101,6 +102,12 @@ interface ControlPanelProps {
   onApplyPreset?: (preset: ToolbarPreset) => void;
   /** Persist the current toolbar settings as a new named preset. */
   onSavePreset?: (name: string) => Promise<void> | void;
+  /**
+   * Overwrite an existing preset with the current toolbar settings. Used by
+   * the "update from current" affordance so users can iterate on a preset
+   * (tweak a style or model, then re-save) without accumulating duplicates.
+   */
+  onUpdatePreset?: (presetId: string) => Promise<void> | void;
   /** Remove a preset by id. */
   onDeletePreset?: (presetId: string) => Promise<void> | void;
   /**
@@ -509,6 +516,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   presets = [],
   onApplyPreset,
   onSavePreset,
+  onUpdatePreset,
   onDeletePreset,
   isOptionsCollapsed = false,
   hasGenerated = false,
@@ -604,6 +612,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       await onDeletePreset(presetId);
     } catch (err) {
       console.error('Failed to delete preset', err);
+    }
+  };
+
+  // Transient ids used to render per-row feedback after an update completes
+  // (a brief checkmark) and while the request is in flight (spinner). Tracked
+  // by id rather than a boolean so two clicks on different rows don't fight.
+  const [updatingPresetId, setUpdatingPresetId] = useState<string | null>(null);
+  const [justUpdatedPresetId, setJustUpdatedPresetId] = useState<string | null>(null);
+
+  const handleUpdatePreset = async (e: React.MouseEvent, presetId: string) => {
+    e.stopPropagation();
+    if (!onUpdatePreset || updatingPresetId) return;
+    setUpdatingPresetId(presetId);
+    try {
+      await onUpdatePreset(presetId);
+      setJustUpdatedPresetId(presetId);
+      window.setTimeout(() => {
+        setJustUpdatedPresetId(prev => (prev === presetId ? null : prev));
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to update preset', err);
+    } finally {
+      setUpdatingPresetId(null);
     }
   };
   const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
@@ -1890,13 +1921,37 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                   </span>
                                 </div>
                               </div>
-                              <button
-                                onClick={(e) => handleDeletePreset(e, preset.id)}
-                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors opacity-60 group-hover:opacity-100"
-                                title="Delete preset"
-                              >
-                                <Trash2 size={12} />
-                              </button>
+                              <div className="flex items-center gap-0.5 shrink-0">
+                                {onUpdatePreset && (
+                                  <button
+                                    onClick={(e) => handleUpdatePreset(e, preset.id)}
+                                    disabled={updatingPresetId === preset.id}
+                                    className={`p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md transition-colors opacity-60 group-hover:opacity-100 disabled:opacity-100 ${
+                                      justUpdatedPresetId === preset.id
+                                        ? 'text-brand-teal'
+                                        : 'text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal'
+                                    }`}
+                                    title="Update with current toolbar settings"
+                                    aria-label={`Update preset ${preset.name} with current settings`}
+                                  >
+                                    {updatingPresetId === preset.id ? (
+                                      <Loader2 size={12} className="animate-spin" />
+                                    ) : justUpdatedPresetId === preset.id ? (
+                                      <CheckIcon size={12} />
+                                    ) : (
+                                      <RotateCw size={12} />
+                                    )}
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => handleDeletePreset(e, preset.id)}
+                                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors opacity-60 group-hover:opacity-100"
+                                  title="Delete preset"
+                                  aria-label={`Delete preset ${preset.name}`}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
                             </div>
                           ))
                       )}
