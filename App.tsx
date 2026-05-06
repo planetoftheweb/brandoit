@@ -296,6 +296,8 @@ const App: React.FC = () => {
   // for new generations — `undefined` means "no pin, fall back to Inbox".
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<string | undefined>(undefined);
+  /** Recents gallery folder tab; persisted (Firestore / guest localStorage). */
+  const [galleryViewFolderId, setGalleryViewFolderId] = useState<string>(INBOX_FOLDER_ID);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -430,10 +432,11 @@ const App: React.FC = () => {
     // auto-seeds Inbox the first time it's called for a user/device.
     let cancelled = false;
     folderService.loadFolders(user || null)
-      .then(({ folders: nextFolders, activeFolderId: nextActive }) => {
+      .then(({ folders: nextFolders, activeFolderId: nextActive, galleryViewFolderId: nextGallery }) => {
         if (cancelled) return;
         setFolders(nextFolders);
         setActiveFolderId(nextActive);
+        setGalleryViewFolderId(nextGallery ?? INBOX_FOLDER_ID);
       })
       .catch(err => {
         console.warn('[App] Failed to hydrate folders:', err);
@@ -445,6 +448,22 @@ const App: React.FC = () => {
       cancelled = true;
     };
   }, [user?.id, user?.username, user?.isAdmin]); // Run when account context changes
+
+  // If the saved gallery folder no longer exists (deleted on another device),
+  // fall back to Inbox and persist the correction.
+  useEffect(() => {
+    if (folders.length === 0) return;
+    if (folders.some((f) => f.id === galleryViewFolderId)) return;
+    const next = INBOX_FOLDER_ID;
+    setGalleryViewFolderId(next);
+    void folderService.setGalleryViewFolder(user || null, next).then(() => {
+      if (user) {
+        setUser(prev =>
+          prev ? { ...prev, preferences: { ...prev.preferences, galleryViewFolderId: next } } : prev
+        );
+      }
+    });
+  }, [folders, galleryViewFolderId, user?.id]);
 
   // Effect to toggle body class
   useEffect(() => {
@@ -2224,6 +2243,21 @@ const App: React.FC = () => {
     setActiveFolderId(next);
   };
 
+  const handleGalleryViewFolderChange = async (folderId: string) => {
+    if (!folders.some((f) => f.id === folderId)) return;
+    setGalleryViewFolderId(folderId);
+    try {
+      await folderService.setGalleryViewFolder(user || null, folderId);
+      if (user) {
+        setUser(prev =>
+          prev ? { ...prev, preferences: { ...prev.preferences, galleryViewFolderId: folderId } } : prev
+        );
+      }
+    } catch (err) {
+      console.warn('[App] Failed to persist gallery view folder:', err);
+    }
+  };
+
   const handleMoveGenerationsToFolder = async (generationIds: string[], folderId: string) => {
     const moved = await historyService.moveGenerationsToFolder(
       user || null,
@@ -2842,6 +2876,8 @@ const App: React.FC = () => {
               }}
               folders={folders}
               activeFolderId={activeFolderId}
+              galleryViewFolderId={galleryViewFolderId}
+              onGalleryViewFolderChange={handleGalleryViewFolderChange}
               onCreateFolder={handleCreateFolder}
               onRenameFolder={handleRenameFolder}
               onDeleteFolder={handleDeleteFolder}

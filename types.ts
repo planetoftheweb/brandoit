@@ -168,6 +168,12 @@ export interface UserPreferences {
    * Inbox. Cleared explicitly by the user via the gallery's pin toggle.
    */
   activeFolderId?: string;
+  /**
+   * Which folder the Recents gallery is currently showing. Persisted so the
+   * same selection restores across devices and sessions (Firestore for
+   * signed-in users; localStorage for guests). Invalid ids fall back to Inbox.
+   */
+  galleryViewFolderId?: string;
 }
 
 /**

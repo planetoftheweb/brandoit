@@ -115,6 +115,10 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
     clean.activeFolderId = prefs.activeFolderId;
   }
 
+  if (typeof prefs.galleryViewFolderId === 'string' && prefs.galleryViewFolderId.length > 0) {
+    clean.galleryViewFolderId = prefs.galleryViewFolderId;
+  }
+
   return clean;
 };
 
@@ -158,6 +162,10 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     activeFolderId:
       typeof savedPrefs.activeFolderId === 'string' && savedPrefs.activeFolderId.length > 0
         ? savedPrefs.activeFolderId
+        : undefined,
+    galleryViewFolderId:
+      typeof savedPrefs.galleryViewFolderId === 'string' && savedPrefs.galleryViewFolderId.length > 0
+        ? savedPrefs.galleryViewFolderId
         : undefined,
   };
 };

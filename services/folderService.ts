@@ -14,6 +14,10 @@ import { authService } from "./authService";
 
 const FOLDERS_LOCAL_KEY = 'brandoit_folders_v1';
 const ACTIVE_FOLDER_LOCAL_KEY = 'brandoit_active_folder_v1';
+/** Last-opened Recents gallery folder for guests (signed-in uses Firestore). */
+const GALLERY_VIEW_FOLDER_LOCAL_KEY = 'brandoit_gallery_view_folder_v1';
+/** Legacy key from when view folder lived only in RecentGenerations. */
+const GALLERY_VIEW_FOLDER_LEGACY_KEY = 'recentGenerations.viewFolderId';
 
 const generateFolderId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -90,6 +94,36 @@ const writeLocalActiveFolderId = (id: string | null | undefined) => {
   }
 };
 
+const readLocalGalleryViewFolderId = (): string | undefined => {
+  try {
+    const primary = localStorage.getItem(GALLERY_VIEW_FOLDER_LOCAL_KEY);
+    if (primary && primary.length > 0) return primary;
+    const legacy = localStorage.getItem(GALLERY_VIEW_FOLDER_LEGACY_KEY);
+    return legacy && legacy.length > 0 ? legacy : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writeLocalGalleryViewFolderId = (id: string) => {
+  try {
+    localStorage.setItem(GALLERY_VIEW_FOLDER_LOCAL_KEY, id);
+  } catch (err) {
+    console.warn('[folderService] Failed to persist gallery view folder locally:', err);
+  }
+};
+
+/**
+ * Returns a stored gallery folder id only if it still exists in `folders`.
+ */
+const resolveGalleryViewFolderId = (
+  raw: string | undefined,
+  folders: Folder[]
+): string | undefined => {
+  if (!raw || raw.length === 0) return undefined;
+  return folders.some(f => f.id === raw) ? raw : undefined;
+};
+
 const buildNextPreferences = (
   user: User,
   nextFolders: Folder[],
@@ -124,6 +158,8 @@ const persistFolders = async (
 export interface FolderState {
   folders: Folder[];
   activeFolderId?: string;
+  /** Which folder the Recents grid should open on; validated against `folders`. */
+  galleryViewFolderId?: string;
 }
 
 export const folderService = {
@@ -145,6 +181,41 @@ export const folderService = {
           ? user.preferences.activeFolderId
           : undefined;
 
+      const fromPrefs = resolveGalleryViewFolderId(
+        typeof user.preferences.galleryViewFolderId === 'string'
+          ? user.preferences.galleryViewFolderId
+          : undefined,
+        folders
+      );
+
+      let galleryViewFolderId = fromPrefs;
+
+      // One-time migration: browser had the old localStorage key but Firestore
+      // never stored the gallery tab — promote a valid legacy value to the
+      // user doc so it follows the account across devices.
+      if (!galleryViewFolderId && typeof globalThis.localStorage !== 'undefined') {
+        try {
+          const legacy = globalThis.localStorage.getItem(GALLERY_VIEW_FOLDER_LEGACY_KEY);
+          const migrated = resolveGalleryViewFolderId(
+            legacy && legacy.length > 0 ? legacy : undefined,
+            folders
+          );
+          if (migrated) {
+            galleryViewFolderId = migrated;
+            void authService
+              .updateUserPreferences(user.id, {
+                ...user.preferences,
+                folders,
+                activeFolderId,
+                galleryViewFolderId: migrated
+              })
+              .catch(err => console.warn('[folderService] Gallery view migration write failed:', err));
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       // Persist the seed so a brand-new account ends up with an Inbox doc
       // even before the user creates anything. Best-effort — failure here
       // shouldn't block the UI from rendering the in-memory seed.
@@ -156,13 +227,34 @@ export const folderService = {
         }
       }
 
-      return { folders, activeFolderId };
+      return { folders, activeFolderId, galleryViewFolderId };
     }
 
     const stored = readLocalFolders();
     const folders = ensureInbox(stored);
     if (stored.length === 0) writeLocalFolders(folders);
-    return { folders, activeFolderId: readLocalActiveFolderId() };
+    const galleryViewFolderId = resolveGalleryViewFolderId(readLocalGalleryViewFolderId(), folders);
+    return {
+      folders,
+      activeFolderId: readLocalActiveFolderId(),
+      galleryViewFolderId
+    };
+  },
+
+  /**
+   * Remember which folder the Recents gallery is showing. Signed-in users
+   * persist on the user document; guests use localStorage.
+   */
+  setGalleryViewFolder: async (user: User | null, folderId: string): Promise<void> => {
+    if (!folderId || folderId.length === 0) return;
+    if (user) {
+      await authService.updateUserPreferences(user.id, {
+        ...user.preferences,
+        galleryViewFolderId: folderId
+      });
+    } else {
+      writeLocalGalleryViewFolderId(folderId);
+    }
   },
 
   /**

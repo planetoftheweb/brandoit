@@ -73,6 +73,10 @@ interface RecentGenerationsProps {
   folders: Folder[];
   /** Sticky folder for new generations. `undefined` => Inbox is the fallback. */
   activeFolderId?: string;
+  /** Which folder's tiles the Recents grid is showing; owned and persisted by App. */
+  galleryViewFolderId: string;
+  /** Persist the user's gallery folder tab (Firestore or guest localStorage). */
+  onGalleryViewFolderChange: (folderId: string) => void | Promise<void>;
   /** Create a new folder; returns the created folder so the gallery can switch view to it. */
   onCreateFolder: (name: string) => Promise<Folder>;
   onRenameFolder: (folderId: string, nextName: string) => Promise<void>;
@@ -93,6 +97,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   pickedMarkIds,
   folders,
   activeFolderId,
+  galleryViewFolderId,
+  onGalleryViewFolderChange,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -104,31 +110,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
-  // Folder UI state. `viewFolderId` is the folder whose tiles are currently
-  // shown in the grid. We persist it to localStorage so the gallery returns
-  // to the last-viewed folder on reload — without that, every refresh
-  // dropped the user back into Inbox even if they were deep in another
-  // folder. The activeFolderId pin (sticky for new generations) is a
-  // *separate* concept; user can be viewing folder A while pinning folder B.
-  const VIEW_FOLDER_PREF_KEY = 'recentGenerations.viewFolderId';
-  const [viewFolderId, setViewFolderId] = React.useState<string>(() => {
-    if (typeof window === 'undefined') return activeFolderId || INBOX_FOLDER_ID;
-    try {
-      const stored = window.localStorage.getItem(VIEW_FOLDER_PREF_KEY);
-      if (stored) return stored;
-    } catch {
-      // ignore
-    }
-    return activeFolderId || INBOX_FOLDER_ID;
-  });
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(VIEW_FOLDER_PREF_KEY, viewFolderId);
-    } catch {
-      // ignore — quota / private mode shouldn't break the UI
-    }
-  }, [viewFolderId]);
+  // Grid folder tab — persisted in App (Firestore for signed-in, localStorage for guests).
+  const viewFolderId = galleryViewFolderId;
   const [renamingFolderId, setRenamingFolderId] = React.useState<string | null>(null);
   const [renameDraft, setRenameDraft] = React.useState('');
   const [pendingDeleteFolderId, setPendingDeleteFolderId] = React.useState<string | null>(null);
@@ -273,17 +256,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setSelectedIds((prev) => prev.filter((id) => valid.has(id)));
   }, [history]);
 
-  // Keep viewFolderId pointed at a folder that still exists. If the active
-  // view-tab gets deleted (e.g. user removes the folder while viewing it),
-  // fall back to Inbox so the gallery never shows a "missing folder"
-  // empty state.
-  React.useEffect(() => {
-    if (folders.length === 0) return;
-    if (!folders.some((f) => f.id === viewFolderId)) {
-      setViewFolderId(INBOX_FOLDER_ID);
-    }
-  }, [folders, viewFolderId]);
-
+  // Invalid / missing folder ids are corrected in App; no local reset here.
   // Close the folder picker and the move-to-folder picker on outside
   // clicks / Escape, mirroring the existing toast lifecycle. Both menus
   // tag themselves with `data-folder-menu` so a click *inside* either menu
@@ -595,7 +568,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       : 0;
 
     const handleSelectFolder = (folderId: string) => {
-      setViewFolderId(folderId);
+      void onGalleryViewFolderChange(folderId);
       setIsFolderPickerOpen(false);
       setRenamingFolderId(null);
       setRenameDraft('');
@@ -847,7 +820,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     const created = await onCreateFolder(next);
                     setIsCreatingFolder(false);
                     setNewFolderDraft('');
-                    setViewFolderId(created.id);
+                    await onGalleryViewFolderChange(created.id);
                     setIsFolderPickerOpen(false);
                     showToast(`Created ${created.name}`);
                   } catch (err) {
