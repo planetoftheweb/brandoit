@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare, Plus } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare, Plus, Expand, ScanSearch } from 'lucide-react';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getCurrentVersion } from '../services/historyService';
@@ -33,6 +33,8 @@ interface ImageDisplayProps {
   generation: Generation | null;
   onRefine: (refinementText: string) => void;
   onAnalyzeRefinePrompt: () => Promise<string>;
+  /** AI-expand the refine draft (or the tile's original prompt when the draft is empty). */
+  onExpandRefinementPrompt: (draft: string) => Promise<string>;
   onResizeCanvasRefine: (targetAspectRatio: string) => Promise<void>;
   isRefining: boolean;
   onCopy?: () => void;
@@ -65,6 +67,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   generation,
   onRefine,
   onAnalyzeRefinePrompt,
+  onExpandRefinementPrompt,
   onResizeCanvasRefine,
   isRefining,
   onCopy,
@@ -146,10 +149,14 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [animationPaused, setAnimationPaused] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
   const [isAnalyzingRefinePrompt, setIsAnalyzingRefinePrompt] = useState(false);
+  const [isExpandingRefinement, setIsExpandingRefinement] = useState(false);
   const [isResizingCanvas, setIsResizingCanvas] = useState(false);
   const [deletingRefinementId, setDeletingRefinementId] = useState<string | null>(null);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [resizeAspectRatio, setResizeAspectRatio] = useState('');
+  /** True while refine / analysis / expand / recompose is in flight. */
+  const refinementControlsLocked =
+    isRefining || isAnalyzingRefinePrompt || isResizingCanvas || isExpandingRefinement;
   // True while the user is actively dragging the JuxtaposeSlider divider.
   // Used to mute the in-image overlays (rail, version chip, action buttons,
   // compare overlay, etc.) so the user gets a clean before/after read while
@@ -730,7 +737,7 @@ ${version.svgCode}
   };
 
   const handleAnalyzeRefineClick = async () => {
-    if (isRefining || isAnalyzingRefinePrompt || isResizingCanvas) return;
+    if (refinementControlsLocked) return;
     setIsAnalyzingRefinePrompt(true);
     try {
       const prompt = await onAnalyzeRefinePrompt();
@@ -747,8 +754,26 @@ ${version.svgCode}
     }
   };
 
+  const handleExpandRefinementClick = async () => {
+    if (refinementControlsLocked) return;
+    setIsExpandingRefinement(true);
+    try {
+      const expanded = await onExpandRefinementPrompt(refinementInput);
+      if (expanded?.trim()) {
+        setRefinementInput(expanded.trim());
+        showNotice('Prompt expanded.');
+      } else {
+        showNotice('Expand finished with no text.');
+      }
+    } catch (error: any) {
+      showNotice(error?.message || 'Expand failed');
+    } finally {
+      setIsExpandingRefinement(false);
+    }
+  };
+
   const handleResizeCanvasClick = async () => {
-    if (isRefining || isAnalyzingRefinePrompt || isResizingCanvas) return;
+    if (refinementControlsLocked) return;
     const sourceAspect = normalizeAspectRatio(version?.aspectRatio || generation?.config.aspectRatio || '');
     const targetAspect = normalizeAspectRatio(resizeAspectRatio);
     if (!targetAspect || !sourceAspect || targetAspect === sourceAspect) {
@@ -1286,7 +1311,7 @@ ${version.svgCode}
                       onClick={handleAddMarkClick}
                       onMouseEnter={() => setHoveredVersionIdx(null)}
                       onFocus={() => setHoveredVersionIdx(null)}
-                      disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                      disabled={refinementControlsLocked}
                       aria-label={hasLastPrompt ? 'Add a new Mark using the last prompt' : 'Add a new Mark'}
                       title={titleText}
                       className="shrink-0 w-full aspect-square rounded-md border-2 border-dashed border-gray-300 dark:border-[#30363d] flex items-center justify-center text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-[#161b22]/60 hover:border-brand-teal hover:text-brand-teal hover:bg-brand-teal/5 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1922,7 +1947,7 @@ ${version.svgCode}
 
       {copyNotice && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
-          <div className="bg-brand-red text-white text-base px-6 py-4 rounded-2xl shadow-2xl border border-brand-red/70 animate-in fade-in duration-150" role="status" aria-live="polite">
+          <div className="bg-brand-red text-white text-base px-6 py-4 rounded-2xl shadow-2xl border border-brand-red/70 animate-in fade-in duration-150 pointer-events-none" role="status" aria-live="polite">
             {copyNotice}
           </div>
         </div>
@@ -1950,7 +1975,7 @@ ${version.svgCode}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
               rows={12}
               className="w-full p-3 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60"
-              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              disabled={refinementControlsLocked}
             />
             <div className="mt-3 flex justify-end gap-2">
               <button
@@ -1967,9 +1992,9 @@ ${version.svgCode}
                     setIsPromptEditorOpen(false);
                   }
                 }}
-                disabled={(!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                disabled={(!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked}
                 className={`px-3 py-2 rounded-lg text-xs font-semibold text-white transition-colors ${
-                  (!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                  (!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked
                     ? 'bg-gray-300 dark:bg-[#30363d] cursor-not-allowed'
                     : 'bg-brand-red hover:bg-red-700'
                 }`}
@@ -1993,7 +2018,7 @@ ${version.svgCode}
                 placeholder="Refine model"
                 icon={Wand2}
                 compact
-                disabled={isRefining || isResizingCanvas}
+                disabled={refinementControlsLocked}
                 buttonClassName="rounded-xl"
                 menuClassName="max-w-[22rem] z-[220]"
                 groupOrder={[...MODEL_GROUP_ORDER]}
@@ -2008,7 +2033,7 @@ ${version.svgCode}
                 placeholder="Target size"
                 icon={Maximize2}
                 compact
-                disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+                disabled={refinementControlsLocked}
                 buttonClassName="rounded-xl"
                 menuClassName="max-w-[18rem] z-[220]"
               />
@@ -2016,9 +2041,9 @@ ${version.svgCode}
             <button
               type="button"
               onClick={handleResizeCanvasClick}
-              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas || !canResizeToSelected}
+              disabled={refinementControlsLocked || !canResizeToSelected}
               className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group ${
-                isRefining || isAnalyzingRefinePrompt || isResizingCanvas || !canResizeToSelected
+                refinementControlsLocked || !canResizeToSelected
                   ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                   : 'bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
               }`}
@@ -2043,35 +2068,52 @@ ${version.svgCode}
               placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
               rows={1}
               className="flex-1 h-11 p-3 bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
-              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              disabled={refinementControlsLocked}
             />
             <button
               type="button"
+              onClick={handleExpandRefinementClick}
+              disabled={refinementControlsLocked}
+              className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                refinementControlsLocked
+                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+              }`}
+              aria-label="Expand refine prompt with richer creative detail"
+              title="Expand prompt — uses your text, or the tile's original prompt if empty"
+            >
+              {isExpandingRefinement ? <RefreshCw size={16} className="animate-spin" /> : <Expand size={16} />}
+              <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                Expand prompt
+              </span>
+            </button>
+            <button
+              type="button"
               onClick={() => setIsPromptEditorOpen(true)}
-              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              disabled={refinementControlsLocked}
               className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                refinementControlsLocked
                   ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                   : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
               }`}
               aria-label="Open full prompt editor"
-              title="Open full prompt editor"
+              title="Larger editor"
             >
               <Maximize2 size={16} />
             </button>
             <button
               type="button"
               onClick={handleAnalyzeRefineClick}
-              disabled={isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              disabled={refinementControlsLocked}
               className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
-                isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                refinementControlsLocked
                   ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                   : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
               }`}
               aria-label="Analyze current image for spelling, factual, and annotation issues and generate a correction prompt"
               title="Run analysis"
             >
-              {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <Wand2 size={16} />}
+              {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <ScanSearch size={16} />}
               <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
                 Run analysis
               </span>
@@ -2081,9 +2123,14 @@ ${version.svgCode}
             </button>
             <button
               type="submit"
-              disabled={(!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas}
+              title={
+                !refinementInput.trim() && !canResizeToSelected
+                  ? 'Enter a refine prompt, or choose a different target size and use Recompose'
+                  : 'Apply refine or recompose'
+              }
+              disabled={(!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked}
               className={`h-11 w-11 shrink-0 rounded-xl font-medium text-white inline-flex items-center justify-center transition-all ${
-                (!refinementInput.trim() && !canResizeToSelected) || isRefining || isAnalyzingRefinePrompt || isResizingCanvas
+                (!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked
                   ? 'bg-gray-200 dark:bg-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
                   : 'bg-brand-red hover:bg-red-700 text-white shadow-lg shadow-brand-red/20'
               }`}

@@ -14,6 +14,14 @@ const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
 // for "model not enabled on this project" rather than a clearer code.
 // See https://ai.google.dev/gemini-api/docs/models for the alias.
 const ANALYSIS_MODEL = 'gemini-flash-latest';
+
+/** Strip optional ```json fences so structured-output parsing doesn't throw. */
+const parseJsonFromModelText = <T>(raw: string): T => {
+  let s = raw.trim();
+  const fence = /^```(?:json)?\s*\n?([\s\S]*?)```\s*$/im.exec(s);
+  if (fence) s = fence[1].trim();
+  return JSON.parse(s) as T;
+};
 const SUPPORTED_INPUT_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -559,7 +567,14 @@ export const analyzeImageForCorrectionPrompt = async (
     });
 
     if (!response.text) throw new Error("No correction analysis generated");
-    const parsed = JSON.parse(response.text) as Partial<ImageCorrectionPlan>;
+    let parsed: Partial<ImageCorrectionPlan>;
+    try {
+      parsed = parseJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
+    } catch {
+      throw new Error(
+        "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
+      );
+    }
 
     return {
       analysisSummary: (parsed.analysisSummary || '').trim(),

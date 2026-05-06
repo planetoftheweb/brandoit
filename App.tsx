@@ -21,7 +21,8 @@ import {
   refineGraphic,
   analyzeBrandGuidelines,
   describeImagePrompt,
-  analyzeImageForCorrectionPrompt
+  analyzeImageForCorrectionPrompt,
+  expandPrompt
 } from './services/geminiService';
 import { generateOpenAIImage } from './services/openaiService';
 import { generateSvg, refineSvg } from './services/svgService';
@@ -1594,6 +1595,33 @@ const App: React.FC = () => {
     return detailedPrompt.trim();
   };
 
+  const handleExpandRefinementPrompt = async (draft: string): Promise<string> => {
+    if (!currentGeneration) {
+      throw new Error('Restore or generate an image first.');
+    }
+    if (!user) {
+      openAuthModal('signup');
+      throw new Error('Create a free account and add your API key in Settings before expanding prompts.');
+    }
+    const expandKey = getApiKeyForModel('gemini');
+    if (!expandKey) {
+      setSettingsMode(true);
+      throw new Error('Add a Gemini API key in Settings to expand prompts.');
+    }
+    const seed = draft.trim() || (currentGeneration.config.prompt || '').trim();
+    if (!seed) {
+      throw new Error('Type a refinement idea, or open a generation that still has its original prompt.');
+    }
+    const expanded = await expandPrompt(
+      seed,
+      currentGeneration.config,
+      context,
+      expandKey,
+      user.preferences.systemPrompt
+    );
+    return expanded.trim();
+  };
+
   const handleResizeCanvasRefine = async (targetAspectRatioInput: string): Promise<void> => {
     if (!currentGeneration) {
       throw new Error('Restore or generate an image first.');
@@ -2843,6 +2871,7 @@ const App: React.FC = () => {
                 generation={currentGeneration}
                 onRefine={handleRefine}
                 onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
+                onExpandRefinementPrompt={handleExpandRefinementPrompt}
                 onResizeCanvasRefine={handleResizeCanvasRefine}
                 isRefining={isGenerating}
                 onCopy={handleCopyCurrent}
