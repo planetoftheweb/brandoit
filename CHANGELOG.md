@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-05-06
+
+### Fixed
+
+- **Gemini image generation and `API_KEY_INVALID`.** User preferences now **trim API keys on save**, normalize resolved keys (trim + strip BOM), **hydrate** Firestore data by dropping empty `apiKeys` entries and **merging legacy `geminiApiKey`** into the shared `gemini` slot when that slot is missing. **Settings** merges **`apiKeys` first**, then fills the Gemini field from legacy only when the stored slot is empty, so an empty `gemini` entry no longer hides a valid legacy key in the UI (`services/authService.ts`, `components/SettingsPage.tsx`).
+- **Nano Banana Pro key fallback.** When **Nano Banana Pro** is selected but only a **Nano Banana 2** per-model override exists under Advanced overrides, image generation uses that key—the same Google account/project as other Gemini image models (`services/correctionAnalysisRouter.ts`).
+- **Clearer generation errors.** `generateGraphic` shows a short, actionable message when Google rejects the API key instead of surfacing a large JSON error blob (`services/geminiService.ts`).
+
 ## [0.13.0] - 2026-05-06
 
 ### Added
