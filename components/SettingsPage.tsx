@@ -42,11 +42,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [photoURL, setPhotoURL] = useState<string | undefined>(user.photoURL);
   const [apiKeys, setApiKeys] = useState<{ [key: string]: string }>(() => {
     const keys: { [key: string]: string } = {};
-    if (user.preferences.geminiApiKey) {
-      keys['gemini'] = user.preferences.geminiApiKey;
-    }
     if (user.preferences.apiKeys) {
       Object.assign(keys, user.preferences.apiKeys);
+    }
+    const legacyGemini = user.preferences.geminiApiKey?.trim();
+    if (!keys['gemini']?.trim() && legacyGemini) {
+      keys['gemini'] = legacyGemini;
     }
     return keys;
   });
@@ -87,8 +88,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setUsername(user.username || '');
     setPhotoURL(user.photoURL);
     const keys: { [key: string]: string } = {};
-    if (user.preferences.geminiApiKey) keys['gemini'] = user.preferences.geminiApiKey;
     if (user.preferences.apiKeys) Object.assign(keys, user.preferences.apiKeys);
+    const legacyGemini = user.preferences.geminiApiKey?.trim();
+    if (!keys['gemini']?.trim() && legacyGemini) keys['gemini'] = legacyGemini;
     setApiKeys(keys);
     setSelectedModel(user.preferences.selectedModel || 'gemini');
     setSystemPrompt(user.preferences.systemPrompt || '');

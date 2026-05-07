@@ -1,5 +1,8 @@
 import type { User } from '../types';
 
+const normalizeStoredApiKey = (value: string): string =>
+  value.replace(/^\uFEFF/, '').trim();
+
 /**
  * BYOK resolution (per-model override, then shared Gemini / OpenAI slots).
  * Kept in sync with App `getApiKeyForModel` / Settings trimming behavior.
@@ -11,7 +14,7 @@ export function getApiKeyForModelFromUser(
   if (!user) return undefined;
   const slot = user.preferences.apiKeys?.[modelId];
   if (typeof slot === 'string') {
-    const t = slot.trim();
+    const t = normalizeStoredApiKey(slot);
     if (t) return t;
   }
   if (
@@ -20,13 +23,30 @@ export function getApiKeyForModelFromUser(
     modelId === 'gemini-svg'
   ) {
     const shared = user.preferences.apiKeys?.gemini;
-    if (typeof shared === 'string' && shared.trim()) return shared.trim();
+    if (typeof shared === 'string') {
+      const s = normalizeStoredApiKey(shared);
+      if (s) return s;
+    }
     const legacy = user.preferences.geminiApiKey;
-    if (typeof legacy === 'string' && legacy.trim()) return legacy.trim();
+    if (typeof legacy === 'string') {
+      const l = normalizeStoredApiKey(legacy);
+      if (l) return l;
+    }
+    // Nano Banana Pro — if only NB2 per-model override exists, use it (same Google project/key).
+    if (modelId === 'gemini') {
+      const nb2 = user.preferences.apiKeys?.['gemini-3.1-flash-image-preview'];
+      if (typeof nb2 === 'string') {
+        const n = normalizeStoredApiKey(nb2);
+        if (n) return n;
+      }
+    }
   }
   if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
     const k = user.preferences.apiKeys?.openai;
-    if (typeof k === 'string' && k.trim()) return k.trim();
+    if (typeof k === 'string') {
+      const t = normalizeStoredApiKey(k);
+      if (t) return t;
+    }
   }
   return undefined;
 }

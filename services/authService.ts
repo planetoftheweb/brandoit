@@ -54,13 +54,15 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
   const clean: any = {};
   // Only save settings and API keys. Arrays are managed via resourceService.
   // Legacy support: omit when empty so clearing the field actually persists.
-  if (prefs.geminiApiKey) clean.geminiApiKey = prefs.geminiApiKey;
+  if (prefs.geminiApiKey && String(prefs.geminiApiKey).trim()) {
+    clean.geminiApiKey = String(prefs.geminiApiKey).trim();
+  }
   if (prefs.apiKeys) {
     // Strip empty-string entries so deleting a key in the UI actually clears it in Firestore.
     const trimmedKeys: { [modelId: string]: string } = {};
     for (const [modelId, value] of Object.entries(prefs.apiKeys)) {
       if (typeof value === 'string' && value.trim() !== '') {
-        trimmedKeys[modelId] = value;
+        trimmedKeys[modelId] = value.trim();
       }
     }
     clean.apiKeys = trimmedKeys;
@@ -126,6 +128,22 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
 const hydratePreferences = (savedPrefs: any): UserPreferences => {
   if (!savedPrefs) return defaultPreferences;
 
+  const rawApiKeys =
+    savedPrefs.apiKeys && typeof savedPrefs.apiKeys === 'object' ? savedPrefs.apiKeys : {};
+  const cleanedApiKeys: { [k: string]: string } = {};
+  for (const [k, v] of Object.entries(rawApiKeys)) {
+    if (typeof v === 'string' && v.trim() !== '') {
+      cleanedApiKeys[k] = v.trim();
+    }
+  }
+  const legacyGeminiTrimmed =
+    typeof savedPrefs.geminiApiKey === 'string' && savedPrefs.geminiApiKey.trim()
+      ? savedPrefs.geminiApiKey.trim()
+      : '';
+  if (!cleanedApiKeys.gemini && legacyGeminiTrimmed) {
+    cleanedApiKeys.gemini = legacyGeminiTrimmed;
+  }
+
   return {
     // We don't load arrays from preferences anymore, but we need to return something 
     // to satisfy the type. The App will fetch real data from resourceService.
@@ -133,8 +151,8 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
     visualStyles: [],
     graphicTypes: [],
     aspectRatios: [],
-    geminiApiKey: savedPrefs.geminiApiKey, // Legacy support
-    apiKeys: savedPrefs.apiKeys || {},
+    geminiApiKey: legacyGeminiTrimmed || undefined,
+    apiKeys: cleanedApiKeys,
     selectedModel: savedPrefs.selectedModel || 'gemini-3.1-flash-image-preview',
     systemPrompt: savedPrefs.systemPrompt,
     settings: {

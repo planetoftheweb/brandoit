@@ -159,7 +159,14 @@ export const generateGraphic = async (
     return extractImageFromResponse(response);
   } catch (error: any) {
     console.error("Gemini Generation Error:", error);
-    throw new Error(error.message || "Failed to generate image. Please try again.");
+    const raw = stringifyGeminiCallError(error);
+    if (/API_KEY_INVALID|API key not valid/i.test(raw)) {
+      throw new Error(
+        'Google rejected your Gemini API key. In Settings, paste a valid key from Google AI Studio and ensure the Generative Language API is enabled for that Google Cloud project.'
+      );
+    }
+    const formatted = formatUserFacingGeminiError(raw);
+    throw new Error(formatted || "Failed to generate image. Please try again.");
   }
 };
 
