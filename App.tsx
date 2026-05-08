@@ -7,6 +7,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { CatalogPage } from './components/CatalogPage';
 import { AdminPage } from './components/AdminPage';
 import { RecentGenerations } from './components/RecentGenerations';
+import { SearchModal } from './components/SearchModal';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID } from './types';
 import { 
   BRAND_COLORS, 
@@ -262,6 +263,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(true);
 
@@ -635,6 +637,18 @@ const App: React.FC = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [comparisonState.mode]);
+
+  // Cmd+K (Mac) / Ctrl+K (Windows/Linux) opens the search modal.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
+        event.preventDefault();
+        setIsSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Auto-collapse the toolbar options row when the user scrolls down to look
   // at images, restore it when they scroll back up. The intent is "give me
@@ -2980,10 +2994,19 @@ const App: React.FC = () => {
         </div>
       </footer>
 
+      {/* Search Modal (Cmd+K) */}
+      {isSearchOpen && (
+        <SearchModal
+          history={history}
+          onSelect={(gen) => void handleRestoreFromHistory(gen)}
+          onClose={() => setIsSearchOpen(false)}
+        />
+      )}
+
       {/* Auth Modal */}
-      <AuthModal 
-        isOpen={isAuthModalOpen} 
-        onClose={() => setIsAuthModalOpen(false)} 
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
         onLoginSuccess={handleLoginSuccess}
         initialMode={authModalMode}
       />
