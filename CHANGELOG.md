@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-05-08
+
+### Fixed
+
+- **IndexedDB cache ordering when Firebase Storage fails.** `serializeGenerationForRemote` now calls `cacheImageFromBase64` **before** `uploadGenerationImage`. If the upload throws (for example when `firebasestorage.googleapis.com` is blocked on VPN), the image is still written to the local blob cache so thumbnails and the main viewer can recover on the next load (`services/historyService.ts`).
+
 ## [0.13.1] - 2026-05-06
 
 ### Fixed

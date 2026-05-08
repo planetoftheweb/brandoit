@@ -346,6 +346,18 @@ const serializeGenerationForRemote = async (
         return version;
       }
 
+      // VPN-SAFETY: Stash the raw bytes in IndexedDB BEFORE the upload attempt.
+      // If `firebasestorage.googleapis.com` is blocked (VPN/proxy/captive portal),
+      // `uploadGenerationImage` will throw and the code after it never runs.
+      // By caching first, the image survives future VPN sessions even when the
+      // Firebase Storage upload fails. Fire-and-forget; must not block the upload.
+      void cacheImageFromBase64(
+        normalized.id,
+        version.id,
+        version.imageData,
+        version.mimeType || 'image/webp'
+      );
+
       const uploaded = await uploadGenerationImage({
         userId,
         generationId: normalized.id,
@@ -353,18 +365,6 @@ const serializeGenerationForRemote = async (
         base64Data: version.imageData,
         mimeType: version.mimeType || 'image/webp'
       });
-
-      // Stash the raw bytes in IndexedDB before we strip them from the
-      // Firestore payload. Without this, any subsequent reload that can't
-      // reach `firebasestorage.googleapis.com` (VPN/proxy/captive portal)
-      // has nothing to render — the saved doc only carries the Storage URL.
-      // Fire-and-forget; the cache write must not block the upload pipeline.
-      void cacheImageFromBase64(
-        normalized.id,
-        version.id,
-        version.imageData,
-        version.mimeType || 'image/webp'
-      );
 
       return {
         ...version,
