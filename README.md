@@ -13,6 +13,7 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   Organized dropdowns (Defaults, Private, Team, Public).
     *   Search and filter capabilities.
     *   Admin controls for System Defaults.
+*   **🔎 Quick search:** **Cmd+K** (Mac) or **Ctrl+K** (Windows/Linux) opens a search palette over your generation history—filter by prompt text, arrow through results, Enter to jump to a tile.
 *   **📂 Normalized Database:** Uses a smart "spreadsheet-like" structure to manage resources with flexible scoping (`private`, `public`, `team`, `system`).
 *   **🌍 Community Catalog:** Browse public items shared by other users.
 *   **💾 Cloud History:** Automatically saves your generation history with metadata in Firestore and raster image bytes in Firebase Storage (`users/{uid}/history/{generationId}/{versionId}.{ext}`), so tiles never bump into the 1 MiB Firestore document limit and deletes clean up Storage automatically.

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-08
+
+### Added
+
+- **Cmd+K / Ctrl+K generation search.** Command palette modal to find recent tiles by prompt substring, with thumbnail preview, arrow-key navigation, Enter to open, and Escape to close; wired from the header search control (`components/SearchModal.tsx`, `App.tsx`).
+- **Claude Code `launch.json`** for starting the Vite dev server from the editor (`.claude/launch.json`).
+- **`CLAUDE.md`** contributor notes for the VPN / Firebase Storage image flow and the IndexedDB cache invariant (seed before upload in `serializeGenerationForRemote`).
+
+### Changed
+
+- **`.gitignore`** ignores `.claude/worktrees/` so local Claude Code worktree state is not committed.
+
 ## [0.13.2] - 2026-05-08
 
 ### Fixed
