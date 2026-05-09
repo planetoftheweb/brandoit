@@ -33,3 +33,4 @@ storage-debug.log*
 database-debug.log*
 pubsub-debug.log*
 .firebase/
+.gstack/
