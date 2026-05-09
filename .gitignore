@@ -34,3 +34,6 @@ database-debug.log*
 pubsub-debug.log*
 .firebase/
 .gstack/
+
+# Local Claude Code worktrees (machine-specific)
+.claude/worktrees/
