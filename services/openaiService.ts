@@ -360,6 +360,167 @@ export const analyzeImageForCorrectionPromptOpenAI = async (
   };
 };
 
+const fileToDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read image file.'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result.startsWith('data:')) {
+        reject(new Error('Unexpected image read result.'));
+        return;
+      }
+      resolve(result);
+    };
+    reader.readAsDataURL(file);
+  });
+
+const callOpenAIVisionJson = async (
+  apiKey: string,
+  systemPrompt: string | undefined,
+  instruction: string,
+  imageDataUrl: string
+): Promise<string> => {
+  const messages: Record<string, unknown>[] = [];
+  if (systemPrompt?.trim()) {
+    messages.push({ role: 'system', content: systemPrompt.trim() });
+  }
+  messages.push({
+    role: 'user',
+    content: [
+      { type: 'text', text: instruction },
+      { type: 'image_url', image_url: { url: imageDataUrl, detail: 'low' } },
+    ],
+  });
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: JSON.stringify({
+      model: CORRECTION_VISION_CHAT_MODEL,
+      messages,
+      response_format: { type: 'json_object' },
+      max_completion_tokens: 1024,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let code: string | undefined;
+    let errorType: string | undefined;
+    let rawMessage = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      const errObj = parsed?.error || parsed;
+      code = errObj?.code || undefined;
+      errorType = errObj?.type || undefined;
+      rawMessage = errObj?.message || errText;
+    } catch { /* keep errText */ }
+    const { message, fatal } = describeOpenAIError(response.status, code, errorType, rawMessage);
+    throw new OpenAIGenerationError({ message, status: response.status, code, errorType, fatal });
+  }
+
+  const json = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+  };
+  const text = json?.choices?.[0]?.message?.content;
+  if (!text?.trim()) throw new Error('OpenAI returned no analysis text.');
+  return text;
+};
+
+/**
+ * OpenAI vision fallback for the prompt-drop "Use image style" action.
+ * Mirrors the JSON shape returned by Gemini's `analyzeImageForOption(..., 'style')`.
+ */
+export const analyzeImageStyleOpenAI = async (
+  file: File,
+  apiKey: string,
+  systemPrompt?: string
+): Promise<{ name: string; description: string }> => {
+  if (!apiKey?.trim()) {
+    throw new Error('OpenAI API key required for image style analysis.');
+  }
+
+  const dataUrl = await fileToDataUrl(file);
+  const instruction = `Analyze the visual style of the attached image.
+
+Return strict JSON shaped exactly:
+{
+  "name": "<short, catchy style name, e.g. Neon Cyberpunk>",
+  "description": "<one paragraph (1-3 sentences) describing lighting, texture, line weight, composition cues that could be reused to generate similar images>"
+}
+
+Respond with ONLY the JSON object — no markdown, no preamble.`;
+
+  const text = await callOpenAIVisionJson(apiKey, systemPrompt, instruction, dataUrl);
+  let parsed: { name?: unknown; description?: unknown };
+  try {
+    parsed = parseStructuredJsonFromModelText<{ name?: unknown; description?: unknown }>(text);
+  } catch {
+    throw new Error('Could not read OpenAI style analysis response.');
+  }
+
+  return {
+    name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'Image style',
+    description:
+      typeof parsed.description === 'string' && parsed.description.trim()
+        ? parsed.description.trim()
+        : 'Use the dropped image as a visual style reference.',
+  };
+};
+
+/**
+ * OpenAI vision fallback for the prompt-drop "Generate content prompt" action.
+ * Returns a single paragraph describing only the content (toolbar menus stay
+ * authoritative for layout, style, palette, aspect ratio).
+ */
+export const describeImageContentPromptOpenAI = async (
+  base64Data: string,
+  mimeType: string,
+  apiKey: string,
+  systemPrompt?: string
+): Promise<string> => {
+  if (!apiKey?.trim()) {
+    throw new Error('OpenAI API key required to describe image content.');
+  }
+
+  const dataUrl = `data:${mimeType || 'image/png'};base64,${base64Data}`;
+  const instruction = `Describe only the content of the attached image as a prompt fragment for an image-generation tool.
+
+Include:
+- Main subject matter and important objects
+- Visible text, labels, logos, or symbols if present
+- Concrete attributes needed to identify the content (species, product type, clothing, props, setting category, action)
+- Relationships between subjects only when they matter to the idea
+
+Exclude anything that is controlled by separate toolbar menus:
+- No layout, composition, camera angle, framing, depth of field, or aspect ratio
+- No visual style, art medium, rendering technique, texture, lighting mood, or color palette
+- No brand/style adjectives such as minimalist, photorealistic, hand-drawn, cinematic, neon, isometric, poster, editorial, infographic, or 3D
+
+Return strict JSON shaped exactly:
+{ "prompt": "<one concise paragraph>" }
+
+Respond with ONLY the JSON object — no markdown, no preamble.`;
+
+  const text = await callOpenAIVisionJson(apiKey, systemPrompt, instruction, dataUrl);
+  let parsed: { prompt?: unknown };
+  try {
+    parsed = parseStructuredJsonFromModelText<{ prompt?: unknown }>(text);
+  } catch {
+    throw new Error('Could not read OpenAI content prompt response.');
+  }
+
+  const promptText = typeof parsed.prompt === 'string' ? parsed.prompt.trim() : '';
+  if (!promptText) {
+    throw new Error('OpenAI returned no content prompt.');
+  }
+  return promptText;
+};
+
 /** Text-only chat model for prompt expansion (not GPT Image). */
 const EXPAND_PROMPT_CHAT_MODEL = 'gpt-4o-mini';
 

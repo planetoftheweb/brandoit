@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset, GeneratedImage, PromptImageStyleInfluenceMode, PromptImageStyleReference } from '../types';
 import { analyzeImageForOption, describeImageContentPrompt, expandPrompt } from '../services/geminiService';
-import { expandPromptOpenAI } from '../services/openaiService';
+import {
+  expandPromptOpenAI,
+  analyzeImageStyleOpenAI,
+  describeImageContentPromptOpenAI,
+} from '../services/openaiService';
 import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser, getGeminiApiKeyForAnalysis } from '../services/correctionAnalysisRouter';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
@@ -1076,6 +1080,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const getGeminiAnalysisKey = (): string | undefined => getGeminiApiKeyForAnalysis(user);
 
+  /**
+   * Same routing as Run analysis / Expand prompt: prefer the toolbar provider,
+   * otherwise whichever key is configured. This lets dropped-image style and
+   * content prompts succeed when Google rejects the Gemini key for Flash
+   * text/vision (a known project-enablement edge case) but the OpenAI key
+   * still works.
+   */
+  const resolvePromptImageRoute = (): { provider: 'gemini' | 'openai'; apiKey: string } | null =>
+    resolveAuxiliaryByokProvider(selectedModel, (id) => getApiKeyForModelFromUser(user, id));
+
   const fileToGeneratedImage = (file: File): Promise<GeneratedImage> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1136,9 +1150,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const handlePromptImageToPrompt = async () => {
     if (!promptImageFile) return;
-    const geminiKey = getGeminiAnalysisKey();
-    if (!geminiKey) {
-      setPromptImageError('Add a Gemini API key in Settings to analyze dropped images.');
+    const route = resolvePromptImageRoute();
+    if (!route) {
+      setPromptImageError('Add an OpenAI or Gemini API key in Settings to analyze dropped images.');
       return;
     }
 
@@ -1146,12 +1160,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setPromptImageError(null);
     try {
       const image = await fileToGeneratedImage(promptImageFile);
-      const contentPrompt = await describeImageContentPrompt(
-        image.base64Data,
-        image.mimeType,
-        geminiKey,
-        user?.preferences.systemPrompt
-      );
+      const contentPrompt =
+        route.provider === 'openai'
+          ? await describeImageContentPromptOpenAI(
+              image.base64Data,
+              image.mimeType,
+              route.apiKey,
+              user?.preferences.systemPrompt
+            )
+          : await describeImageContentPrompt(
+              image.base64Data,
+              image.mimeType,
+              route.apiKey,
+              user?.preferences.systemPrompt
+            );
       setConfig((prev) => ({ ...prev, prompt: contentPrompt }));
       closePromptImageDialog();
     } catch (err) {
@@ -1164,9 +1186,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const handlePromptImageAsStyle = async (influenceMode: PromptImageStyleInfluenceMode) => {
     if (!promptImageFile) return;
-    const geminiKey = getGeminiAnalysisKey();
-    if (!geminiKey) {
-      setPromptImageError('Add a Gemini API key in Settings to analyze dropped images.');
+    const route = resolvePromptImageRoute();
+    if (!route) {
+      setPromptImageError('Add an OpenAI or Gemini API key in Settings to analyze dropped images.');
       return;
     }
 
@@ -1175,7 +1197,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     try {
       const [image, style] = await Promise.all([
         fileToGeneratedImage(promptImageFile),
-        analyzeImageForOption(promptImageFile, 'style', geminiKey, user?.preferences.systemPrompt),
+        route.provider === 'openai'
+          ? analyzeImageStyleOpenAI(promptImageFile, route.apiKey, user?.preferences.systemPrompt)
+          : analyzeImageForOption(promptImageFile, 'style', route.apiKey, user?.preferences.systemPrompt),
       ]);
       onPromptImageStyleReferenceChange?.({
         image,
