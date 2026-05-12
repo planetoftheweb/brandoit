@@ -2701,7 +2701,6 @@ const App: React.FC = () => {
             isAnalyzing={isAnalyzing}
             user={user}
             selectedModel={selectedModel}
-            onResetToDefaults={handleResetToPreferenceDefaults}
             onModelChange={handleModelChange}
             openaiQuality={user?.preferences.settings?.openaiImageQuality || 'auto'}
             onOpenAIQualityChange={user ? handleOpenAIQualityChange : undefined}

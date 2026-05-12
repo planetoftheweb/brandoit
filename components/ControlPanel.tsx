@@ -42,7 +42,6 @@ import {
   Send,
   Wand2,
   Copy,
-  RotateCcw,
   Play,
   Pause,
   MousePointer2,
@@ -105,7 +104,6 @@ interface ControlPanelProps {
   isAnalyzing: boolean;
   user: User | null; // Pass user for contribution
   selectedModel: string;
-  onResetToDefaults: () => void;
   onModelChange: (modelId: string) => void;
   openaiQuality?: 'low' | 'medium' | 'high' | 'auto';
   onOpenAIQualityChange?: (quality: 'low' | 'medium' | 'high' | 'auto') => void;
@@ -534,7 +532,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   isAnalyzing,
   user,
   selectedModel,
-  onResetToDefaults,
   onModelChange,
   openaiQuality = 'auto',
   onOpenAIQualityChange,
@@ -2231,26 +2228,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 )}
               </div>
             )}
-
-            {/* Vertical separator between config menu and actions */}
-            <div className="h-6 w-px bg-gray-200 dark:bg-[#30363d] shrink-0 mx-1" aria-hidden="true"></div>
-
-            <div className="relative group shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveDropdown(null);
-                  onResetToDefaults();
-                }}
-                className="h-11 w-11 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-[#1c2128] text-slate-500 dark:text-slate-400 hover:text-brand-teal transition-colors"
-                title="Reset toolbar to preference defaults"
-              >
-                <RotateCcw size={20} />
-                <span className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                  Reset defaults
-                </span>
-              </button>
-            </div>
 
             {user && (
               <div className="relative group shrink-0">
