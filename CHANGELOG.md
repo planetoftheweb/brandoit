@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-12
+
+### Added
+
+- **Drop an image into the prompt box for style or content.** Dragging an image onto the prompt textarea opens a small dialog with two paths: **Generate content prompt** uses vision to write a content-only prompt fragment that respects the toolbar menus (no layout/style/palette/aspect-ratio noise), and **Use image style** captures the image as a style reference with two influence modes — _image overrides menu style_ or _menus override image style_. The active reference shows as a removable chip near the prompt and is consumed by the next generation; Gemini image models receive the image directly via `generateGraphicWithStyleReference`, while OpenAI and SVG models get the equivalent textual style instructions in `requestConfig`. New `PromptImageStyleReference` / `PromptImageStyleInfluenceMode` types (`components/ControlPanel.tsx`, `App.tsx`, `services/geminiService.ts`, `types.ts`).
+- **Multi-prompt batches via JSON array.** The prompt box now also accepts `["tile 1", "tile {a,b}", "tile 3"]` — each top-level array entry generates as its own tile, and brace expansion still applies inside each entry. `expandPromptPermutations` returns a `promptEntries` map so the batch runner routes each expansion to the right `sharedBatchGenerations[i]` slot, and the toolbar batch-info / cap message reflects the prompt-list count alongside model and brace permutations (`services/promptExpansionService.ts`, `App.tsx`, `components/ControlPanel.tsx`).
+
+### Changed
+
+- **Code-split the bundle for faster first paint.** `App.tsx` now lazy-loads `AdminPage`, `SettingsPage`, `CatalogPage`, `SearchModal`, `AuthModal`, and `BrandAnalysisModal` behind `Suspense` with shared `LazyPageFallback` / `LazyModalFallback` spinners. `vite.config.ts` adds Rollup `manualChunks` to split vendors into `vendor-react`, `vendor-ai`, `vendor-icons`, `vendor-zip`, and per-Firebase-service chunks (`vendor-firebase-firestore` / `auth` / `storage` / `analytics` / `app` / `shared`). Drops the main `index.js` from one ~700 KB chunk to ~340 KB and clears the Vite 500 KB chunk warning.
+- **Shorter prompt placeholder.** Reads `Prompt or drop image ({a,b} or ["tile 1","tile 2"])...` so it fits the input at narrow widths without truncating (`components/ControlPanel.tsx`).
+
+### Fixed
+
+- **Dropped-image style/content analysis no longer dies on Google `API_KEY_INVALID`.** When Google rejects the configured Gemini key for Flash text/vision (a known project-enablement edge case where the same key still works for `gemini-3-pro-image-preview`), the prompt-image analyses now fall back to the existing OpenAI `gpt-4o-mini` vision path via `resolveAuxiliaryByokProvider` — same routing as **Run analysis** and **Expand prompt**. New `analyzeImageStyleOpenAI` and `describeImageContentPromptOpenAI` mirror the Gemini surface (`services/openaiService.ts`, `components/ControlPanel.tsx`).
+- **Gemini Flash analyzers now retry across the model fallback list.** `analyzeImageForOption`, `describeImagePrompt`, and `describeImageContentPrompt` retry through `gemini-flash-latest → gemini-2.5-flash → gemini-2.0-flash` (matching `analyzeImageForCorrectionPrompt`) so spurious enablement errors on a single model id don't fail the whole call (`services/geminiService.ts`).
+- **Consistent Gemini analysis BYOK resolution.** New `getGeminiApiKeyForAnalysis(user)` helper centralizes the Flash-key lookup (shared `apiKeys.gemini` → `gemini-svg`-only setups → legacy `geminiApiKey`, with BOM/whitespace normalization) so the prompt-drop flow and `processOptionFile` resolve the same key the toolbar uses (`services/correctionAnalysisRouter.ts`, `components/ControlPanel.tsx`).
+- **Quieter VPN/proxy upload errors.** `uploadGenerationImage` detects network-block failures (`storage/retry-limit-exceeded`, `ERR_NAME_NOT_RESOLVED`, `Failed to fetch`, etc.) and emits a clearly labeled `[Storage unreachable]` warning with a hint about VPN and a pointer to `CLAUDE.md`, instead of a misleading red `console.error`. The IndexedDB cache contract (seed before upload) is unchanged, so images keep displaying via the existing `onError` recovery in `RecentGenerations.tsx` and `ImageDisplay.tsx` (`services/imageService.ts`).
+
+### Removed
+
+- **"Reset defaults" toolbar button.** The eraser/rotate icon next to the model selector and its associated `onResetToDefaults` prop are gone — settings still reset via the Settings page (`components/ControlPanel.tsx`, `App.tsx`).
+- **Header "Styles" / "Colors" navigation links.** The compact catalog shortcuts in the page header were duplicating affordances that already live inside the control panel and modals; `Palette` / `PenTool` icon imports cleaned up alongside (`App.tsx`).
+
 ## [0.14.0] - 2026-05-08
 
 ### Added

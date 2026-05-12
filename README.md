@@ -14,6 +14,8 @@ An AI-powered brand design studio that helps you generate cohesive visual assets
     *   Search and filter capabilities.
     *   Admin controls for System Defaults.
 *   **🔎 Quick search:** **Cmd+K** (Mac) or **Ctrl+K** (Windows/Linux) opens a search palette over your generation history—filter by prompt text, arrow through results, Enter to jump to a tile.
+*   **🖱️ Drop an image into the prompt box:** Drag an image onto the prompt textarea to (a) **generate a content prompt** that respects your toolbar menus (no layout/style/palette/aspect-ratio noise) or (b) **use the image as a style reference** with two influence modes — _image overrides menu style_ or _menus override image style_. Falls back to OpenAI `gpt-4o-mini` vision when Google rejects the Gemini key for Flash text/vision.
+*   **📦 Multi-prompt batches:** Enter a JSON array like `["headline tile", "icon {a,b}", "footer"]` in the prompt box and each top-level entry generates as its own tile (brace expansion still applies inside each entry).
 *   **📂 Normalized Database:** Uses a smart "spreadsheet-like" structure to manage resources with flexible scoping (`private`, `public`, `team`, `system`).
 *   **🌍 Community Catalog:** Browse public items shared by other users.
 *   **💾 Cloud History:** Automatically saves your generation history with metadata in Firestore and raster image bytes in Firebase Storage (`users/{uid}/history/{generationId}/{versionId}.{ext}`), so tiles never bump into the 1 MiB Firestore document limit and deletes clean up Storage automatically.
