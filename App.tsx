@@ -66,7 +66,6 @@ import {
   ArrowRight,
   Layout,
   PenTool,
-  Palette,
   Plus,
   MessageSquare,
   RefreshCw,
@@ -2493,32 +2492,6 @@ const App: React.FC = () => {
             />
             <h1 className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">BranDoIt</h1>
           </button>
-          
-          {/* Navigation Links */}
-          {user && (
-            <nav className="hidden md:flex items-center gap-2 ml-4">
-              <button 
-                onClick={() => {
-                  setCatalogMode('style');
-                  setSettingsMode(false);
-                  setAdminMode(false);
-                }}
-                className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal transition-colors flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#21262d]"
-              >
-                <PenTool size={16} /> Styles
-              </button>
-              <button 
-                onClick={() => {
-                  setCatalogMode('color');
-                  setSettingsMode(false);
-                  setAdminMode(false);
-                }}
-                className="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-teal dark:hover:text-brand-teal transition-colors flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#21262d]"
-              >
-                <Palette size={16} /> Colors
-              </button>
-            </nav>
-          )}
         </div>
 
         <div className="flex items-center gap-3">
