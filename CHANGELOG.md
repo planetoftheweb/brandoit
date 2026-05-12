@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-05-12
+
+### Fixed
+
+- **Production blank page after the 0.15.0 deploy.** The Rollup `manualChunks` config in 0.15.0 split Firebase into per-service chunks (`vendor-firebase-app`, `vendor-firebase-shared`, `vendor-firebase-firestore`, `vendor-firebase-auth`, `vendor-firebase-storage`, `vendor-firebase-analytics`). Firebase ships a tightly cyclic module graph (`firebase/app` ↔ `@firebase/util` ↔ per-service packages); splitting them across chunks reordered evaluation and tripped a temporal-dead-zone error at `vendor-firebase-app:61` — `Uncaught ReferenceError: Cannot access 'g' before initialization` — which left the page blank. All `firebase/*` and `@firebase/*` modules now share a single `vendor-firebase` chunk so the cyclic graph is preserved. The other vendor splits (`vendor-react`, `vendor-ai`, `vendor-icons`, `vendor-zip`) and `React.lazy` page splits from 0.15.0 are unchanged (`vite.config.ts`).
+
 ## [0.15.0] - 2026-05-12
 
 ### Added

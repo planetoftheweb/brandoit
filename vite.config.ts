@@ -15,12 +15,12 @@ export default defineConfig(({ mode }) => {
           output: {
             manualChunks(id) {
               if (!id.includes('node_modules')) return undefined;
-              if (id.includes('/@firebase/firestore/')) return 'vendor-firebase-firestore';
-              if (id.includes('/@firebase/auth/')) return 'vendor-firebase-auth';
-              if (id.includes('/@firebase/storage/')) return 'vendor-firebase-storage';
-              if (id.includes('/@firebase/analytics/')) return 'vendor-firebase-analytics';
-              if (id.includes('/@firebase/app/') || id.includes('/firebase/')) return 'vendor-firebase-app';
-              if (id.includes('/@firebase/')) return 'vendor-firebase-shared';
+              // Firebase ships a tightly cyclic module graph (firebase/app <-> @firebase/util
+              // <-> per-service packages). Splitting these into separate chunks reorders
+              // their evaluation and triggers TDZ errors at runtime
+              // ("Cannot access 'g' before initialization" in vendor-firebase-app),
+              // so keep the entire firebase + @firebase namespace in one chunk.
+              if (id.includes('/@firebase/') || id.includes('/firebase/')) return 'vendor-firebase';
               if (id.includes('/@google/genai/')) return 'vendor-ai';
               if (id.includes('/react/') || id.includes('/react-dom/')) return 'vendor-react';
               if (id.includes('/lucide-react/')) return 'vendor-icons';
