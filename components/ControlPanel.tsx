@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset, GeneratedImage, PromptImageStyleInfluenceMode, PromptImageStyleReference } from '../types';
 import { analyzeImageForOption, describeImageContentPrompt, expandPrompt } from '../services/geminiService';
 import { expandPromptOpenAI } from '../services/openaiService';
-import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser } from '../services/correctionAnalysisRouter';
+import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser, getGeminiApiKeyForAnalysis } from '../services/correctionAnalysisRouter';
 import { resourceService } from '../services/resourceService';
 import { teamService } from '../services/teamService';
 import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
@@ -1074,8 +1074,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
-  const getGeminiAnalysisKey = (): string | undefined =>
-    user?.preferences?.apiKeys?.gemini || user?.preferences?.geminiApiKey;
+  const getGeminiAnalysisKey = (): string | undefined => getGeminiApiKeyForAnalysis(user);
 
   const fileToGeneratedImage = (file: File): Promise<GeneratedImage> =>
     new Promise((resolve, reject) => {
@@ -1216,9 +1215,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     try {
       // analyzeImageForOption always runs on Gemini's analysis model, so it
       // must use the Gemini key regardless of the user's selected image model.
-      const geminiKey =
-        user?.preferences?.apiKeys?.gemini ||
-        user?.preferences?.geminiApiKey;
+      const geminiKey = getGeminiApiKeyForAnalysis(user);
       const result = await analyzeImageForOption(file, modalType, geminiKey, user?.preferences.systemPrompt); 
       
       setNewItemName(result.name);

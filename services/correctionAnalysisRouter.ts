@@ -52,6 +52,16 @@ export function getApiKeyForModelFromUser(
 }
 
 /**
+ * Any Google Gemini key usable for Flash/vision helper calls (option image analyze,
+ * dropped-image style/content). Matches toolbar resolution plus SVG-only accounts.
+ */
+export function getGeminiApiKeyForAnalysis(user: User | null | undefined): string | undefined {
+  const shared = getApiKeyForModelFromUser(user, 'gemini');
+  if (shared) return shared;
+  return getApiKeyForModelFromUser(user, 'gemini-svg');
+}
+
+/**
  * Picks OpenAI vs Gemini BYOK for auxiliary calls (Run analysis, Expand prompt):
  * prefer the same provider as the toolbar when that key exists; otherwise
  * whichever key is configured.
