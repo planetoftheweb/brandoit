@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis } from "../types";
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, BrandGuidelinesAnalysis, PromptImageStyleInfluenceMode } from "../types";
 import { getSafeAspectRatioForModel, normalizeAspectRatio } from "./aspectRatioService";
 import {
   buildCorrectionAuditUserPrompt,
@@ -170,6 +170,11 @@ export const generateGraphic = async (
   }
 };
 
+interface StyleReferenceGenerationOptions {
+  influenceMode?: PromptImageStyleInfluenceMode;
+  imageStyleDescription?: string;
+}
+
 // Generate a fresh composition while using an input image as style reference only.
 export const generateGraphicWithStyleReference = async (
   styleReferenceImage: GeneratedImage,
@@ -178,7 +183,8 @@ export const generateGraphicWithStyleReference = async (
   context: GenerationContext,
   customApiKey?: string,
   systemPrompt?: string,
-  selectedModel: string = 'gemini'
+  selectedModel: string = 'gemini',
+  options: StyleReferenceGenerationOptions = {}
 ): Promise<GeneratedImage> => {
   const ai = getAiClient(customApiKey);
   const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
@@ -189,13 +195,26 @@ export const generateGraphicWithStyleReference = async (
   const typeName = type ? type.name : 'infographic';
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
   const generationModel = resolveGeminiImageModel(selectedModel);
+  const imageStyleDescription = options.imageStyleDescription?.trim();
+  const styleReferenceInstruction =
+    options.influenceMode === 'menus'
+      ? `
+    The selected menu style is authoritative: ${styleDesc}.
+    Use the attached image only as a soft secondary style reference.
+    If the attached image conflicts with the selected menu style, follow the menu style.
+      `.trim()
+      : `
+    The attached image is the authoritative visual style reference.
+    Use its line quality, rendering texture, visual motifs, and palette behavior.
+    ${imageStyleDescription ? `Image style summary: ${imageStyleDescription}` : ''}
+    If the attached image conflicts with the selected Style menu, follow the attached image.
+      `.trim();
 
   const prompt = `
     Create a brand-new ${typeName} composition.
-    Use the attached image ONLY as a STYLE REFERENCE (line quality, rendering texture, visual motifs, and palette behavior).
+    ${styleReferenceInstruction}
     Do NOT copy the exact layout, framing, element positions, wording, or arrows from the reference image.
     Build a fresh composition that fully uses the ${safeAspectRatio} canvas with no side padding or centered poster effect.
-    Keep visual style: ${styleDesc}.
     Keep palette direction: ${colors}.
     Ensure text is legible and spelled correctly.
 
@@ -532,6 +551,53 @@ export const describeImagePrompt = async (
   });
 
   if (!response.text) throw new Error("No description generated");
+  return response.text.trim();
+};
+
+// Describe an image for the prompt box while leaving toolbar-controlled choices
+// (layout, style, palette, aspect ratio) to the existing menus.
+export const describeImageContentPrompt = async (
+  base64Data: string,
+  mimeType: string,
+  customApiKey?: string,
+  systemPrompt?: string
+): Promise<string> => {
+  const ai = getAiClient(customApiKey);
+
+  const prompt = `
+    Describe only the content of this image as a prompt fragment for an image-generation tool.
+
+    Include:
+    - Main subject matter and important objects
+    - Visible text, labels, logos, or symbols if present
+    - Concrete attributes needed to identify the content, such as species, product type, clothing, props, setting category, or action
+    - Relationships between subjects only when they matter to the idea
+
+    Exclude anything controlled by separate menus:
+    - No layout, composition, camera angle, framing, depth of field, or aspect ratio
+    - No visual style, art medium, rendering technique, texture, lighting mood, or color palette
+    - No brand/style adjectives such as minimalist, photorealistic, hand-drawn, cinematic, neon, isometric, poster, editorial, infographic, or 3D
+
+    Respond with one concise paragraph. No title, no markdown, no bullets.
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: ANALYSIS_MODEL,
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType
+          }
+        },
+        { text: prompt }
+      ]
+    },
+    config: withSystemInstruction({}, systemPrompt)
+  });
+
+  if (!response.text) throw new Error("No content prompt generated");
   return response.text.trim();
 };
 

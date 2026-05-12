@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset } from '../types';
-import { analyzeImageForOption, expandPrompt } from '../services/geminiService';
+import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset, GeneratedImage, PromptImageStyleInfluenceMode, PromptImageStyleReference } from '../types';
+import { analyzeImageForOption, describeImageContentPrompt, expandPrompt } from '../services/geminiService';
 import { expandPromptOpenAI } from '../services/openaiService';
 import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser } from '../services/correctionAnalysisRouter';
 import { resourceService } from '../services/resourceService';
@@ -156,6 +156,8 @@ interface ControlPanelProps {
    * itself (so the user gets feedback while waiting).
    */
   hasGenerated?: boolean;
+  activePromptImageStyleReference?: PromptImageStyleReference | null;
+  onPromptImageStyleReferenceChange?: (reference: PromptImageStyleReference | null) => void;
 }
 
 // Modal Component
@@ -549,6 +551,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onDeletePreset,
   isOptionsCollapsed = false,
   hasGenerated = false,
+  activePromptImageStyleReference = null,
+  onPromptImageStyleReferenceChange,
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [compareModelsMode, setCompareModelsMode] = useState(false);
@@ -559,6 +563,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const isMultiModelActive = compareModelsMode && effectiveSelectedModelIds.length > 1;
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isPromptDropActive, setIsPromptDropActive] = useState(false);
+  const [promptImageFile, setPromptImageFile] = useState<File | null>(null);
+  const [promptImageError, setPromptImageError] = useState<string | null>(null);
+  const [isPromptImageAnalyzing, setIsPromptImageAnalyzing] = useState(false);
 
   // Modal & Edit State
   const [modalType, setModalType] = useState<'type' | 'style' | 'color' | null>(null);
@@ -700,6 +708,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     [config.prompt]
   );
   const expandedPromptCount = expansion.prompts.length;
+  const promptEntryCount = expansion.promptEntries.length;
   const safeBatchCount = Math.max(1, Math.floor(batchCount || 1));
   const perModelBatchRuns = expandedPromptCount * safeBatchCount;
   const modelCount = isMultiModelActive ? effectiveSelectedModelIds.length : 1;
@@ -765,7 +774,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   // surfaces because it blocks Generate.
   const hasBatchInfo =
     !!config.prompt &&
-    (totalBatchRuns > 0 || expansion.hasBraces || exceedsBatchCap) &&
+    (totalBatchRuns > 0 || expansion.hasBraces || expansion.hasPromptList || exceedsBatchCap) &&
     (!hasGenerated || isGenerating || exceedsBatchCap);
   const [paletteCopyMessage, setPaletteCopyMessage] = useState<string | null>(null);
   const paletteCopyTimerRef = useRef<number | null>(null);
@@ -1065,6 +1074,126 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     // Reset value so same file can be uploaded again if needed
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const getGeminiAnalysisKey = (): string | undefined =>
+    user?.preferences?.apiKeys?.gemini || user?.preferences?.geminiApiKey;
+
+  const fileToGeneratedImage = (file: File): Promise<GeneratedImage> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Could not read image file.'));
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        const marker = ';base64,';
+        const markerIndex = result.indexOf(marker);
+        const base64Data = markerIndex >= 0 ? result.slice(markerIndex + marker.length) : result;
+        resolve({
+          imageUrl: result,
+          base64Data,
+          mimeType: file.type || 'image/png',
+          timestamp: Date.now(),
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+
+  const openPromptImageDialog = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setPromptImageError('Drop an image file onto the prompt box.');
+      return;
+    }
+    setPromptImageFile(file);
+    setPromptImageError(null);
+  };
+
+  const handlePromptDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsPromptDropActive(true);
+    }
+  };
+
+  const handlePromptDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setIsPromptDropActive(false);
+    }
+  };
+
+  const handlePromptDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsPromptDropActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) openPromptImageDialog(file);
+  };
+
+  const closePromptImageDialog = () => {
+    setPromptImageFile(null);
+    setPromptImageError(null);
+    setIsPromptImageAnalyzing(false);
+  };
+
+  const handlePromptImageToPrompt = async () => {
+    if (!promptImageFile) return;
+    const geminiKey = getGeminiAnalysisKey();
+    if (!geminiKey) {
+      setPromptImageError('Add a Gemini API key in Settings to analyze dropped images.');
+      return;
+    }
+
+    setIsPromptImageAnalyzing(true);
+    setPromptImageError(null);
+    try {
+      const image = await fileToGeneratedImage(promptImageFile);
+      const contentPrompt = await describeImageContentPrompt(
+        image.base64Data,
+        image.mimeType,
+        geminiKey,
+        user?.preferences.systemPrompt
+      );
+      setConfig((prev) => ({ ...prev, prompt: contentPrompt }));
+      closePromptImageDialog();
+    } catch (err) {
+      console.error('Failed to describe prompt image:', err);
+      setPromptImageError(err instanceof Error ? err.message : 'Could not generate a prompt from this image.');
+    } finally {
+      setIsPromptImageAnalyzing(false);
+    }
+  };
+
+  const handlePromptImageAsStyle = async (influenceMode: PromptImageStyleInfluenceMode) => {
+    if (!promptImageFile) return;
+    const geminiKey = getGeminiAnalysisKey();
+    if (!geminiKey) {
+      setPromptImageError('Add a Gemini API key in Settings to analyze dropped images.');
+      return;
+    }
+
+    setIsPromptImageAnalyzing(true);
+    setPromptImageError(null);
+    try {
+      const [image, style] = await Promise.all([
+        fileToGeneratedImage(promptImageFile),
+        analyzeImageForOption(promptImageFile, 'style', geminiKey, user?.preferences.systemPrompt),
+      ]);
+      onPromptImageStyleReferenceChange?.({
+        image,
+        fileName: promptImageFile.name,
+        styleName: style.name || 'Image style',
+        styleDescription: style.description || 'Use the dropped image as a visual style reference.',
+        influenceMode,
+      });
+      closePromptImageDialog();
+    } catch (err) {
+      console.error('Failed to analyze prompt image style:', err);
+      setPromptImageError(err instanceof Error ? err.message : 'Could not use this image as a style reference.');
+    } finally {
+      setIsPromptImageAnalyzing(false);
     }
   };
 
@@ -2168,13 +2297,25 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             inert={isOptionsCollapsed}
           >
             <div className="flex flex-nowrap items-stretch gap-2 min-w-0 w-full">
-              <div className="relative flex-1 basis-0 min-w-0">
+              <div
+                className={`relative flex-1 basis-0 min-w-0 rounded-lg transition-shadow ${
+                  isPromptDropActive ? 'ring-2 ring-brand-teal ring-offset-2 ring-offset-white dark:ring-offset-[#0d1117]' : ''
+                }`}
+                onDragOver={handlePromptDragOver}
+                onDragLeave={handlePromptDragLeave}
+                onDrop={handlePromptDrop}
+              >
                 <textarea 
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
-                  placeholder="Describe your graphic (use {a, b, c} for variations)..."
+                  placeholder='Describe your graphic, or drop an image for style/prompt help (use {a, b, c} or ["tile 1", "tile 2"])...'
                   className="min-h-[48px] h-12 focus:h-32 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-11 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all duration-200 ease-in-out placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner resize-y overflow-y-auto"
                 />
+                {isPromptDropActive && (
+                  <div className="pointer-events-none absolute inset-0 rounded-lg border-2 border-dashed border-brand-teal bg-brand-teal/10 flex items-center justify-center text-xs font-semibold text-brand-teal">
+                    Drop image to use it with this prompt
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setIsPromptModalOpen(true)}
@@ -2311,6 +2452,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </>
             </div>
 
+            {activePromptImageStyleReference && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-brand-teal/30 bg-brand-teal/10 px-3 py-2 text-xs text-slate-700 dark:text-slate-200">
+                <div className="flex min-w-0 items-center gap-2">
+                  <ImageIcon size={14} className="shrink-0 text-brand-teal" />
+                  <span className="truncate">
+                    Style reference: <span className="font-semibold">{activePromptImageStyleReference.styleName}</span>
+                    {' '}
+                    <span className="text-slate-500 dark:text-slate-400">
+                      ({activePromptImageStyleReference.influenceMode === 'image' ? 'image style overrides menu' : 'style menu overrides image'})
+                    </span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onPromptImageStyleReferenceChange?.(null)}
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-slate-500 hover:bg-white/70 hover:text-slate-900 dark:hover:bg-[#21262d] dark:hover:text-white"
+                  aria-label="Remove prompt image style reference"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
             {hasBatchInfo && (
               <div
                 className={`text-xs pl-1 ${
@@ -2322,11 +2486,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 aria-live="polite"
               >
                 {exceedsBatchCap ? (
-                  `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count, brace options, or selected models.`
+                  `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count, prompt-list entries, brace options, or selected models.`
                 ) : (
                   <>
-                    {expansion.hasBraces
-                      ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                    {expansion.hasPromptList
+                      ? `Prompt list: ${promptEntryCount} tile${promptEntryCount === 1 ? '' : 's'}, ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                      : expansion.hasBraces
+                        ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
                       : modelCount > 1
                         ? `Will run ${totalBatchRuns} generations across ${modelCount} models.`
                         : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
@@ -2373,7 +2539,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <X size={20} />
               </button>
             </div>
-            <div className="flex-1 overflow-hidden p-5">
+            <div
+              className="flex-1 overflow-hidden p-5"
+              onDragOver={handlePromptDragOver}
+              onDragLeave={handlePromptDragLeave}
+              onDrop={(event) => {
+                handlePromptDrop(event);
+                setIsPromptModalOpen(false);
+              }}
+            >
               <textarea
                 autoFocus
                 value={config.prompt}
@@ -2395,7 +2569,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     }
                   }
                 }}
-                placeholder="Describe your graphic (use {a, b, c} for variations)..."
+                placeholder='Describe your graphic, or drop an image for style/prompt help (use {a, b, c} or ["tile 1", "tile 2"])...'
                 className="w-full h-[55vh] min-h-[280px] bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg p-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red placeholder-slate-400 dark:placeholder-slate-600 resize-none leading-relaxed"
               />
               {hasBatchInfo && (
@@ -2407,11 +2581,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   }`}
                 >
                   {exceedsBatchCap ? (
-                    `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap.`
+                    `Will run ${totalBatchRuns} generations, which exceeds your ${batchCapLabel} cap. Reduce the count, prompt-list entries, brace options, or selected models.`
                   ) : (
                     <>
-                      {expansion.hasBraces
-                        ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                      {expansion.hasPromptList
+                        ? `Prompt list: ${promptEntryCount} tile${promptEntryCount === 1 ? '' : 's'}, ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
+                        : expansion.hasBraces
+                          ? `Brace expansion: ${expandedPromptCount} prompt${expandedPromptCount === 1 ? '' : 's'} x ${safeBatchCount}${modelCount > 1 ? ` x ${modelCount} models` : ''} = ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`
                         : modelCount > 1
                           ? `Will run ${totalBatchRuns} generations across ${modelCount} models.`
                           : `Will run ${totalBatchRuns} generation${totalBatchRuns === 1 ? '' : 's'}.`}
@@ -2455,6 +2631,74 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         </div>
       )}
+
+      <Modal
+        isOpen={!!promptImageFile}
+        onClose={closePromptImageDialog}
+        title="Use dropped image"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] p-3">
+            <div className="mt-0.5 rounded-lg bg-white dark:bg-[#161b22] p-2 text-brand-teal shadow-sm">
+              <ImageIcon size={18} />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
+                {promptImageFile?.name || 'Dropped image'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Turn it into prompt content, or use its visual style for upcoming generations.
+              </p>
+            </div>
+          </div>
+
+          {promptImageError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+              {promptImageError}
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            <button
+              type="button"
+              onClick={handlePromptImageToPrompt}
+              disabled={isPromptImageAnalyzing}
+              className="flex min-h-11 w-full items-center justify-between rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span>Generate content prompt</span>
+              {isPromptImageAnalyzing && <Loader2 size={14} className="animate-spin" />}
+            </button>
+            <p className="px-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+              Describes only subjects, objects, visible text, and meaning. Menus still drive layout, style, palette, and size.
+            </p>
+
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => handlePromptImageAsStyle('image')}
+                disabled={isPromptImageAnalyzing}
+                className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Use image style
+                <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                  Image style overrides the Style menu.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePromptImageAsStyle('menus')}
+                disabled={isPromptImageAnalyzing}
+                className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Keep menu style
+                <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                  Style menu overrides the image.
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* MODAL FOR ADDING/EDITING CUSTOM OPTIONS */}
       <Modal 

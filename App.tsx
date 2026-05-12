@@ -8,7 +8,7 @@ import { CatalogPage } from './components/CatalogPage';
 import { AdminPage } from './components/AdminPage';
 import { RecentGenerations } from './components/RecentGenerations';
 import { SearchModal } from './components/SearchModal';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID, PromptImageStyleReference } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -284,6 +284,8 @@ const App: React.FC = () => {
       aspectRatio: cached?.aspectRatio || ''
     };
   });
+  const [promptImageStyleReference, setPromptImageStyleReference] =
+    useState<PromptImageStyleReference | null>(null);
   const [guestSelectedModel, setGuestSelectedModel] = useState<string>(() => {
     const cachedSelection = readToolbarSelection() || readLastToolbarSelection();
     const cachedModel = cachedSelection?.selectedModel;
@@ -1043,6 +1045,20 @@ const App: React.FC = () => {
     updateGenerationJob(jobId, (job) => ({ ...job, status: 'stopping' }));
   };
 
+  const modelSupportsStyleReferenceImage = (modelId: string): boolean =>
+    modelId.startsWith('gemini') && modelId !== 'gemini-svg';
+
+  const withPromptImageStyleInstruction = (
+    prompt: string,
+    reference: PromptImageStyleReference
+  ): string => {
+    const styleInstruction =
+      reference.influenceMode === 'image'
+        ? `Use this image-derived style as the primary visual style, overriding the selected Style menu if there is a conflict: ${reference.styleDescription}`
+        : `Keep the selected Style menu authoritative. Use this image-derived style only as a soft secondary reference and ignore it where it conflicts: ${reference.styleDescription}`;
+    return `${prompt}\n\nStyle reference note: ${styleInstruction}`;
+  };
+
   const handleGenerate = async (count: number = 1) => {
     // Fresh generations should always leave compare mode. Keeping an old
     // A/B selection active while new tiles are being produced is confusing,
@@ -1095,14 +1111,18 @@ const App: React.FC = () => {
         setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatioPrimary }));
       }
 
-      const { prompts } = expandPromptPermutations(safeConfig.prompt || '');
+      const expansion = expandPromptPermutations(safeConfig.prompt || '');
+      const { prompts } = expansion;
+      const promptEntryIndexByPromptIndex = expansion.promptEntries.flatMap((entry, entryIndex) =>
+        entry.prompts.map(() => entryIndex)
+      );
       const safeCount = Math.max(1, Math.floor(count || 1));
       const perModelRuns = prompts.length * safeCount;
       const totalRuns = perModelRuns * modelIdsToRun.length;
       const cap = batchCapFor(user);
       if (Number.isFinite(cap) && totalRuns > cap) {
         throw new Error(
-          `Batch would run ${totalRuns} generation${totalRuns === 1 ? '' : 's'} (limit ${cap}). Reduce variations, brace options, or selected models.`
+          `Batch would run ${totalRuns} generation${totalRuns === 1 ? '' : 's'} (limit ${cap}). Reduce prompt-list entries, brace options, count, or selected models.`
         );
       }
 
@@ -1115,13 +1135,14 @@ const App: React.FC = () => {
           ? `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
           : undefined;
 
-      // Shared across ALL models in this Generate click. We want one tile that
-      // holds every mark from every selected model so the user can compare
-      // them side-by-side with the slider, instead of two sibling tiles.
+      // Shared per top-level prompt entry in this Generate click. Plain prompts
+      // and brace-only batches still create one tile, while JSON-array entries
+      // each get their own tile. Within a tile, selected models still append as
+      // versions so comparisons stay side-by-side.
       // Persistence is serialised through `persistQueue` so concurrent workers
       // don't race when appending versions or saving to Firestore.
-      let sharedBatchGeneration: Generation | null = null;
-      let sharedPersistQueue: Promise<Generation | null> = Promise.resolve(null);
+      const sharedBatchGenerations: Record<number, Generation | undefined> = {};
+      const sharedPersistQueues: Record<number, Promise<Generation | null>> = {};
       const primaryModelId = modelIdsToRun[0];
       const runUser = user;
       const runContext = context;
@@ -1215,20 +1236,42 @@ const App: React.FC = () => {
 
         const runOne = async (job: BatchJob): Promise<Generation> => {
           const jobConfig: GenerationConfig = { ...modelSafeConfig, prompt: job.prompt };
-          const structuredPrompt = buildStructuredPrompt(jobConfig);
+          const activeStyleReference = promptImageStyleReference;
+          const requestConfig: GenerationConfig =
+            activeStyleReference && !modelSupportsStyleReferenceImage(modelId)
+              ? {
+                  ...jobConfig,
+                  prompt: withPromptImageStyleInstruction(job.prompt, activeStyleReference),
+                }
+              : jobConfig;
+          const structuredPrompt = buildStructuredPrompt(requestConfig);
 
           const jobStart = performance.now();
           let result;
           if (modelId === 'gemini-svg') {
-            result = await generateSvg(jobConfig, runContext, modelKey, runSystemPrompt);
+            result = await generateSvg(requestConfig, runContext, modelKey, runSystemPrompt);
           } else if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
-            result = await generateOpenAIImage(structuredPrompt, jobConfig, modelKey, {
+            result = await generateOpenAIImage(structuredPrompt, requestConfig, modelKey, {
               modelId,
               quality: runOpenAIQuality,
               systemPrompt: runSystemPrompt
             });
+          } else if (activeStyleReference && modelSupportsStyleReferenceImage(modelId)) {
+            result = await generateGraphicWithStyleReference(
+              activeStyleReference.image,
+              job.prompt,
+              jobConfig,
+              runContext,
+              modelKey,
+              runSystemPrompt,
+              modelId,
+              {
+                influenceMode: activeStyleReference.influenceMode,
+                imageStyleDescription: activeStyleReference.styleDescription,
+              }
+            );
           } else {
-            result = await generateGraphic(jobConfig, runContext, modelKey, runSystemPrompt, modelId);
+            result = await generateGraphic(requestConfig, runContext, modelKey, runSystemPrompt, modelId);
           }
           recordModelDuration(modelId, performance.now() - jobStart);
 
@@ -1248,13 +1291,16 @@ const App: React.FC = () => {
             throw new Error('Model returned an empty image — skipping');
           }
 
-          // Append into the SHARED tile. The first version anywhere in the
-          // Generate click creates the Generation; everything afterwards
-          // becomes another version, regardless of which model produced it.
+          // Append into the SHARED tile for this top-level prompt entry. The
+          // first version in that entry creates the Generation; everything
+          // afterwards in that entry becomes another version, regardless of
+          // which model produced it.
           // The Generation's primary modelId stays as the first selected
           // model; per-version `modelId` tracks which model made each mark.
-          const prev = sharedPersistQueue;
+          const promptEntryIndex = promptEntryIndexByPromptIndex[job.promptIndex] ?? 0;
+          const prev = sharedPersistQueues[promptEntryIndex] || Promise.resolve(null);
           const next: Promise<Generation> = prev.then(async () => {
+            const sharedBatchGeneration = sharedBatchGenerations[promptEntryIndex];
             if (!sharedBatchGeneration) {
               // The first version is created via createGeneration so the tile's
               // top-level config/modelId is set. We use the *primary* model id
@@ -1272,7 +1318,7 @@ const App: React.FC = () => {
                 generation.versions[0].modelId = modelId;
                 generation.versions[0].aspectRatio = jobConfig.aspectRatio;
               }
-              sharedBatchGeneration = generation;
+              sharedBatchGenerations[promptEntryIndex] = generation;
               await historyService.saveGeneration(runUser, generation);
               return generation;
             }
@@ -1291,12 +1337,12 @@ const App: React.FC = () => {
               versions: [...sharedBatchGeneration.versions, newVersion],
               currentVersionIndex: sharedBatchGeneration.versions.length,
             };
-            sharedBatchGeneration = updated;
+            sharedBatchGenerations[promptEntryIndex] = updated;
             await historyService.updateGeneration(runUser, updated);
             return updated;
           });
 
-          sharedPersistQueue = next;
+          sharedPersistQueues[promptEntryIndex] = next;
           return next;
         };
 
@@ -2635,6 +2681,8 @@ const App: React.FC = () => {
             onDeletePreset={user ? handleDeletePreset : undefined}
             isOptionsCollapsed={isToolbarCollapsed}
             hasGenerated={!!currentGeneration}
+            activePromptImageStyleReference={promptImageStyleReference}
+            onPromptImageStyleReferenceChange={setPromptImageStyleReference}
           />
 
           {/* Main Content Area */}

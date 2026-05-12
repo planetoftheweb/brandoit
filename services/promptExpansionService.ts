@@ -1,13 +1,16 @@
 /**
- * Midjourney-style brace expansion for prompts.
+ * Midjourney-style brace expansion plus JSON-array prompt batches.
  *
  * Examples:
  *   "foo {a, b, c} bar"           -> ["foo a bar", "foo b bar", "foo c bar"]
  *   "A {x,y} B {1,2}"             -> ["A x B 1", "A x B 2", "A y B 1", "A y B 2"]
+ *   ["tile 1", "tile {a,b}", "tile 3"] -> ["tile 1", "tile a", "tile b", "tile 3"]
  *   "foo \\{not a group\\} bar"   -> ["foo {not a group} bar"]
  *   ""                            -> [""]
  *
  * Notes:
+ *   - Multiple top-level prompt tiles use a valid JSON array of strings. JSON
+ *     owns escaping for commas, quotes, and square brackets inside list items.
  *   - Literal braces are escaped with a backslash: "\\{" and "\\}".
  *   - Option values are trimmed individually. Consecutive whitespace (including
  *     newlines) inside the literal/option text is collapsed to single spaces so
@@ -113,22 +116,79 @@ const cartesian = (segments: Segment[]): string[] => {
 export interface ExpansionResult {
   prompts: string[];
   hasBraces: boolean;
+  hasPromptList: boolean;
+  promptEntries: Array<{
+    source: string;
+    prompts: string[];
+    hasBraces: boolean;
+  }>;
 }
 
-export const expandPromptPermutations = (prompt: string): ExpansionResult => {
-  if (typeof prompt !== "string") {
-    return { prompts: [""], hasBraces: false };
-  }
-
+const expandOnePrompt = (prompt: string) => {
   const segments = parseSegments(prompt);
   const hasBraces = segments.some((segment) => segment.kind === "group");
   const prompts = cartesian(segments);
 
+  return {
+    source: prompt,
+    prompts: prompts.length === 0 ? [collapseWhitespace(prompt)] : prompts,
+    hasBraces,
+  };
+};
+
+const parsePromptList = (prompt: string): string[] | null => {
+  const trimmed = prompt.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      parsed.some((item) => typeof item !== "string")
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    // Invalid JSON should behave like a normal prompt so typos are non-fatal.
+    return null;
+  }
+};
+
+export const expandPromptPermutations = (prompt: string): ExpansionResult => {
+  if (typeof prompt !== "string") {
+    return {
+      prompts: [""],
+      hasBraces: false,
+      hasPromptList: false,
+      promptEntries: [{ source: "", prompts: [""], hasBraces: false }],
+    };
+  }
+
+  const promptList = parsePromptList(prompt);
+  const entries = (promptList && promptList.length > 0 ? promptList : [prompt]).map(expandOnePrompt);
+  const prompts = entries.flatMap((entry) => entry.prompts);
+  const hasBraces = entries.some((entry) => entry.hasBraces);
+
   // Guarantee at least one prompt string so downstream code always has work.
   if (prompts.length === 0) {
-    return { prompts: [collapseWhitespace(prompt)], hasBraces };
+    const fallback = collapseWhitespace(prompt);
+    return {
+      prompts: [fallback],
+      hasBraces,
+      hasPromptList: promptList !== null,
+      promptEntries: [{ source: prompt, prompts: [fallback], hasBraces }],
+    };
   }
-  return { prompts, hasBraces };
+  return {
+    prompts,
+    hasBraces,
+    hasPromptList: promptList !== null,
+    promptEntries: entries,
+  };
 };
 
 /**

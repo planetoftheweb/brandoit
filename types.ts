@@ -54,6 +54,16 @@ export interface GeneratedImage {
   config?: GenerationConfig;
 }
 
+export type PromptImageStyleInfluenceMode = 'image' | 'menus';
+
+export interface PromptImageStyleReference {
+  image: GeneratedImage;
+  fileName: string;
+  styleName: string;
+  styleDescription: string;
+  influenceMode: PromptImageStyleInfluenceMode;
+}
+
 /** @deprecated Use Generation + GenerationVersion instead */
 export interface GenerationHistoryItem extends GeneratedImage {
   id: string;
