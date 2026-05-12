@@ -1,13 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
-import { AuthModal } from './components/AuthModal';
-import { BrandAnalysisModal } from './components/BrandAnalysisModal';
-import { SettingsPage } from './components/SettingsPage';
-import { CatalogPage } from './components/CatalogPage';
-import { AdminPage } from './components/AdminPage';
 import { RecentGenerations } from './components/RecentGenerations';
-import { SearchModal } from './components/SearchModal';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID, PromptImageStyleReference } from './types';
 import { 
   BRAND_COLORS, 
@@ -88,6 +82,25 @@ import {
   Maximize2
 } from 'lucide-react';
 
+const AuthModal = lazy(() =>
+  import('./components/AuthModal').then((mod) => ({ default: mod.AuthModal }))
+);
+const BrandAnalysisModal = lazy(() =>
+  import('./components/BrandAnalysisModal').then((mod) => ({ default: mod.BrandAnalysisModal }))
+);
+const SettingsPage = lazy(() =>
+  import('./components/SettingsPage').then((mod) => ({ default: mod.SettingsPage }))
+);
+const CatalogPage = lazy(() =>
+  import('./components/CatalogPage').then((mod) => ({ default: mod.CatalogPage }))
+);
+const AdminPage = lazy(() =>
+  import('./components/AdminPage').then((mod) => ({ default: mod.AdminPage }))
+);
+const SearchModal = lazy(() =>
+  import('./components/SearchModal').then((mod) => ({ default: mod.SearchModal }))
+);
+
 interface ToolbarSelectionCache {
   colorSchemeId?: string;
   visualStyleId?: string;
@@ -122,6 +135,24 @@ interface BatchModelProgressSummary {
   failed: number;
   inFlight: number;
 }
+
+const LazyPageFallback: React.FC<{ label?: string }> = ({ label = 'Loading...' }) => (
+  <main className="flex-1 min-h-[50vh] bg-gray-50 dark:bg-[#0d1117] flex items-center justify-center px-4">
+    <div className="inline-flex items-center gap-2 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] px-4 py-3 text-sm font-medium text-slate-600 dark:text-slate-300 shadow-sm">
+      <RefreshCw size={16} className="animate-spin text-brand-teal" />
+      {label}
+    </div>
+  </main>
+);
+
+const LazyModalFallback: React.FC = () => (
+  <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white dark:bg-[#161b22] px-4 py-3 text-sm font-medium text-slate-600 dark:text-slate-300 shadow-xl">
+      <RefreshCw size={16} className="animate-spin text-brand-teal" />
+      Loading...
+    </div>
+  </div>
+);
 
 interface ActiveGenerationCurrentJob {
   key: string;
@@ -2627,29 +2658,35 @@ const App: React.FC = () => {
 
       {/* 2. Content Switching */}
       {adminMode && user ? (
-        <AdminPage
-          onBack={() => setAdminMode(false)}
-          currentUser={user}
-        />
+        <Suspense fallback={<LazyPageFallback label="Loading admin..." />}>
+          <AdminPage
+            onBack={() => setAdminMode(false)}
+            currentUser={user}
+          />
+        </Suspense>
       ) : settingsMode ? (
         user && (
-          <SettingsPage
-            onBack={() => setSettingsMode(false)}
-            user={user}
-            onSave={handleSaveSettings}
-            graphicTypes={graphicTypes}
-            visualStyles={visualStyles}
-            brandColors={brandColors}
-            aspectRatios={aspectRatios}
-          />
+          <Suspense fallback={<LazyPageFallback label="Loading settings..." />}>
+            <SettingsPage
+              onBack={() => setSettingsMode(false)}
+              user={user}
+              onSave={handleSaveSettings}
+              graphicTypes={graphicTypes}
+              visualStyles={visualStyles}
+              brandColors={brandColors}
+              aspectRatios={aspectRatios}
+            />
+          </Suspense>
         )
       ) : catalogMode ? (
-        <CatalogPage 
-          category={catalogMode}
-          onBack={() => setCatalogMode(null)}
-          onImport={handleImportFromCatalog}
-          userId={user?.id}
-        />
+        <Suspense fallback={<LazyPageFallback label="Loading catalog..." />}>
+          <CatalogPage
+            category={catalogMode}
+            onBack={() => setCatalogMode(null)}
+            onImport={handleImportFromCatalog}
+            userId={user?.id}
+          />
+        </Suspense>
       ) : (
         <>
           {/* Toolbar & Controls */}
@@ -3044,28 +3081,38 @@ const App: React.FC = () => {
 
       {/* Search Modal (Cmd+K) */}
       {isSearchOpen && (
-        <SearchModal
-          history={history}
-          onSelect={(gen) => void handleRestoreFromHistory(gen)}
-          onClose={() => setIsSearchOpen(false)}
-        />
+        <Suspense fallback={<LazyModalFallback />}>
+          <SearchModal
+            history={history}
+            onSelect={(gen) => void handleRestoreFromHistory(gen)}
+            onClose={() => setIsSearchOpen(false)}
+          />
+        </Suspense>
       )}
 
       {/* Auth Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onLoginSuccess={handleLoginSuccess}
-        initialMode={authModalMode}
-      />
+      {isAuthModalOpen && (
+        <Suspense fallback={<LazyModalFallback />}>
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+            onLoginSuccess={handleLoginSuccess}
+            initialMode={authModalMode}
+          />
+        </Suspense>
+      )}
 
       {/* Brand Analysis Modal */}
-      <BrandAnalysisModal
-        isOpen={isAnalysisModalOpen}
-        onClose={() => setIsAnalysisModalOpen(false)}
-        analysisResult={analysisResult}
-        onConfirm={handleConfirmAnalysis}
-      />
+      {isAnalysisModalOpen && (
+        <Suspense fallback={<LazyModalFallback />}>
+          <BrandAnalysisModal
+            isOpen={isAnalysisModalOpen}
+            onClose={() => setIsAnalysisModalOpen(false)}
+            analysisResult={analysisResult}
+            onConfirm={handleConfirmAnalysis}
+          />
+        </Suspense>
+      )}
 
       {/* Catalog Modal Removed */}
 
