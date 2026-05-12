@@ -123,11 +123,40 @@ export const uploadGenerationImage = async ({
     const downloadUrl = await getDownloadURL(storageRef);
     return { path, downloadUrl, size: blob.size };
   } catch (error: any) {
+    // VPN / corporate proxy / captive portal commonly blocks
+    // `firebasestorage.googleapis.com` outright. The retry layer surfaces this
+    // as `storage/retry-limit-exceeded` after several `net::ERR_NAME_NOT_RESOLVED`
+    // attempts. The IndexedDB cache (seeded BEFORE this call by
+    // `serializeGenerationForRemote`) still has the bytes, and `saveGeneration`
+    // falls back to localStorage for the metadata — so this is a handled state,
+    // not a fatal one. Downgrade to a clearly-labeled warning so the console
+    // isn't full of red while the app is still working as designed.
+    const code: string | undefined = error?.code;
+    const message: string = error?.message || '';
+    const looksLikeNetworkBlock =
+      code === 'storage/retry-limit-exceeded' ||
+      code === 'storage/unknown' ||
+      code === 'storage/server-file-wrong-size' ||
+      /ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|Network error|Failed to fetch|retry-limit-exceeded/i.test(
+        message
+      );
+
+    if (looksLikeNetworkBlock) {
+      console.warn(
+        '[Storage unreachable] Generated image stayed in IndexedDB cache; metadata kept in local history. ' +
+          'Often caused by VPN/proxy blocking firebasestorage.googleapis.com. See CLAUDE.md.',
+        { generationId, versionId, code, message }
+      );
+      throw new Error(
+        'Network blocked Firebase Storage. Image is cached locally; sign in off-VPN to sync to the cloud.'
+      );
+    }
+
     console.error('Error uploading generation image:', error);
-    if (error.code === 'storage/unauthorized') {
+    if (code === 'storage/unauthorized') {
       throw new Error('Permission denied syncing generated image. Please check your Storage Security Rules.');
     }
-    throw new Error(error.message || 'Failed to sync generated image to cloud storage.');
+    throw new Error(message || 'Failed to sync generated image to cloud storage.');
   }
 };
 
