@@ -2308,7 +2308,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <textarea 
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
-                  placeholder='Describe your graphic, or drop an image for style/prompt help (use {a, b, c} or ["tile 1", "tile 2"])...'
+                  placeholder='Prompt or drop image ({a,b} or ["tile 1","tile 2"])...'
                   className="min-h-[48px] h-12 focus:h-32 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-11 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all duration-200 ease-in-out placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner resize-y overflow-y-auto"
                 />
                 {isPromptDropActive && (
@@ -2569,7 +2569,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     }
                   }
                 }}
-                placeholder='Describe your graphic, or drop an image for style/prompt help (use {a, b, c} or ["tile 1", "tile 2"])...'
+                placeholder='Prompt or drop image ({a,b} or ["tile 1","tile 2"])...'
                 className="w-full h-[55vh] min-h-[280px] bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg p-4 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red placeholder-slate-400 dark:placeholder-slate-600 resize-none leading-relaxed"
               />
               {hasBatchInfo && (
