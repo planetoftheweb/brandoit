@@ -217,7 +217,21 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const compareHintTimerRef = useRef<number | null>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const railInnerRef = useRef<HTMLDivElement>(null);
+  // Anchors the main preview `group` div so the idle-tracker effect can scope
+  // its mouseenter / mouseleave / mousemove listeners to just the preview area
+  // (rather than the whole window).
+  const mainPreviewGroupRef = useRef<HTMLDivElement>(null);
   const versionBlobUrlsRef = useRef<Record<string, string>>({});
+  // While the cursor is over the main preview but stationary for 5 seconds,
+  // we treat the preview as "idle" and hide both the cursor and the
+  // hover-revealed chrome (history arrows, position pill, version dropdown,
+  // top-right actions, etc.). Any mouse movement re-arms the timer; pressing
+  // an arrow key (history nav) hides immediately. Symmetric to the fullscreen
+  // cursor effect above. Toggled via a `data-idle` attribute on the group
+  // container so chrome elements can opt in with
+  // `group-data-[idle=true]:!opacity-0` — same pattern already used for
+  // `data-dragging` during slider scrubs.
+  const [isPreviewMouseIdle, setIsPreviewMouseIdle] = useState(false);
 
   const version = generation ? getCurrentVersion(generation) : null;
   const isSvg = version?.mimeType === 'image/svg+xml';
@@ -566,6 +580,101 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('keydown', handleKeyDown);
       if (hideTimer !== null) window.clearTimeout(hideTimer);
+    };
+  }, [isFullscreen]);
+
+  // Main-preview idle tracker. While the cursor is over the preview group
+  // and stationary for 5s, flip `isPreviewMouseIdle` true; that drives a
+  // `data-idle="true"` attribute on the group container which (a) hides the
+  // cursor via `data-[idle=true]:cursor-none` and (b) hides every hover-
+  // revealed chrome element via `group-data-[idle=true]:!opacity-0` — same
+  // override pattern already used for `data-dragging`.
+  //
+  // Listeners are scoped to the preview ref (not window) so the timer is
+  // only armed while the user is actually inside the preview. Leaving the
+  // area clears any pending hide and resets state so re-entry starts fresh.
+  //
+  // Arrow-key history nav (← →) hides immediately on the theory that if
+  // the user is flipping through with the keyboard, a stationary pointer
+  // and a hovering chrome layer are just visual noise. We skip the
+  // suppression when the keydown originates from a form control so typing
+  // in a refine textarea (Arrow keys move the caret) doesn't blank the UI.
+  //
+  // Effect bails out entirely while the fullscreen overlay is up — that
+  // layer has its own cursor effect and the preview is occluded anyway.
+  useEffect(() => {
+    if (isFullscreen) {
+      setIsPreviewMouseIdle(false);
+      return;
+    }
+    setIsPreviewMouseIdle(false);
+
+    const el = mainPreviewGroupRef.current;
+    if (!el) return;
+
+    let hideTimer: number | null = null;
+    let isHovering = false;
+
+    const clearHideTimer = () => {
+      if (hideTimer !== null) {
+        window.clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    };
+
+    const armHideTimer = () => {
+      clearHideTimer();
+      hideTimer = window.setTimeout(() => {
+        setIsPreviewMouseIdle(true);
+        hideTimer = null;
+      }, 5000);
+    };
+
+    const handleMouseEnter = () => {
+      isHovering = true;
+      setIsPreviewMouseIdle(false);
+      armHideTimer();
+    };
+
+    const handleMouseLeave = () => {
+      isHovering = false;
+      clearHideTimer();
+      setIsPreviewMouseIdle(false);
+    };
+
+    const handleMouseMove = () => {
+      if (!isHovering) return;
+      setIsPreviewMouseIdle(false);
+      armHideTimer();
+    };
+
+    const NAV_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!NAV_KEYS.has(e.key)) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      setIsPreviewMouseIdle(true);
+      clearHideTimer();
+    };
+
+    el.addEventListener('mouseenter', handleMouseEnter);
+    el.addEventListener('mouseleave', handleMouseLeave);
+    el.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      el.removeEventListener('mouseenter', handleMouseEnter);
+      el.removeEventListener('mouseleave', handleMouseLeave);
+      el.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('keydown', handleKeyDown);
+      clearHideTimer();
     };
   }, [isFullscreen]);
 
@@ -1354,8 +1463,16 @@ ${version.svgCode}
             width to render itself. `relative` is needed for the absolute
             rail to anchor against this row. */}
         <div
-          className="group relative w-full min-w-0 flex items-stretch gap-3 max-h-full mx-auto max-w-7xl"
+          ref={mainPreviewGroupRef}
+          // `data-[idle=true]:cursor-none` hides the system cursor when the
+          // idle tracker flips `data-idle="true"` (5s with no mouse motion
+          // over this area, or after arrow-key history nav). Mouse motion
+          // restores it instantly via the effect above. `cursor-none`
+          // cascades to child elements that don't set their own cursor,
+          // which covers the image, edge buttons, and history arrows.
+          className="group relative w-full min-w-0 flex items-stretch gap-3 max-h-full mx-auto max-w-7xl data-[idle=true]:cursor-none"
           data-dragging={isSliderDragging ? 'true' : undefined}
+          data-idle={isPreviewMouseIdle ? 'true' : undefined}
         >
 
           {/* Thumbnail rail — absolutely positioned so it floats on top of
@@ -1381,7 +1498,7 @@ ${version.svgCode}
               className={`absolute top-0 bottom-0 left-0 w-[124px] z-30 transition-all duration-200 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
                 isCompareMode || isComparing
                   ? 'opacity-100 translate-x-0 pointer-events-auto'
-                  : 'opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto'
+                  : 'opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none'
               }`}
             >
               <div
@@ -1731,7 +1848,7 @@ ${version.svgCode}
                 visible alongside the navigation controls. */}
             {canNavigate && (canGoNewer || canGoOlder) && (
               <>
-                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 left-[136px] z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none">
+                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 left-[136px] z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none">
                   <button
                     type="button"
                     onClick={goNewer}
@@ -1765,7 +1882,7 @@ ${version.svgCode}
                     </div>
                   </div>
                 </div>
-                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 right-3 z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none">
+                <div className="hidden sm:block absolute top-1/2 -translate-y-1/2 right-3 z-20 group/arrowBtn opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none">
                   <button
                     type="button"
                     onClick={goOlder}
@@ -1801,7 +1918,7 @@ ${version.svgCode}
                 </div>
                 {/* Position counter — small, unobtrusive label so users know
                     where they are in the history without scrolling down. */}
-                <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-black/60 text-white backdrop-blur-sm shadow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition pointer-events-none group-data-[dragging=true]:!opacity-0">
+                <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-black/60 text-white backdrop-blur-sm shadow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition pointer-events-none group-data-[dragging=true]:!opacity-0 group-data-[idle=true]:!opacity-0">
                   {currentIdxInHistory + 1} / {history.length}
                 </div>
               </>
@@ -1936,7 +2053,7 @@ ${version.svgCode}
                 fade in when the user rolls over the preview area. */}
             {(isCompareMode || (isComparing && comparisonA && comparisonB)) && (
               <div
-                className="absolute top-4 left-1/2 -translate-x-1/2 z-20 max-w-[calc(100%-7rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none transition-opacity"
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-20 max-w-[calc(100%-7rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none transition-opacity"
                 role="status"
                 aria-live="polite"
               >
@@ -2006,7 +2123,7 @@ ${version.svgCode}
                 className={`absolute top-4 left-4 z-20 transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
                   versionDropdownOpen
                     ? 'opacity-100'
-                    : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                    : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none'
                 }`}
               >
                 <div className="relative group/version">
@@ -2144,7 +2261,7 @@ ${version.svgCode}
               className={`absolute top-4 right-4 flex flex-wrap justify-end items-center gap-2 lg:gap-3 max-w-[calc(100%-2rem)] transition-opacity group-data-[dragging=true]:!opacity-0 group-data-[dragging=true]:!pointer-events-none ${
                 isComparing
                   ? 'opacity-0 pointer-events-none'
-                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[idle=true]:!opacity-0 group-data-[idle=true]:!pointer-events-none'
               }`}
             >
               {/* Refine / Recompose toggle. Used to be a permanent docked
@@ -2724,14 +2841,20 @@ ${version.svgCode}
           />
         )}
 
-        {/* Chrome — hidden when H is pressed. We use opacity + pointer-events
-            instead of an unmount so the user can flip H back and forth
-            without re-renders or transitions stuttering. */}
+        {/* Chrome — hidden when H is pressed OR when the cursor-idle timer
+            has flipped to invisible. Tying chrome to the cursor gives the
+            standard video-player feel: mouse motion surfaces the controls,
+            5s of stillness drops everything back to a clean photo view, and
+            arrow-key history nav hides instantly. We use opacity + pointer-
+            events instead of an unmount so the user can flip H or wiggle
+            the mouse without re-renders or transitions stuttering. */}
         <div
           className={`absolute inset-0 transition-opacity duration-200 ${
-            hideChromeInFullscreen ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            hideChromeInFullscreen || !isFullscreenCursorVisible
+              ? 'opacity-0 pointer-events-none'
+              : 'opacity-100'
           }`}
-          aria-hidden={hideChromeInFullscreen}
+          aria-hidden={hideChromeInFullscreen || !isFullscreenCursorVisible}
         >
           {/* Top bar: position counter + exit. */}
           <div className="absolute top-0 left-0 right-0 px-4 sm:px-6 py-3 flex items-center justify-between bg-gradient-to-b from-black/60 via-black/30 to-transparent">
@@ -2794,10 +2917,12 @@ ${version.svgCode}
           </div>
         </div>
 
-        {/* Always-on minimal hint when chrome is hidden. Shows the single
-            keystroke that brings the UI back so the user is never stranded
-            on a black screen wondering what to press. */}
-        {hideChromeInFullscreen && (
+        {/* Always-on minimal hint when chrome is hidden via H. Shows the
+            single keystroke that brings the UI back so the user is never
+            stranded on a black screen wondering what to press. Hidden during
+            cursor-idle so a still pointer (and now a still hint) both fade
+            together — moving the mouse brings everything back. */}
+        {hideChromeInFullscreen && isFullscreenCursorVisible && (
           <div className="pointer-events-none absolute bottom-3 right-3 text-[10px] font-medium uppercase tracking-wider text-white/30">
             Press H to show UI
           </div>
