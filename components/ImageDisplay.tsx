@@ -500,6 +500,75 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     };
   }, [isFullscreen]);
 
+  // Cursor auto-hide in slideshow.
+  //
+  // A pointer arrow sitting on top of a generated image reads as a smudge —
+  // every other immersive image viewer (Preview, Photos, Lightroom, video
+  // players) hides the cursor while the user is just looking. We mirror
+  // that: after 5s of mouse stillness the cursor fades to `cursor-none`,
+  // and any mouse motion brings it back instantly and re-arms the timer.
+  //
+  // We also hide on keyboard navigation (arrows + H) because once the user
+  // is flipping through marks via the keyboard, a stationary pointer over
+  // the canvas is just visual noise. F and Esc are intentionally excluded
+  // — they exit/toggle fullscreen so cursor visibility resets on the way
+  // out anyway.
+  //
+  // Effect resets state on entry and on exit so the cursor never gets
+  // stuck "invisible" once the user leaves the overlay.
+  const [isFullscreenCursorVisible, setIsFullscreenCursorVisible] = useState(true);
+  useEffect(() => {
+    if (!isFullscreen) {
+      setIsFullscreenCursorVisible(true);
+      return;
+    }
+    setIsFullscreenCursorVisible(true);
+
+    let hideTimer: number | null = null;
+    const armHideTimer = () => {
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => {
+        setIsFullscreenCursorVisible(false);
+        hideTimer = null;
+      }, 5000);
+    };
+
+    const handleMouseMove = () => {
+      setIsFullscreenCursorVisible(true);
+      armHideTimer();
+    };
+
+    // Navigation-style keys: arrows walk the slideshow, H toggles chrome.
+    // Anything else (modifiers alone, typing into a focused input that
+    // somehow bubbled, etc.) leaves the cursor state untouched.
+    const NAV_KEYS = new Set([
+      'ArrowLeft',
+      'ArrowRight',
+      'ArrowUp',
+      'ArrowDown',
+      'h',
+      'H',
+    ]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!NAV_KEYS.has(e.key)) return;
+      setIsFullscreenCursorVisible(false);
+      if (hideTimer !== null) {
+        window.clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('keydown', handleKeyDown);
+    armHideTimer();
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
+    };
+  }, [isFullscreen]);
+
   // If the user navigates away from a fullscreen-capable tile (generation
   // becomes null) leave fullscreen automatically — otherwise the overlay
   // would render an empty black screen with no way to recover except Esc.
@@ -2585,7 +2654,15 @@ ${version.svgCode}
         // single frame. Combined with the image's own scale-up below, the
         // entrance reads as the image "expanding into" the screen rather
         // than a hard cut. Keyframes live in index.css.
-        className="fixed inset-0 z-[200] bg-black flex items-center justify-center select-none cursor-default animate-[fullscreenOverlayIn_180ms_ease-out]"
+        //
+        // Cursor class swap is driven by `isFullscreenCursorVisible` — the
+        // effect above arms a 5s idle timer and flips this off until the
+        // next mouse move (or back on for arrow / H keyboard nav). Applied
+        // on the overlay so child buttons inherit the same state without
+        // each having to opt in.
+        className={`fixed inset-0 z-[200] bg-black flex items-center justify-center select-none animate-[fullscreenOverlayIn_180ms_ease-out] ${
+          isFullscreenCursorVisible ? 'cursor-default' : 'cursor-none'
+        }`}
         onDoubleClick={exitFullscreen}
       >
         {/* The image. Wrapped in a sized container so the entrance
