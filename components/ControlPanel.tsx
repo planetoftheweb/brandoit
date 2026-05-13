@@ -58,6 +58,7 @@ import {
   BookmarkPlus
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
+import { useConfirmAction } from '../hooks/useConfirmAction';
 
 /** Fields persisted when saving/updating a toolbar preset (see App `handleSavePreset`). */
 type ToolbarPresetSnapshot = Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'>;
@@ -563,7 +564,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   }, [selectedModelIds, selectedModel]);
   const isMultiModelActive = compareModelsMode && effectiveSelectedModelIds.length > 1;
   const containerRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isPromptDropActive, setIsPromptDropActive] = useState(false);
   const [promptImageFile, setPromptImageFile] = useState<File | null>(null);
   const [promptImageError, setPromptImageError] = useState<string | null>(null);
@@ -643,14 +643,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
-  const handleDeletePreset = async (e: React.MouseEvent, presetId: string) => {
+  // Inline "click twice to confirm" pattern, mirrors the image-related
+  // delete buttons. First click arms the trash icon (swaps to a check on a
+  // pulsing amber background); second click within 3s actually deletes.
+  const confirmPresetDelete = useConfirmAction<string>({
+    onConfirm: async (presetId) => {
+      if (!onDeletePreset) return;
+      try {
+        await onDeletePreset(presetId);
+      } catch (err) {
+        console.error('Failed to delete preset', err);
+      }
+    },
+  });
+  const handleDeletePreset = (e: React.MouseEvent, presetId: string) => {
     e.stopPropagation();
     if (!onDeletePreset) return;
-    try {
-      await onDeletePreset(presetId);
-    } catch (err) {
-      console.error('Failed to delete preset', err);
-    }
+    confirmPresetDelete.trigger(presetId);
   };
 
   // Transient ids used to render per-row feedback after an update completes
@@ -925,11 +934,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
     const renderGroup = (groupItems: any[], title: string) => {
         if (groupItems.length === 0) return null;
-        // Pin the currently-selected item to the top of its group so users can
-        // see at a glance which one is active. Everything else stays alphabetical.
+        // Pin the currently-selected item to the top of its group so users
+        // can see at a glance which one is active. Everything else stays
+        // alphabetical.
+        //
+        // Subtle bug we just fixed: this used to compare `config[configKey]
+        // === (a.id || a.value)`. The `||` short-circuits on `a.id`, so for
+        // size (where `configKey: 'aspectRatio'` stores the item's *value*
+        // like "1:1" but items also have an unrelated `id` like
+        // "model-1-1"), no item ever matched and the selection never
+        // pinned/highlighted. Comparing both fields independently handles
+        // size correctly without changing how type/style/color behave
+        // (those don't have a `value` field, so the second clause is just
+        // `=== undefined` which never matches).
+        const matchesConfig = (it: any) =>
+            config[configKey] === it.id || config[configKey] === it.value;
         const sortedItems = [...groupItems].sort((a: any, b: any) => {
-            const aSel = config[configKey] === (a.id || a.value);
-            const bSel = config[configKey] === (b.id || b.value);
+            const aSel = matchesConfig(a);
+            const bSel = matchesConfig(b);
             if (aSel && !bSel) return -1;
             if (!aSel && bSel) return 1;
             return (a.name || a.label).localeCompare(b.name || b.label);
@@ -941,7 +963,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
                 {sortedItems.map((item: any) => {
                     const Icon = item.icon || (type === 'type' ? Layout : type === 'style' ? PenTool : type === 'size' ? Maximize : Palette);
-                    const isSelected = config[configKey] === (item.id || item.value);
+                    // Same dual-field comparison as the sort above — keeps
+                    // size's value-based matching working alongside the
+                    // id-based matching everything else uses.
+                    const isSelected = matchesConfig(item);
 
                     return (
                         <div
@@ -1067,17 +1092,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     setActiveColorIndex(null);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onUploadGuidelines(file);
-    }
-    // Reset value so same file can be uploaded again if needed
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
   const getGeminiAnalysisKey = (): string | undefined => getGeminiApiKeyForAnalysis(user);
 
   /**
@@ -1110,8 +1124,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     });
 
   const openPromptImageDialog = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setPromptImageError('Drop an image file onto the prompt box.');
+    // PDFs are now valid drops too — they used to live behind the
+    // standalone "Upload brand" button. Routing them through the same
+    // dialog lets the user pick the action (brand analysis) right where
+    // they're already aiming, and frees up a toolbar slot.
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf';
+    if (!isImage && !isPdf) {
+      setPromptImageError('Drop an image or PDF file onto the prompt box.');
       return;
     }
     setPromptImageFile(file);
@@ -1182,6 +1202,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     } finally {
       setIsPromptImageAnalyzing(false);
     }
+  };
+
+  /**
+   * Route the currently-dropped file (image or PDF) to the parent's brand
+   * guidelines analysis pipeline — the same code path the old "Upload
+   * brand" toolbar button used. Closes the drop dialog immediately so the
+   * parent's `BrandAnalysisModal` can take focus once analysis finishes.
+   */
+  const handlePromptImageAsBrand = () => {
+    if (!promptImageFile) return;
+    const file = promptImageFile;
+    closePromptImageDialog();
+    onUploadGuidelines(file);
   };
 
   const handlePromptImageAsStyle = async (influenceMode: PromptImageStyleInfluenceMode) => {
@@ -1543,22 +1576,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     closeModal();
   };
 
-  const handleDelete = async (e: React.MouseEvent, type: 'type'|'style'|'color', idOrValue: string) => {
+  // Catalog-item delete uses the same double-tap pattern. We key by
+  // "type:id" so a brand-color id can't accidentally arm a visual-style row
+  // that happens to share an id.
+  const confirmCatalogDelete = useConfirmAction<string>({
+    onConfirm: (key) => {
+      const [type, idOrValue] = key.split(':', 2);
+      if (type === 'type') {
+        setOptions.setGraphicTypes(prev => prev.filter(x => x.id !== idOrValue));
+        if (user) resourceService.deleteCustomItem('graphic_types', idOrValue);
+      } else if (type === 'style') {
+        setOptions.setVisualStyles(prev => prev.filter(x => x.id !== idOrValue));
+        if (user) resourceService.deleteCustomItem('visual_styles', idOrValue);
+      } else if (type === 'color') {
+        setOptions.setBrandColors(prev => prev.filter(x => x.id !== idOrValue));
+        if (user) resourceService.deleteCustomItem('brand_colors', idOrValue);
+      }
+    },
+  });
+  const handleDelete = (e: React.MouseEvent, type: 'type'|'style'|'color', idOrValue: string) => {
     e.stopPropagation();
-    
-    // Optimistic UI Update
-    if (type === 'type') {
-      setOptions.setGraphicTypes(prev => prev.filter(x => x.id !== idOrValue));
-      if (user) resourceService.deleteCustomItem('graphic_types', idOrValue);
-    }
-    else if (type === 'style') {
-      setOptions.setVisualStyles(prev => prev.filter(x => x.id !== idOrValue));
-      if (user) resourceService.deleteCustomItem('visual_styles', idOrValue);
-    }
-    else if (type === 'color') {
-      setOptions.setBrandColors(prev => prev.filter(x => x.id !== idOrValue));
-      if (user) resourceService.deleteCustomItem('brand_colors', idOrValue);
-    }
+    confirmCatalogDelete.trigger(`${type}:${idOrValue}`);
   };
 
   const DropdownButton = ({ icon: Icon, label, isActive, onClick, subLabel, colors }: any) => {
@@ -1699,13 +1737,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             >
               <Pencil size={12} />
             </button>
-            <button 
-              onClick={(e) => handleDelete(e, type, item.id || item.value)} 
-              className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-              title="Delete"
-            >
-              <Trash2 size={12} />
-            </button>
+            {(() => {
+              const catalogKey = `${type}:${item.id || item.value}`;
+              const isArmed = confirmCatalogDelete.isArmed(catalogKey);
+              return (
+                <button
+                  onClick={(e) => handleDelete(e, type, item.id || item.value)}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    isArmed
+                      ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
+                      : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-red-500 dark:hover:text-red-400'
+                  }`}
+                  title={isArmed ? 'Click again to confirm' : 'Delete'}
+                  aria-label={isArmed ? 'Click again to confirm delete' : 'Delete'}
+                >
+                  {isArmed ? <Check size={12} /> : <Trash2 size={12} />}
+                </button>
+              );
+            })()}
           </>
         )}
       </div>
@@ -2105,13 +2154,38 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                           </div>
                         </div>
                       ) : (
+                        // Sort: presets whose snapshot matches the current
+                        // toolbar are pinned to the top (these are the
+                        // "currently applied" ones), then alphabetical
+                        // within each bucket. Mirrors the sort-selected-
+                        // to-top behavior of Type / Style / Colors / Size
+                        // so the user can scan the dropdown and instantly
+                        // see which preset they're on.
+                        //
+                        // We reuse `presetToolbarDiffersFromSnapshot` —
+                        // already imported for the dirty-state overwrite
+                        // row — so "applied" and "dirty" stay in lockstep
+                        // (a preset is applied iff it's not dirty).
                         [...presets]
-                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .sort((a, b) => {
+                            const aApplied = !presetToolbarDiffersFromSnapshot(
+                              a,
+                              currentToolbarPresetSnapshot
+                            );
+                            const bApplied = !presetToolbarDiffersFromSnapshot(
+                              b,
+                              currentToolbarPresetSnapshot
+                            );
+                            if (aApplied && !bApplied) return -1;
+                            if (!aApplied && bApplied) return 1;
+                            return a.name.localeCompare(b.name);
+                          })
                           .map(preset => {
                             const isDirty = presetToolbarDiffersFromSnapshot(
                               preset,
                               currentToolbarPresetSnapshot
                             );
+                            const isApplied = !isDirty;
                             const isUpdatingThis = updatingPresetId === preset.id;
                             const showOverwriteRow =
                               onUpdatePreset &&
@@ -2119,7 +2193,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                             return (
                             <div
                               key={preset.id}
-                              className="rounded-md hover:bg-gray-100 dark:hover:bg-[#21262d] border border-transparent"
+                              aria-selected={isApplied}
+                              className={`rounded-md border transition-colors ${
+                                isApplied
+                                  ? 'bg-brand-teal/10 ring-1 ring-brand-teal/30 dark:ring-brand-teal/40 border-transparent hover:bg-brand-teal/15'
+                                  : 'border-transparent hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                              }`}
                             >
                               <div className="flex items-start justify-between gap-2 p-2">
                                 <div
@@ -2127,12 +2206,33 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                   onClick={() => handleApplyPreset(preset)}
                                   title={`Apply preset: ${preset.name}`}
                                 >
-                                  <Bookmark size={16} className="text-brand-teal shrink-0 mt-0.5" />
+                                  {/* Icon stays brand-teal regardless of applied state — the
+                                      bookmark glyph is the affordance for "preset", not a
+                                      selection signal. The name and subtitle below are what
+                                      change so the applied row reads as bold + teal. */}
+                                  <Bookmark
+                                    size={16}
+                                    className={`shrink-0 mt-0.5 ${
+                                      isApplied ? 'text-brand-teal' : 'text-brand-teal'
+                                    }`}
+                                  />
                                   <div className="flex flex-col min-w-0">
-                                    <span className="text-xs truncate text-slate-700 dark:text-slate-200 font-semibold">
+                                    <span
+                                      className={`text-xs truncate font-semibold ${
+                                        isApplied
+                                          ? 'text-brand-teal dark:text-brand-teal font-bold'
+                                          : 'text-slate-700 dark:text-slate-200'
+                                      }`}
+                                    >
                                       {preset.name}
                                     </span>
-                                    <span className="text-[10px] text-slate-500 truncate">
+                                    <span
+                                      className={`text-[10px] truncate ${
+                                        isApplied
+                                          ? 'text-brand-teal/80 dark:text-brand-teal/80'
+                                          : 'text-slate-500'
+                                      }`}
+                                    >
                                       {[
                                         preset.selectedModel && (modelLabelMap[preset.selectedModel] || preset.selectedModel),
                                         preset.aspectRatio,
@@ -2141,15 +2241,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                     </span>
                                   </div>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleDeletePreset(e, preset.id)}
-                                  className="p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-[#30363d] rounded-md text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                                  title="Delete preset"
-                                  aria-label={`Delete preset ${preset.name}`}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                {(() => {
+                                  const isArmed = confirmPresetDelete.isArmed(preset.id);
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleDeletePreset(e, preset.id)}
+                                      className={`p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center rounded-md transition-colors ${
+                                        isArmed
+                                          ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
+                                          : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-red-500 dark:hover:text-red-400'
+                                      }`}
+                                      title={isArmed ? 'Click again to confirm' : 'Delete preset'}
+                                      aria-label={isArmed ? `Confirm delete preset ${preset.name}` : `Delete preset ${preset.name}`}
+                                    >
+                                      {isArmed ? <Check size={12} /> : <Trash2 size={12} />}
+                                    </button>
+                                  );
+                                })()}
                               </div>
                               {showOverwriteRow && (
                                 <div className="px-2 pb-2 pt-0">
@@ -2250,32 +2359,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
             )}
 
-            {user && (
-              <div className="relative group shrink-0">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="hidden"
-                  accept="image/*,application/pdf"
-                  onChange={handleFileChange}
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isAnalyzing}
-                  className="h-11 w-11 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-[#1c2128] text-slate-500 dark:text-slate-400 hover:text-brand-teal transition-colors disabled:opacity-50"
-                  title="Upload Brand Guidelines (PDF or Image)"
-                >
-                  {isAnalyzing ? (
-                    <Loader2 size={20} className="animate-spin text-brand-teal" />
-                  ) : (
-                    <UploadCloud size={20} />
-                  )}
-                  <span className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                    Upload brand
-                  </span>
-                </button>
-              </div>
-            )}
           </div>
           </div>
 
@@ -2306,12 +2389,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <textarea 
                   value={config.prompt}
                   onChange={(e) => handleChange('prompt', e.target.value)}
-                  placeholder='Prompt or drop image ({a,b} or ["tile 1","tile 2"])...'
+                  placeholder='Prompt, or drop an image / brand PDF ({a,b} or ["tile 1","tile 2"])...'
                   className="min-h-[48px] h-12 focus:h-32 w-full min-w-0 bg-white dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] text-slate-900 dark:text-white text-base rounded-lg py-3 pl-4 pr-11 focus:outline-none focus:ring-1 focus:ring-brand-red focus:border-brand-red transition-all duration-200 ease-in-out placeholder-slate-400 dark:placeholder-slate-600 shadow-sm dark:shadow-inner resize-y overflow-y-auto"
                 />
                 {isPromptDropActive && (
                   <div className="pointer-events-none absolute inset-0 rounded-lg border-2 border-dashed border-brand-teal bg-brand-teal/10 flex items-center justify-center text-xs font-semibold text-brand-teal">
-                    Drop image to use it with this prompt
+                    Drop image or brand PDF here
                   </div>
                 )}
                 <button
@@ -2633,19 +2716,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <Modal
         isOpen={!!promptImageFile}
         onClose={closePromptImageDialog}
-        title="Use dropped image"
+        title={
+          promptImageFile?.type === 'application/pdf'
+            ? 'Use dropped PDF'
+            : 'Use dropped image'
+        }
       >
         <div className="space-y-4">
           <div className="flex items-start gap-3 rounded-xl border border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] p-3">
             <div className="mt-0.5 rounded-lg bg-white dark:bg-[#161b22] p-2 text-brand-teal shadow-sm">
-              <ImageIcon size={18} />
+              {promptImageFile?.type === 'application/pdf' ? (
+                <UploadCloud size={18} />
+              ) : (
+                <ImageIcon size={18} />
+              )}
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
-                {promptImageFile?.name || 'Dropped image'}
+                {promptImageFile?.name || 'Dropped file'}
               </p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                Turn it into prompt content, or use its visual style for upcoming generations.
+                {promptImageFile?.type === 'application/pdf'
+                  ? 'Analyze this PDF as brand guidelines to extract colors, type, and style.'
+                  : 'Turn it into prompt content, use its visual style, or analyze it as brand guidelines.'}
               </p>
             </div>
           </div>
@@ -2657,43 +2750,72 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
 
           <div className="grid gap-2">
-            <button
-              type="button"
-              onClick={handlePromptImageToPrompt}
-              disabled={isPromptImageAnalyzing}
-              className="flex min-h-11 w-full items-center justify-between rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <span>Generate content prompt</span>
-              {isPromptImageAnalyzing && <Loader2 size={14} className="animate-spin" />}
-            </button>
-            <p className="px-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-              Describes only subjects, objects, visible text, and meaning. Menus still drive layout, style, palette, and size.
-            </p>
+            {promptImageFile?.type !== 'application/pdf' && (
+              <>
+                <button
+                  type="button"
+                  onClick={handlePromptImageToPrompt}
+                  disabled={isPromptImageAnalyzing}
+                  className="flex min-h-11 w-full items-center justify-between rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span>Generate content prompt</span>
+                  {isPromptImageAnalyzing && <Loader2 size={14} className="animate-spin" />}
+                </button>
+                <p className="px-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  Describes only subjects, objects, visible text, and meaning. Menus still drive layout, style, palette, and size.
+                </p>
 
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => handlePromptImageAsStyle('image')}
+                    disabled={isPromptImageAnalyzing}
+                    className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Use image style
+                    <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      Image style overrides the Style menu.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePromptImageAsStyle('menus')}
+                    disabled={isPromptImageAnalyzing}
+                    className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Keep menu style
+                    <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      Style menu overrides the image.
+                    </span>
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Brand guidelines analysis — formerly the standalone Upload
+                brand toolbar button. Available for both images and PDFs;
+                the user, not the toolbar, picks intent here. */}
+            {user && (
               <button
                 type="button"
-                onClick={() => handlePromptImageAsStyle('image')}
-                disabled={isPromptImageAnalyzing}
-                className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handlePromptImageAsBrand}
+                disabled={isPromptImageAnalyzing || isAnalyzing}
+                className={`flex min-h-11 w-full items-center justify-between rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60 ${
+                  promptImageFile?.type !== 'application/pdf' ? 'mt-2' : ''
+                }`}
               >
-                Use image style
-                <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                  Image style overrides the Style menu.
+                <span className="flex items-center gap-2">
+                  <UploadCloud size={14} className="text-slate-500 dark:text-slate-400" />
+                  Use as brand guidelines
                 </span>
+                {isAnalyzing && <Loader2 size={14} className="animate-spin" />}
               </button>
-              <button
-                type="button"
-                onClick={() => handlePromptImageAsStyle('menus')}
-                disabled={isPromptImageAnalyzing}
-                className="min-h-11 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-left text-sm font-semibold text-slate-800 dark:text-slate-100 hover:border-brand-teal hover:text-brand-teal disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Keep menu style
-                <span className="mt-1 block text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                  Style menu overrides the image.
-                </span>
-              </button>
-            </div>
+            )}
+            {user && (
+              <p className="px-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                Extracts brand colors, visual styles, and other identity cues you can save to your brand library.
+              </p>
+            )}
           </div>
         </div>
       </Modal>

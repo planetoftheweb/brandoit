@@ -70,6 +70,29 @@
   background-color: rgba(113, 122, 135, 0.9);
 }
 
+/* Fullscreen slideshow entrance.
+   `fullscreenOverlayIn` fades the black backdrop in so the page underneath
+   doesn't visually pop out of existence in a single frame.
+   `fullscreenContentIn` lifts the image with a subtle 0.97 → 1.0 scale plus
+   opacity. The slight upscale reads as "expanding into the screen" — a
+   handoff cue that feels natural without the macOS workspace shuffle that
+   the OS Fullscreen API used to inflict. Curves are ease-out (decelerating)
+   so the motion settles at rest rather than overshooting. */
+@keyframes fullscreenOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fullscreenContentIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* Firefox: no pseudo-element hover, so use scrollbar-color and flip it
    when the owning element is hovered. */
 * {

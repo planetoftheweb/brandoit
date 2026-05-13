@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize2, GitCompare, Plus, Expand, ScanSearch } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption, INBOX_FOLDER_ID } from '../types';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check } from 'lucide-react';
+import { useConfirmAction } from '../hooks/useConfirmAction';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
-import { getCachedImageBlobUrl } from '../services/imageCache';
+import { getCachedImageBlob, getCachedImageBlobUrl } from '../services/imageCache';
 import { getCurrentVersion } from '../services/historyService';
 import { buildExportFilename } from '../services/versionUtils';
-import { webpToPngBlob } from '../services/imageConversionService';
+import { webpToPngBlob, imageDataToPngBlob, imageBlobToPngBlob } from '../services/imageConversionService';
 import { sanitizeSvg } from '../services/svgService';
 import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
 import { normalizeAspectRatio } from '../services/aspectRatioService';
@@ -51,6 +52,13 @@ interface ImageDisplayProps {
     aspectRatios: AspectRatioOption[];
   };
   history?: Generation[];
+  /**
+   * The folder currently shown in the Recent Generations gallery. When the
+   * user enters fullscreen / slideshow mode (F key), arrow-key navigation
+   * is scoped to this folder so flipping through marks feels like walking
+   * the folder the user is already viewing rather than the global history.
+   */
+  galleryViewFolderId?: string;
   comparisonState?: ImageDisplayComparisonState;
   onEnterComparePicker?: (seed?: ImageDisplayMarkRef) => void;
   onExitComparePicker?: () => void;
@@ -79,6 +87,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   resizeAspectRatios,
   options,
   history = [],
+  galleryViewFolderId,
   comparisonState,
   onEnterComparePicker,
   onExitComparePicker,
@@ -148,6 +157,33 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [versionDropdownOpen, setVersionDropdownOpen] = useState(false);
   const [animationPaused, setAnimationPaused] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
+  // Single "Copy" trigger replaces what used to be 2-3 separate copy buttons
+  // (Copy prompt, Copy image, Copy URL / Copy SVG code) in the in-image
+  // action group. Opening the menu reveals all applicable copy targets for
+  // the current asset (raster vs SVG). Keeps the action bar uncluttered
+  // while preserving every action.
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  // Refine / Recompose panel was previously a permanent footer under every
+  // tile preview — useful but visually heavy and stealing vertical room
+  // from the main image. It now hides behind a single Wand2 icon in the
+  // in-image action bar; the panel only mounts (and consumes space) when
+  // the user actively wants to refine or resize. Default closed so the
+  // canvas claims the freed space whenever refinement isn't in play.
+  const [isRefinePanelOpen, setIsRefinePanelOpen] = useState(false);
+  // Fullscreen / slideshow mode. The F key (and the Maximize button in the
+  // in-image action group) flips into a black-background, image-maxed view.
+  // The H key inside fullscreen hides the chrome (counter, arrows, hint) for
+  // a clean slideshow read. We also kick the browser into real Fullscreen API
+  // when available so the OS chrome disappears too — falling back gracefully
+  // when the call is rejected (no user gesture, iframe sandbox, etc.).
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Slideshow defaults to a clean, chrome-less canvas — the image owns the
+  // viewport on entry and the user reveals UI with `H` only when they want
+  // navigation / position info. Avoids the "F-then-H" two-step that the
+  // earlier default required and matches every other fullscreen image viewer
+  // (Preview, Lightbox, Photos, etc.).
+  const [hideChromeInFullscreen, setHideChromeInFullscreen] = useState(true);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const [isAnalyzingRefinePrompt, setIsAnalyzingRefinePrompt] = useState(false);
   const [isExpandingRefinement, setIsExpandingRefinement] = useState(false);
   const [isResizingCanvas, setIsResizingCanvas] = useState(false);
@@ -214,14 +250,31 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   // rendered newest-first, so "previous" (←) jumps to the newer neighbor and
   // "next" (→) jumps to the older one — matching the visual order users see
   // in the gallery below.
+  //
+  // Slideshow scoping: when fullscreen mode is active and the current tile
+  // lives inside the active gallery folder, we navigate only within that
+  // folder so F + ←/→ behaves like flipping through the folder the user is
+  // currently viewing. We fall back to the unscoped history when the tile
+  // isn't in the folder (e.g. opened from a search result) so the user
+  // isn't stranded on an empty list.
+  const folderScopedNavHistory = useMemo<Generation[] | null>(() => {
+    if (!galleryViewFolderId) return null;
+    const scoped = history.filter(
+      (g) => (g.folderId || INBOX_FOLDER_ID) === galleryViewFolderId
+    );
+    if (generation && !scoped.some((g) => g.id === generation.id)) return null;
+    return scoped;
+  }, [history, galleryViewFolderId, generation?.id]);
+  const navHistory =
+    isFullscreen && folderScopedNavHistory ? folderScopedNavHistory : history;
   const currentIdxInHistory = generation
-    ? history.findIndex((g) => g.id === generation.id)
+    ? navHistory.findIndex((g) => g.id === generation.id)
     : -1;
   const newerGeneration =
-    currentIdxInHistory > 0 ? history[currentIdxInHistory - 1] : null;
+    currentIdxInHistory > 0 ? navHistory[currentIdxInHistory - 1] : null;
   const olderGeneration =
-    currentIdxInHistory >= 0 && currentIdxInHistory < history.length - 1
-      ? history[currentIdxInHistory + 1]
+    currentIdxInHistory >= 0 && currentIdxInHistory < navHistory.length - 1
+      ? navHistory[currentIdxInHistory + 1]
       : null;
   const canNavigate = !!onNavigateToGeneration && !isComparing && !isCompareMode;
   const canGoNewer = canNavigate && !!newerGeneration;
@@ -355,6 +408,106 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     goPrevVersion,
     isPromptEditorOpen,
   ]);
+
+  // ===== Fullscreen / slideshow mode =====
+  //
+  // We deliberately do NOT use the DOM Fullscreen API (`requestFullscreen`).
+  // On macOS that API triggers the OS-level workspace animation which grows
+  // the browser window from its current position to fill the screen over
+  // ~400ms. Our `position: fixed` overlay follows the resize, producing a
+  // jarring "overlay slides from the right side of the screen out to fill
+  // the screen" effect we can't disable. Instead we run the slideshow
+  // entirely inside a CSS overlay (`fixed inset-0`) that fades in over the
+  // browser window. Visually identical to OS fullscreen for the user
+  // (immersive black canvas with the image filling it), without the OS
+  // shuffle. Users who want true OS fullscreen can press F11 / Cmd+Ctrl+F
+  // before triggering the slideshow.
+  const exitFullscreen = useCallback(() => {
+    setIsFullscreen(false);
+    setHideChromeInFullscreen(true);
+  }, []);
+
+  const enterFullscreen = useCallback(() => {
+    if (!generation || !version) return;
+    setIsFullscreen(true);
+  }, [generation, version]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  // F toggles fullscreen, H hides chrome inside fullscreen, Esc exits.
+  // We register on `window` (same as the arrow-key handler above) and apply
+  // the same input-focused guards so typing "F" into the refine textarea
+  // never hijacks the keystroke.
+  useEffect(() => {
+    if (!generation || !version) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isPromptEditorOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+      if (!isFullscreen) return;
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        setHideChromeInFullscreen((prev) => !prev);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        exitFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    generation,
+    version,
+    isFullscreen,
+    isPromptEditorOpen,
+    toggleFullscreen,
+    exitFullscreen,
+  ]);
+
+  // Lock body scroll behind the overlay so a stray scroll wheel doesn't
+  // shift the page underneath while the user is in slideshow mode.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (!isFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isFullscreen]);
+
+  // If the user navigates away from a fullscreen-capable tile (generation
+  // becomes null) leave fullscreen automatically — otherwise the overlay
+  // would render an empty black screen with no way to recover except Esc.
+  useEffect(() => {
+    if (isFullscreen && (!generation || !version)) {
+      exitFullscreen();
+    }
+  }, [isFullscreen, generation, version, exitFullscreen]);
 
   useEffect(() => {
     return () => {
@@ -668,24 +821,54 @@ ${version.svgCode}
 
   const handleCopyImageToClipboard = async () => {
     if (!version) return;
+    const clipboardSupportsImages =
+      typeof navigator !== 'undefined' &&
+      !!navigator.clipboard &&
+      'write' in navigator.clipboard &&
+      typeof ClipboardItem !== 'undefined';
+
+    const writePng = async (pngBlob: Blob) => {
+      if (!clipboardSupportsImages) return false;
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      return true;
+    };
+
+    // Prefer local sources to avoid Storage CORS entirely:
+    //   1) inline base64 (fresh generations)
+    //   2) IndexedDB blob cache (everything else, populated at save time)
+    //   3) fetch the live URL (may fail on VPN or cross-origin without CORS headers)
     try {
+      if (version.imageData) {
+        const png = await imageDataToPngBlob(version.imageData, version.mimeType || 'image/webp');
+        if (await writePng(png)) { showNotice('Image copied'); return; }
+      }
+
+      if (generation?.id) {
+        const cached = await getCachedImageBlob(generation.id, version.id);
+        if (cached) {
+          const png = await imageBlobToPngBlob(cached);
+          if (await writePng(png)) { showNotice('Image copied'); return; }
+        }
+      }
+
       const sourceUrl = renderImageSrc || version.imageUrl;
-      const response = await fetch(sourceUrl, { mode: 'cors' });
-      const blob = await response.blob();
-      if (navigator.clipboard && 'write' in navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-        showNotice('Image copied');
-      } else {
-        await navigator.clipboard.writeText(version.imageUrl);
-        showNotice('Image URL copied');
+      if (sourceUrl) {
+        const response = await fetch(sourceUrl, { mode: 'cors' });
+        if (response.ok) {
+          const blob = await response.blob();
+          const png = await imageBlobToPngBlob(blob);
+          if (await writePng(png)) { showNotice('Image copied'); return; }
+        }
       }
+    } catch (err) {
+      console.warn('[ImageDisplay] Copy image failed, falling back to URL:', err);
+    }
+
+    try {
+      await navigator.clipboard.writeText(version?.imageUrl || '');
+      showNotice('Copied image URL (image not available offline)');
     } catch {
-      try {
-        await navigator.clipboard.writeText(version?.imageUrl || '');
-        showNotice('Copied image URL (image copy blocked by browser/CORS)');
-      } catch {
-        showNotice('Copy failed (browser/CORS permissions)');
-      }
+      showNotice('Copy failed');
     }
   };
 
@@ -696,8 +879,47 @@ ${version.svgCode}
     }
   };
 
+  // Inline "click twice to confirm" pattern, applied to every delete control
+  // in this component. The previous flow relied on an App-level modal that
+  // could be silenced by a preference toggle, so it was possible to lose a
+  // generation on a single misclick. Double-tap is always on, doesn't need a
+  // preference, and matches the rail/popover delete experience below.
+  const confirmGenerationDelete = useConfirmAction<'current'>({
+    onConfirm: () => {
+      if (onDelete) onDelete();
+    },
+  });
+  const isGenerationDeleteArmed = confirmGenerationDelete.isArmed('current');
   const handleDeleteWithNotice = () => {
-    if (onDelete) onDelete();
+    if (!confirmGenerationDelete.trigger('current')) {
+      showNotice('Click delete again to confirm');
+    }
+  };
+
+  const confirmVersionDelete = useConfirmAction<string>({
+    onConfirm: (versionId) => {
+      void runDeleteRefinement(versionId);
+    },
+  });
+
+  const runDeleteRefinement = async (versionId: string) => {
+    if (deletingRefinementId) return;
+    setDeletingRefinementId(versionId);
+    try {
+      await onDeleteRefinementVersion(versionId);
+      showNotice('Version deleted');
+      setVersionDropdownOpen(false);
+    } catch (error: any) {
+      showNotice(error?.message || 'Failed to delete version');
+    } finally {
+      setDeletingRefinementId(null);
+    }
+  };
+
+  const handleVersionDeleteClick = (versionId: string) => {
+    if (!confirmVersionDelete.trigger(versionId)) {
+      showNotice('Click delete again to confirm');
+    }
   };
 
   const cleanupRefinementPromptForSubmission = (input: string): string => {
@@ -804,19 +1026,6 @@ ${version.svgCode}
     }
   };
 
-  const handleDeleteRefinementClick = async (versionId: string) => {
-    if (deletingRefinementId) return;
-    setDeletingRefinementId(versionId);
-    try {
-      await onDeleteRefinementVersion(versionId);
-      showNotice('Version deleted');
-      setVersionDropdownOpen(false);
-    } catch (error: any) {
-      showNotice(error?.message || 'Failed to delete version');
-    } finally {
-      setDeletingRefinementId(null);
-    }
-  };
 
   const handleImageError = async () => {
     if (!version) return;
@@ -1046,7 +1255,19 @@ ${version.svgCode}
     ? version.label.replace(/^Mark\s+/, '')
     : '';
 
+  // Derived counters used by the fullscreen chrome. We render even when the
+  // counter is 1/1 so the user always knows where they are while flipping.
+  const fullscreenPositionLabel =
+    currentIdxInHistory >= 0 && navHistory.length > 0
+      ? `${currentIdxInHistory + 1} / ${navHistory.length}`
+      : '';
+  const fullscreenMarkLabel =
+    version && generation && generation.versions.length > 1
+      ? `${version.label} · ${generation.currentVersionIndex + 1} / ${generation.versions.length}`
+      : version?.label || '';
+
   return (
+    <>
     <div className="flex-1 flex flex-col h-full relative">
       {/* Main Viewport — the thumbnail rail (when multiple versions exist)
           lives inside the same centered row as the image card so its height
@@ -1198,8 +1419,9 @@ ${version.svgCode}
                   // the image at rest.
                   const showRailDelete =
                     generation.versions.length > 1 && !isCompareMode && !isComparing;
+                  const isRailDeleteArmed = confirmVersionDelete.isArmed(v.id);
                   const railDeleteVisible =
-                    showRailDelete && (isHovered || deletingRefinementId === v.id);
+                    showRailDelete && (isHovered || deletingRefinementId === v.id || isRailDeleteArmed);
                   return (
                     <div key={v.id} className="relative w-full group/railThumb">
                     <button
@@ -1267,23 +1489,27 @@ ${version.svgCode}
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          void handleDeleteRefinementClick(v.id);
+                          handleVersionDeleteClick(v.id);
                         }}
                         disabled={Boolean(deletingRefinementId)}
-                        aria-label={`Delete ${v.label}`}
-                        title={`Delete ${v.label}`}
-                        className={`absolute top-1 right-1 z-10 inline-flex items-center justify-center h-5 w-5 rounded-full bg-red-600 text-white shadow ring-1 ring-white/40 dark:ring-black/40 transition-all focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-400/70 ${
+                        aria-label={isRailDeleteArmed ? `Click again to confirm deleting ${v.label}` : `Delete ${v.label}`}
+                        title={isRailDeleteArmed ? `Click again to confirm` : `Delete ${v.label}`}
+                        className={`absolute top-1 right-1 z-10 inline-flex items-center justify-center h-5 w-5 rounded-full shadow ring-1 ring-white/40 dark:ring-black/40 transition-all focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-400/70 ${
                           railDeleteVisible
                             ? 'opacity-100'
                             : 'opacity-0 group-hover/railThumb:opacity-100'
                         } ${
                           deletingRefinementId
-                            ? 'cursor-not-allowed bg-red-400'
-                            : 'hover:bg-red-700'
+                            ? 'cursor-not-allowed bg-red-400 text-white'
+                            : isRailDeleteArmed
+                              ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
+                              : 'bg-red-600 text-white hover:bg-red-700'
                         }`}
                       >
                         {deletingRefinementId === v.id ? (
                           <RefreshCw size={11} className="animate-spin" />
+                        ) : isRailDeleteArmed ? (
+                          <Check size={11} strokeWidth={3} />
                         ) : (
                           <X size={11} strokeWidth={3} />
                         )}
@@ -1796,27 +2022,38 @@ ${version.svgCode}
                               const isOnlyVersion = generation.versions.length <= 1;
                               const isBusy = Boolean(deletingRefinementId);
                               const disabled = isOnlyVersion || isBusy;
+                              const isPopoverArmed = confirmVersionDelete.isArmed(v.id);
                               const tooltip = isOnlyVersion
                                 ? 'Cannot delete the only version — use the tile trash to remove the whole generation'
-                                : `Delete ${v.label}`;
+                                : isPopoverArmed
+                                  ? 'Click again to confirm'
+                                  : `Delete ${v.label}`;
                               return (
                                 <button
                                   type="button"
                                   onClick={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    void handleDeleteRefinementClick(v.id);
+                                    handleVersionDeleteClick(v.id);
                                   }}
                                   disabled={disabled}
                                   className={`h-8 w-8 mr-1 inline-flex items-center justify-center rounded-md border transition-colors ${
                                     disabled
                                       ? 'border-gray-200 dark:border-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                                      : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
+                                      : isPopoverArmed
+                                        ? 'border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:border-amber-600 animate-pulse'
+                                        : 'border-red-200/80 dark:border-red-900/40 text-red-500 dark:text-red-300 hover:bg-red-600 hover:border-red-600 hover:text-white'
                                   }`}
                                   aria-label={tooltip}
                                   title={tooltip}
                                 >
-                                  {deletingRefinementId === v.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                                  {deletingRefinementId === v.id ? (
+                                    <RefreshCw size={13} className="animate-spin" />
+                                  ) : isPopoverArmed ? (
+                                    <Check size={13} />
+                                  ) : (
+                                    <Trash2 size={13} />
+                                  )}
                                 </button>
                               );
                             })()}
@@ -1841,7 +2078,215 @@ ${version.svgCode}
                   : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
               }`}
             >
-              {onEnterComparePicker && onExitComparePicker && (
+              {/* Refine / Recompose toggle. Used to be a permanent docked
+                  panel beneath the preview; now it's a single icon that
+                  pops the panel open as a popover anchored beneath the
+                  icon, so the main image keeps all its vertical room.
+                  Active state (panel open) highlights teal, matching
+                  Compare. */}
+              <div className="relative">
+                <ActionButton
+                  onClick={() => setIsRefinePanelOpen((p) => !p)}
+                  title={isRefinePanelOpen ? 'Hide refine & recompose panel' : 'Show refine & recompose panel'}
+                  tooltip={isRefinePanelOpen ? 'Hide refine' : 'Refine'}
+                  className={isRefinePanelOpen ? 'text-brand-teal' : undefined}
+                >
+                  <Wand2 size={18} />
+                </ActionButton>
+                {isRefinePanelOpen && (
+                  <>
+                    {/* Outside-click backdrop closes the popover. Same
+                        z-10 + z-30 pairing the Copy menu uses so click
+                        events on the popover still register. */}
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setIsRefinePanelOpen(false)}
+                    />
+                    <div
+                      role="dialog"
+                      aria-label="Refine and recompose"
+                      // Anchored to the right edge of the wand button so
+                      // the popover hangs down and extends leftward into
+                      // the image area (the wand button lives near the
+                      // left of the action bar; this direction has the
+                      // most room). Width is capped to the viewport so
+                      // narrow screens don't push the panel off-canvas.
+                      className="absolute top-full right-0 mt-2 z-30 w-[40rem] max-w-[calc(100vw-2rem)] bg-white/95 dark:bg-[#161b22]/95 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] p-2 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/50"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Header with title + close. Matches dismissibility
+                          of the prompt-editor modal so the panel can be
+                          closed from inside itself as well as via the
+                          in-image Wand2 toggle or outside-click. */}
+                      <div className="flex items-center justify-between gap-2 px-1 pb-1.5">
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                          <Wand2 size={12} className="text-brand-teal" />
+                          Refine &amp; Recompose
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsRefinePanelOpen(false)}
+                          aria-label="Close refine panel"
+                          title="Close refine panel"
+                          className="h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-[#21262d] hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="px-1 pb-1 flex flex-wrap items-center gap-2">
+                        <div className="min-w-[180px] flex-1">
+                          <RichSelect
+                            value={safeRefineModelId}
+                            onChange={onModelChange}
+                            options={refineModelSelectOptions}
+                            placeholder="Refine model"
+                            icon={Wand2}
+                            compact
+                            disabled={refinementControlsLocked}
+                            buttonClassName="rounded-xl"
+                            menuClassName="max-w-[22rem] z-[220]"
+                            groupOrder={[...MODEL_GROUP_ORDER]}
+                            hideOptionDescriptions
+                          />
+                        </div>
+                        <div className="min-w-[170px] flex-1">
+                          <RichSelect
+                            value={resizeAspectRatio}
+                            onChange={setResizeAspectRatio}
+                            options={resizeTargetOptions}
+                            placeholder="Target size"
+                            icon={Maximize2}
+                            compact
+                            disabled={refinementControlsLocked}
+                            buttonClassName="rounded-xl"
+                            menuClassName="max-w-[18rem] z-[220]"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleResizeCanvasClick}
+                          disabled={refinementControlsLocked || !canResizeToSelected}
+                          className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group ${
+                            refinementControlsLocked || !canResizeToSelected
+                              ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                              : 'bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                          }`}
+                          aria-label={`Recompose image from ${resizeSourceAspectRatio || 'current'} to ${resizeAspectLabel} while preserving style`}
+                          title={canResizeToSelected ? `Recompose to ${resizeAspectLabel}` : 'Select a different target size'}
+                        >
+                          {isResizingCanvas ? <RefreshCw size={12} className="animate-spin" /> : <Maximize2 size={12} />}
+                          {isResizingCanvas ? 'Recomposing…' : 'Recompose'}
+                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                            Rebuilds the image for {resizeAspectLabel} while preserving the same style and palette.
+                          </span>
+                        </button>
+                      </div>
+                      <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsPromptEditorOpen(true)}
+                          aria-expanded={isPromptEditorOpen}
+                          aria-controls="refine-prompt-modal"
+                          className="text-sm font-semibold text-brand-teal dark:text-teal-400 hover:underline decoration-brand-teal/60 underline-offset-2 min-h-11 px-2 rounded-lg hover:bg-brand-teal/10 dark:hover:bg-teal-950/40 transition-colors"
+                        >
+                          Open full editor
+                        </button>
+                      </div>
+                      <form onSubmit={handleRefineSubmit} className="flex gap-2 items-center">
+                        <textarea
+                          value={refinementInput}
+                          onChange={(e) => setRefinementInput(e.target.value)}
+                          onKeyDown={handleInlinePromptKeyDown}
+                          placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
+                          rows={1}
+                          className="flex-1 h-11 max-h-11 p-3 bg-transparent text-sm leading-snug text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
+                          disabled={refinementControlsLocked}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleExpandRefinementClick}
+                          disabled={refinementControlsLocked}
+                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                            refinementControlsLocked
+                              ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                              : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                          }`}
+                          aria-label="Expand refine prompt with richer creative detail"
+                          title="Expand prompt — uses your text, or the tile's original prompt if empty"
+                        >
+                          {isExpandingRefinement ? <RefreshCw size={16} className="animate-spin" /> : <Expand size={16} />}
+                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                            Expand prompt
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsPromptEditorOpen(true)}
+                          disabled={refinementControlsLocked}
+                          className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all ${
+                            refinementControlsLocked
+                              ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                              : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                          }`}
+                          aria-label="Open refine prompt in full-screen editor"
+                          title="Open full editor (modal)"
+                        >
+                          <Maximize2 size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleAnalyzeRefineClick}
+                          disabled={refinementControlsLocked}
+                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                            refinementControlsLocked
+                              ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
+                              : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
+                          }`}
+                          aria-label="Analyze current image for spelling, factual, and annotation issues and generate a correction prompt"
+                          title="Run analysis"
+                        >
+                          {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <ScanSearch size={16} />}
+                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                            Run analysis
+                          </span>
+                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                            Checks text accuracy, spelling, and label/factual issues, then drafts a detailed correction prompt and switches refine model to Nano Banana Pro. Uses a fast vision model (not image generation) with the same API provider as your toolbar when your keys allow it.
+                          </span>
+                        </button>
+                        <button
+                          type="submit"
+                          title={
+                            !refinementInput.trim() && !canResizeToSelected
+                              ? 'Enter a refine prompt, or choose a different target size and use Recompose'
+                              : 'Apply refine or recompose'
+                          }
+                          disabled={(!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked}
+                          className={`h-11 w-11 shrink-0 rounded-xl font-medium text-white inline-flex items-center justify-center transition-all ${
+                            (!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked
+                              ? 'bg-gray-200 dark:bg-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                              : 'bg-brand-red hover:bg-red-700 text-white shadow-lg shadow-brand-red/20'
+                          }`}
+                        >
+                          {isRefining || isResizingCanvas ? (
+                            <RefreshCw size={16} className="animate-spin" />
+                          ) : (
+                            <Send size={16} />
+                          )}
+                        </button>
+                      </form>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Compare is only meaningful when there's a second mark to
+                  pair with — otherwise the picker would open with nothing
+                  to pick. Match the gating on the rail Compare button so the
+                  affordance only appears when it can actually do something. */}
+              {hasMultipleVersions && onEnterComparePicker && onExitComparePicker && (
                 <ActionButton
                   onClick={() => {
                     if (isCompareMode) onExitComparePicker();
@@ -1864,6 +2309,16 @@ ${version.svgCode}
                 <Info size={18} />
               </ActionButton>
 
+              {/* Fullscreen / slideshow toggle. Shortcut: F. Inside fullscreen
+                  H hides the chrome, ← → walk the current folder. */}
+              <ActionButton
+                onClick={toggleFullscreen}
+                title="Fullscreen slideshow (F) — H hides chrome, ←/→ navigates the folder"
+                tooltip="Fullscreen (F)"
+              >
+                <Maximize size={18} />
+              </ActionButton>
+
               {/* Animation toggle (SVG only) */}
               {isSvg && (
                 <ActionButton
@@ -1875,29 +2330,99 @@ ${version.svgCode}
                 </ActionButton>
               )}
 
-              {onCopy && (
-                <ActionButton onClick={handleCopyPrompt} title="Copy prompt" tooltip="Copy prompt">
-                  <Copy size={18} />
-                </ActionButton>
-              )}
-
-              {/* SVG-specific copy actions (non-download) */}
-              {isSvg && version.svgCode && (
-                <ActionButton onClick={handleCopySvgCode} title="Copy SVG code" tooltip="Copy SVG">
-                  <Code size={18} />
-                </ActionButton>
-              )}
-
-              {/* Raster-specific copy actions (non-download) */}
-              {!isSvg && (
-                <>
-                  <ActionButton onClick={handleCopyImageToClipboard} title="Copy image to clipboard" tooltip="Copy image">
-                    <ImageIcon size={18} />
-                  </ActionButton>
-                  <ActionButton onClick={handleCopyImageUrl} title="Copy image URL" tooltip="Copy URL">
-                    <Link size={18} />
-                  </ActionButton>
-                </>
+              {/* Unified Copy menu. Replaces what used to be 2-3 separate
+                  copy icons (prompt, image, URL, SVG code) — those buttons
+                  all did the same conceptual thing ("put something on the
+                  clipboard") and crowded the action bar. Now a single
+                  trigger opens a popover with the targets relevant to the
+                  current asset (raster vs SVG). Matches the
+                  one-icon-many-actions pattern that DownloadMenu already
+                  established. */}
+              {(onCopy || !isSvg || (isSvg && version.svgCode)) && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setCopyMenuOpen((p) => !p)}
+                    aria-haspopup="menu"
+                    aria-expanded={copyMenuOpen}
+                    title="Copy…"
+                    className="group/btn bg-white/90 dark:bg-[#1f252d]/90 border border-gray-300/80 dark:border-white/15 text-slate-800 dark:text-slate-200 hover:bg-brand-teal hover:border-brand-teal hover:text-white p-2.5 lg:p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-brand-teal/70 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative inline-flex items-center gap-1"
+                  >
+                    <Copy size={18} />
+                    <ChevronDown
+                      size={12}
+                      className={`transition-transform ${copyMenuOpen ? 'rotate-180' : ''}`}
+                    />
+                    <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                      Copy
+                    </span>
+                  </button>
+                  {copyMenuOpen && (
+                    <>
+                      {/* Outside-click backdrop — same pattern as the
+                          version dropdown above. `z-10` keeps it below
+                          the menu (`z-20`) so menu clicks still register. */}
+                      <div className="fixed inset-0 z-10" onClick={() => setCopyMenuOpen(false)} />
+                      <div
+                        role="menu"
+                        className="absolute top-full right-0 mt-2 w-48 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-20 overflow-hidden p-1"
+                      >
+                        {onCopy && (
+                          <button
+                            role="menuitem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              handleCopyPrompt();
+                            }}
+                            className="w-full text-left flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md transition-colors"
+                          >
+                            <Copy size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                            <span>Prompt</span>
+                          </button>
+                        )}
+                        {!isSvg && (
+                          <>
+                            <button
+                              role="menuitem"
+                              onClick={() => {
+                                setCopyMenuOpen(false);
+                                handleCopyImageToClipboard();
+                              }}
+                              className="w-full text-left flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md transition-colors"
+                            >
+                              <ImageIcon size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                              <span>Image</span>
+                            </button>
+                            <button
+                              role="menuitem"
+                              onClick={() => {
+                                setCopyMenuOpen(false);
+                                handleCopyImageUrl();
+                              }}
+                              className="w-full text-left flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md transition-colors"
+                            >
+                              <Link size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                              <span>Image URL</span>
+                            </button>
+                          </>
+                        )}
+                        {isSvg && version.svgCode && (
+                          <button
+                            role="menuitem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              handleCopySvgCode();
+                            }}
+                            className="w-full text-left flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] rounded-md transition-colors"
+                          >
+                            <Code size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                            <span>SVG code</span>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
 
               {/* Unified Download menu (this + all) */}
@@ -1918,9 +2443,21 @@ ${version.svgCode}
 
 
               {onDelete && (
-                <ActionButton onClick={handleDeleteWithNotice} title="Delete" tooltip="Delete" variant="danger">
-                  <Trash2 size={18} />
-                </ActionButton>
+                <button
+                  onClick={handleDeleteWithNotice}
+                  title={isGenerationDeleteArmed ? 'Click again to confirm delete' : 'Delete'}
+                  aria-label={isGenerationDeleteArmed ? 'Click again to confirm delete' : 'Delete'}
+                  className={`group/btn p-2.5 lg:p-3 rounded-xl shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-white dark:focus:ring-offset-[#161b22] transition relative border ${
+                    isGenerationDeleteArmed
+                      ? 'bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600 focus:ring-amber-400/70 animate-pulse'
+                      : 'bg-white/85 dark:bg-[#2b1c1c]/85 border-red-200/80 dark:border-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-600 hover:border-red-600 hover:text-white focus:ring-brand-teal/70'
+                  }`}
+                >
+                  {isGenerationDeleteArmed ? <Check size={18} /> : <Trash2 size={18} />}
+                  <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                    {isGenerationDeleteArmed ? 'Confirm delete' : 'Delete'}
+                  </span>
+                </button>
               )}
             </div>
           </div>
@@ -2030,155 +2567,166 @@ ${version.svgCode}
         </div>
       )}
 
-      {/* Refinement Bar */}
-      <div className="w-full flex flex-col items-center pb-8 px-4 pointer-events-none gap-3 relative z-40">
-        <div className="pointer-events-auto w-full max-w-2xl bg-white/90 dark:bg-[#161b22]/90 backdrop-blur-xl border border-gray-200 dark:border-[#30363d] p-2 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/50">
-          <div className="px-1 pb-1 flex flex-wrap items-center gap-2">
-            <div className="min-w-[180px] flex-1">
-              <RichSelect
-                value={safeRefineModelId}
-                onChange={onModelChange}
-                options={refineModelSelectOptions}
-                placeholder="Refine model"
-                icon={Wand2}
-                compact
-                disabled={refinementControlsLocked}
-                buttonClassName="rounded-xl"
-                menuClassName="max-w-[22rem] z-[220]"
-                groupOrder={[...MODEL_GROUP_ORDER]}
-                hideOptionDescriptions
-              />
-            </div>
-            <div className="min-w-[170px] flex-1">
-              <RichSelect
-                value={resizeAspectRatio}
-                onChange={setResizeAspectRatio}
-                options={resizeTargetOptions}
-                placeholder="Target size"
-                icon={Maximize2}
-                compact
-                disabled={refinementControlsLocked}
-                buttonClassName="rounded-xl"
-                menuClassName="max-w-[18rem] z-[220]"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={handleResizeCanvasClick}
-              disabled={refinementControlsLocked || !canResizeToSelected}
-              className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group ${
-                refinementControlsLocked || !canResizeToSelected
-                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
-                  : 'bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
-              }`}
-              aria-label={`Recompose image from ${resizeSourceAspectRatio || 'current'} to ${resizeAspectLabel} while preserving style`}
-              title={canResizeToSelected ? `Recompose to ${resizeAspectLabel}` : 'Select a different target size'}
-            >
-              {isResizingCanvas ? <RefreshCw size={12} className="animate-spin" /> : <Maximize2 size={12} />}
-              {isResizingCanvas ? 'Recomposing…' : 'Recompose'}
-              <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                Rebuilds the image for {resizeAspectLabel} while preserving the same style and palette.
-              </span>
-            </button>
-          </div>
-          <div className="px-1 pb-2 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
-            <span>
-              Current size: <span className="text-slate-700 dark:text-slate-300 font-medium">{resizeSourceLabel}</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsPromptEditorOpen(true)}
-              aria-expanded={isPromptEditorOpen}
-              aria-controls="refine-prompt-modal"
-              className="text-sm font-semibold text-brand-teal dark:text-teal-400 hover:underline decoration-brand-teal/60 underline-offset-2 min-h-11 px-2 rounded-lg hover:bg-brand-teal/10 dark:hover:bg-teal-950/40 transition-colors"
-            >
-              Open full editor
-            </button>
-          </div>
-          <form onSubmit={handleRefineSubmit} className="flex gap-2 items-center">
-            <textarea
-              value={refinementInput}
-              onChange={(e) => setRefinementInput(e.target.value)}
-              onKeyDown={handleInlinePromptKeyDown}
-              placeholder={isSvg ? "Refine this SVG (e.g. 'Add a subtle gradient')..." : "Refine this image (e.g. 'Make the background darker')..."}
-              rows={1}
-              className="flex-1 h-11 max-h-11 p-3 bg-transparent text-sm leading-snug text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden"
-              disabled={refinementControlsLocked}
-            />
-            <button
-              type="button"
-              onClick={handleExpandRefinementClick}
-              disabled={refinementControlsLocked}
-              className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
-                refinementControlsLocked
-                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
-                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
-              }`}
-              aria-label="Expand refine prompt with richer creative detail"
-              title="Expand prompt — uses your text, or the tile's original prompt if empty"
-            >
-              {isExpandingRefinement ? <RefreshCw size={16} className="animate-spin" /> : <Expand size={16} />}
-              <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                Expand prompt
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsPromptEditorOpen(true)}
-              disabled={refinementControlsLocked}
-              className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                refinementControlsLocked
-                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
-                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
-              }`}
-              aria-label="Open refine prompt in full-screen editor"
-              title="Open full editor (modal)"
-            >
-              <Maximize2 size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={handleAnalyzeRefineClick}
-              disabled={refinementControlsLocked}
-              className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
-                refinementControlsLocked
-                  ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
-                  : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
-              }`}
-              aria-label="Analyze current image for spelling, factual, and annotation issues and generate a correction prompt"
-              title="Run analysis"
-            >
-              {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <ScanSearch size={16} />}
-              <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                Run analysis
-              </span>
-              <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                Checks text accuracy, spelling, and label/factual issues, then drafts a detailed correction prompt and switches refine model to Nano Banana Pro. Uses a fast vision model (not image generation) with the same API provider as your toolbar when your keys allow it.
-              </span>
-            </button>
-            <button
-              type="submit"
-              title={
-                !refinementInput.trim() && !canResizeToSelected
-                  ? 'Enter a refine prompt, or choose a different target size and use Recompose'
-                  : 'Apply refine or recompose'
-              }
-              disabled={(!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked}
-              className={`h-11 w-11 shrink-0 rounded-xl font-medium text-white inline-flex items-center justify-center transition-all ${
-                (!refinementInput.trim() && !canResizeToSelected) || refinementControlsLocked
-                  ? 'bg-gray-200 dark:bg-[#30363d] text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                  : 'bg-brand-red hover:bg-red-700 text-white shadow-lg shadow-brand-red/20'
-              }`}
-            >
-               {isRefining || isResizingCanvas ? (
-                 <RefreshCw size={16} className="animate-spin" />
-               ) : (
-                 <Send size={16} />
-               )}
-            </button>
-          </form>
-        </div>
-      </div>
     </div>
+
+    {/* Fullscreen / slideshow overlay. Rendered as a sibling of the main
+        layout (inside a fragment) so its `position: fixed` covers the entire
+        viewport regardless of any flex/overflow constraints on the regular
+        ImageDisplay tree. We keep the underlying layout mounted so React
+        state, refs, and effects don't churn when toggling F. */}
+    {isFullscreen && generation && version && (
+      <div
+        ref={fullscreenContainerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Fullscreen slideshow"
+        // `animate-[fullscreenOverlayIn_...]` fades the black backdrop in
+        // over 180ms so the page underneath doesn't snap out of view in a
+        // single frame. Combined with the image's own scale-up below, the
+        // entrance reads as the image "expanding into" the screen rather
+        // than a hard cut. Keyframes live in index.css.
+        className="fixed inset-0 z-[200] bg-black flex items-center justify-center select-none cursor-default animate-[fullscreenOverlayIn_180ms_ease-out]"
+        onDoubleClick={exitFullscreen}
+      >
+        {/* The image. Wrapped in a sized container so the entrance
+            animation (subtle scale + fade) targets a single element and
+            doesn't recompute the underlying `object-contain` layout on
+            each frame. The wrapper itself is the viewport; transforming
+            it scales the image visually without affecting how the image
+            fits inside (which is still `object-contain`). */}
+        <div
+          className="w-screen h-screen flex items-center justify-center animate-[fullscreenContentIn_220ms_cubic-bezier(0.16,1,0.3,1)] will-change-transform"
+        >
+          {isSvg && version.svgCode ? (
+            // SVG is forced to span the full viewport; the SVG's own
+            // `preserveAspectRatio` (default `xMidYMid meet`) keeps the
+            // art centered and aspect-preserved while filling the
+            // dominant axis. `max-w/max-h` would let small SVGs render at
+            // intrinsic viewBox size and leave bars on all four sides.
+            <div
+              className="w-full h-full [&>svg]:block [&>svg]:w-[100vw] [&>svg]:h-[100vh]"
+              dangerouslySetInnerHTML={{ __html: sanitizeSvg(version.svgCode) }}
+            />
+          ) : (
+            // `w-screen h-screen` + `object-contain` makes the `<img>`
+            // element physically span the viewport while the image
+            // content scales up (or down) to fill the dominant axis
+            // without distortion. Using `max-w/max-h` instead lets
+            // smaller-than-viewport images render at their intrinsic
+            // resolution and leaves the user staring at a postage stamp
+            // surrounded by black — the bug this fixes.
+            <img
+              src={renderImageSrc || version.imageUrl}
+              alt="Generated output (fullscreen)"
+              className="w-screen h-screen object-contain block"
+              draggable={false}
+              onError={handleImageError}
+            />
+          )}
+        </div>
+
+        {/* Edge tap zones — clicking the left or right side advances the
+            slideshow. We render these always (even with chrome hidden) so
+            slideshow navigation stays available on touch / trackpad without
+            needing the keyboard. They're transparent and don't capture the
+            center of the image. */}
+        {canGoNewer && (
+          <button
+            type="button"
+            onClick={goNewer}
+            aria-label="Previous (newer in history)"
+            className="absolute inset-y-0 left-0 w-[20%] max-w-[160px] focus:outline-none"
+          />
+        )}
+        {canGoOlder && (
+          <button
+            type="button"
+            onClick={goOlder}
+            aria-label="Next (older in history)"
+            className="absolute inset-y-0 right-0 w-[20%] max-w-[160px] focus:outline-none"
+          />
+        )}
+
+        {/* Chrome — hidden when H is pressed. We use opacity + pointer-events
+            instead of an unmount so the user can flip H back and forth
+            without re-renders or transitions stuttering. */}
+        <div
+          className={`absolute inset-0 transition-opacity duration-200 ${
+            hideChromeInFullscreen ? 'opacity-0 pointer-events-none' : 'opacity-100'
+          }`}
+          aria-hidden={hideChromeInFullscreen}
+        >
+          {/* Top bar: position counter + exit. */}
+          <div className="absolute top-0 left-0 right-0 px-4 sm:px-6 py-3 flex items-center justify-between bg-gradient-to-b from-black/60 via-black/30 to-transparent">
+            <div className="flex items-baseline gap-3 text-white/90">
+              {fullscreenPositionLabel && (
+                <span className="text-sm font-semibold tabular-nums">
+                  {fullscreenPositionLabel}
+                </span>
+              )}
+              {fullscreenMarkLabel && (
+                <span className="text-xs text-white/60">{fullscreenMarkLabel}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={exitFullscreen}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/20 bg-black/40 px-3 text-xs font-medium text-white/90 backdrop-blur hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              aria-label="Exit fullscreen (F or Esc)"
+              title="Exit fullscreen (F or Esc)"
+            >
+              <Minimize size={14} />
+              <span>Exit</span>
+            </button>
+          </div>
+
+          {/* Side arrows. We render them above the tap-zone buttons so
+              hovering near the edge surfaces a visible affordance. */}
+          {canGoNewer && (
+            <button
+              type="button"
+              onClick={goNewer}
+              aria-label="Previous (newer in history)"
+              className="absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-black/40 text-white/90 backdrop-blur hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            >
+              <ChevronLeft size={22} />
+            </button>
+          )}
+          {canGoOlder && (
+            <button
+              type="button"
+              onClick={goOlder}
+              aria-label="Next (older in history)"
+              className="absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-black/40 text-white/90 backdrop-blur hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            >
+              <ChevronRight size={22} />
+            </button>
+          )}
+
+          {/* Bottom hint strip. Lists the keyboard map so the gesture set is
+              learnable without a separate help dialog. */}
+          <div className="absolute bottom-0 left-0 right-0 px-4 sm:px-6 py-3 flex justify-center bg-gradient-to-t from-black/60 via-black/30 to-transparent">
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] font-medium text-white/70">
+              <span><kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">←</kbd> / <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">→</kbd> navigate</span>
+              {canCycleVersions && (
+                <span><kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">↑</kbd> / <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">↓</kbd> marks</span>
+              )}
+              <span><kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">H</kbd> hide UI</span>
+              <span><kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">F</kbd> / <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/90">Esc</kbd> exit</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Always-on minimal hint when chrome is hidden. Shows the single
+            keystroke that brings the UI back so the user is never stranded
+            on a black screen wondering what to press. */}
+        {hideChromeInFullscreen && (
+          <div className="pointer-events-none absolute bottom-3 right-3 text-[10px] font-medium uppercase tracking-wider text-white/30">
+            Press H to show UI
+          </div>
+        )}
+      </div>
+    )}
+    </>
   );
 };

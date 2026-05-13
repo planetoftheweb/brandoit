@@ -64,5 +64,52 @@ export const webpToPngBlob = async (base64Data: string): Promise<Blob> => {
   });
 };
 
+// Decode any image base64 (webp/png/jpeg/etc.) and re-encode as a PNG blob.
+// Browsers' clipboard implementations are most permissive about image/png,
+// so this is the safest format to write to the clipboard.
+export const imageDataToPngBlob = async (
+  base64Data: string,
+  sourceMimeType: string
+): Promise<Blob> => {
+  const dataUrl = toDataUrl(base64Data, sourceMimeType || 'image/png');
+  const img = await loadImage(dataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas context unavailable');
+  ctx.drawImage(img, 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error('PNG conversion failed'))),
+      'image/png'
+    );
+  });
+};
+
+// Re-encode an image Blob (e.g. from IndexedDB or a same-origin fetch) into a
+// PNG blob. Returns the original blob untouched when it's already PNG.
+export const imageBlobToPngBlob = async (source: Blob): Promise<Blob> => {
+  if (source.type === 'image/png') return source;
+  const objectUrl = URL.createObjectURL(source);
+  try {
+    const img = await loadImage(objectUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas context unavailable');
+    ctx.drawImage(img, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('PNG conversion failed'))),
+        'image/png'
+      );
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
 export const makeImageUrl = (base64Data: string, mimeType: string): string =>
   toDataUrl(base64Data, mimeType);
