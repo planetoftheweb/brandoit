@@ -51,6 +51,9 @@ import { detectLikelyCanvasPadding } from './services/recomposeQualityService';
 import { toMarkLabel } from './services/versionUtils';
 import { buildProfileImageCacheKey, getCachedImageBlob } from './services/imageCache';
 import { CachedImage } from './components/CachedImage';
+import { WhatsNewBell } from './components/WhatsNewBell';
+import { WhatsNewSpotlight } from './components/WhatsNewSpotlight';
+import { useWhatsNew } from './hooks/useWhatsNew';
 // import { seedCatalog } from './services/seeder'; // Removed
 import { seedStructures } from './services/structureSeeder'; // Import structure seeder
 import { resourceService } from './services/resourceService'; // Import resource service
@@ -59,17 +62,11 @@ import {
   AlertCircle, 
   Sun, 
   Moon, 
-  HelpCircle, 
   X,
   KeyRound,
   Sparkles,
   ArrowRight,
-  Layout,
-  PenTool,
-  Plus,
-  MessageSquare,
   RefreshCw,
-  UploadCloud,
   LogIn,
   LogOut,
   User as UserIcon,
@@ -95,6 +92,9 @@ const CatalogPage = lazy(() =>
 );
 const AdminPage = lazy(() =>
   import('./components/AdminPage').then((mod) => ({ default: mod.AdminPage }))
+);
+const WhatsNewPage = lazy(() =>
+  import('./components/WhatsNewPage').then((mod) => ({ default: mod.WhatsNewPage }))
 );
 const SearchModal = lazy(() =>
   import('./components/SearchModal').then((mod) => ({ default: mod.SearchModal }))
@@ -284,18 +284,33 @@ const App: React.FC = () => {
     }
     return true; // Default to dark
   });
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [catalogMode, setCatalogMode] = useState<'style' | 'color' | null>(null);
   const [adminMode, setAdminMode] = useState(false);
+  // Full-page "What's new" blog view (siblings: WhatsNewBell dropdown, WhatsNewSpotlight modal).
+  // Reachable from the bell footer "View all updates" link, the bell rows
+  // (which open the per-entry detail), the spotlight's "Read the guide"
+  // button, or `?whatsnewpage=1` deep links.
+  const [whatsNewMode, setWhatsNewMode] = useState(false);
+  // When non-null, the page renders the detail walkthrough for that entry
+  // instead of the discovery list. Reset when the user clicks "All updates"
+  // inside the page or fully exits the page.
+  const [whatsNewEntryId, setWhatsNewEntryId] = useState<string | null>(null);
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
+  // Tracks whether Firebase auth has reported in at least once. Until this is
+  // true, `user` is null because the session is still being restored — not
+  // because the visitor is a guest. Several UI affordances (the BYOK setup
+  // modal in particular) must wait for this before assuming "no user means
+  // new visitor", otherwise returning users see a flash of the onboarding
+  // screen on every page load.
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isSetupModalOpen, setIsSetupModalOpen] = useState(true);
+  const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
 
   // Application State for Options (allows adding/removing)
   const [brandColors, setBrandColors] = useState<BrandColor[]>([]);
@@ -354,6 +369,13 @@ const App: React.FC = () => {
   const [batchClockTick, setBatchClockTick] = useState(0);
   const generationJobAbortControllersRef = useRef<Record<string, AbortController>>({});
   const generationJobDismissTimersRef = useRef<Record<string, number>>({});
+  // Set while we are running a `window.scrollTo` (e.g. snapping to the top
+  // after restoring a generation from history). The auto-collapse scroll
+  // listener consults this so the synthetic scroll events fired during the
+  // smooth scroll don't toggle `isToolbarCollapsed` back off — and so the
+  // listener doesn't compete with the in-flight animation while the user
+  // tries to take over with their wheel/trackpad.
+  const isProgrammaticScrollRef = useRef(false);
 
   // Analysis Modal State
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
@@ -542,6 +564,7 @@ const App: React.FC = () => {
         setUser(null);
         setHistory([]);
       }
+      setIsAuthResolved(true);
     });
 
     return () => unsubscribe();
@@ -561,7 +584,53 @@ const App: React.FC = () => {
         console.warn("Failed to sync preferences:", err);
       });
     }
-  }, [user?.preferences.settings, user?.preferences.apiKeys, user?.preferences.selectedModel, user?.preferences.systemPrompt]); // Only trigger on actual preference changes, not user object changes
+  }, [
+    user?.preferences.settings,
+    user?.preferences.apiKeys,
+    user?.preferences.selectedModel,
+    user?.preferences.systemPrompt,
+    user?.preferences.lastSeenWhatsNewId,
+    user?.preferences.dismissedSpotlightIds,
+  ]); // Only trigger on actual preference changes, not user object changes
+
+  // What's New panel state (bell + spotlight). The hook handles guest vs
+  // signed-in persistence; for signed-in users we patch the local user
+  // preferences object and let the auto-sync effect above push it to
+  // Firestore on the next tick.
+  const whatsNew = useWhatsNew({
+    user,
+    onPersistSignedIn: (patch) => {
+      setUser((prev) =>
+        prev ? { ...prev, preferences: { ...prev.preferences, ...patch } } : prev
+      );
+    },
+  });
+
+  // Navigate to the full-page What's New view. Used by the bell footer
+  // link, the bell rows (passing a specific entry id for the detail view),
+  // and the spotlight modal's "Read the guide" button. Resets the other
+  // page modes so we don't stack rendering paths, dismisses the spotlight if
+  // one is open, and closes the bell dropdown.
+  //
+  // Pass an `entryId` to land directly on the per-release detail view;
+  // pass `null` (default) to land on the discovery list.
+  //
+  // This is also the single engagement-signal choke point for the bell's
+  // unread badge: any path that lands here counts as "I've read what's
+  // new," so we call `markAllAsSeen` once here instead of duplicating the
+  // call at every entry point.
+  const openWhatsNewPage = React.useCallback(
+    (entryId: string | null = null) => {
+      setWhatsNewMode(true);
+      setWhatsNewEntryId(entryId);
+      setSettingsMode(false);
+      setAdminMode(false);
+      setCatalogMode(null);
+      whatsNew.closeBell();
+      whatsNew.markAllAsSeen();
+    },
+    [whatsNew]
+  );
 
   const handleLoginSuccess = async (loggedInUser: User) => {
     setUser(loggedInUser);
@@ -709,6 +778,17 @@ const App: React.FC = () => {
     };
     const onScroll = () => {
       const y = window.scrollY;
+      // While a `window.scrollTo` is animating (e.g. the snap-to-top after
+      // clicking a gallery tile), absorb its synthetic events. Otherwise the
+      // negative-delta train as `y` decays toward 0 would hit the
+      // `delta < -2 && y <= COLLAPSE_THRESHOLD` branch and pop the toolbar
+      // back open the moment we tried to dock it. We still update `lastY`
+      // so the next user-driven scroll computes a sensible delta from the
+      // settled position.
+      if (isProgrammaticScrollRef.current) {
+        lastY = y;
+        return;
+      }
       const delta = y - lastY;
       if (delta > 2 && y > COLLAPSE_THRESHOLD) {
         if (isTextInputFocused()) {
@@ -836,13 +916,17 @@ const App: React.FC = () => {
   const activeApiKey = getActiveApiKey();
   const needsSetup = !user || !activeApiKey;
 
+  // Open the BYOK "Quick Start" modal only after Firebase auth has actually
+  // resolved. Without this guard, returning users see a flash of the
+  // onboarding modal on every page load while their session is still being
+  // restored (user is null for one tick → needsSetup is true → modal opens
+  // → auth resolves → user populates → modal closes). Waiting for
+  // `isAuthResolved` means the modal only appears for genuine guests or
+  // signed-in users who really have no API key configured.
   useEffect(() => {
-    if (needsSetup) {
-      setIsSetupModalOpen(true);
-    } else {
-      setIsSetupModalOpen(false);
-    }
-  }, [needsSetup, user?.id]);
+    if (!isAuthResolved) return;
+    setIsSetupModalOpen(needsSetup);
+  }, [isAuthResolved, needsSetup, user?.id]);
 
   // If the currently selected model has no usable API key but the user has
   // configured a key for some other supported model, auto-switch to that
@@ -1926,6 +2010,23 @@ const App: React.FC = () => {
       };
       setUser(updatedUser);
     }
+    // Snap the page back up so the restored generation is centered in the
+    // preview. We mark the scroll as programmatic so the toolbar auto-
+    // collapse listener doesn't react to the synthetic scroll events that
+    // fire during the smooth animation (which would otherwise un-dock the
+    // toolbar we just docked via the `currentGeneration?.id` effect). The
+    // flag also keeps the listener from fighting the user if they try to
+    // take over with their wheel mid-animation. `scrollend` clears it as
+    // soon as motion settles; a setTimeout is the safety net for browsers
+    // that don't fire scrollend (and for the trivial case where the page
+    // was already at the top so no scroll actually happens).
+    isProgrammaticScrollRef.current = true;
+    const clearProgrammaticScroll = () => {
+      isProgrammaticScrollRef.current = false;
+      window.removeEventListener('scrollend', clearProgrammaticScroll);
+    };
+    window.addEventListener('scrollend', clearProgrammaticScroll, { once: true });
+    window.setTimeout(clearProgrammaticScroll, 900);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -2473,7 +2574,22 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col w-full min-h-screen font-sans transition-colors duration-200">
-      
+
+      {/* What's New spotlight — auto-fires for the newest featured entry the
+          current user hasn't dismissed. Lives outside the scrollable layout
+          so its fixed overlay covers the entire viewport including header. */}
+      {whatsNew.isSpotlightPending && whatsNew.spotlightEntry && (
+        <WhatsNewSpotlight
+          entry={whatsNew.spotlightEntry}
+          onDismiss={whatsNew.dismissSpotlight}
+          onReadGuide={() => {
+            const id = whatsNew.spotlightEntry!.id;
+            whatsNew.dismissSpotlight(id);
+            openWhatsNewPage(id);
+          }}
+        />
+      )}
+
       {/* 1. Dedicated Header Row */}
       <header className="w-full flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] sticky top-0 z-50">
         <div className="flex items-center gap-6">
@@ -2482,6 +2598,8 @@ const App: React.FC = () => {
               setCatalogMode(null);
               setSettingsMode(false);
               setAdminMode(false);
+              setWhatsNewMode(false);
+              setWhatsNewEntryId(null);
             }}
             className="flex items-center gap-3 hover:opacity-80 transition-opacity focus:outline-none"
           >
@@ -2495,7 +2613,7 @@ const App: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          
+
           {/* Auth Buttons */}
           {user ? (
              <div className="relative">
@@ -2531,6 +2649,8 @@ const App: React.FC = () => {
                            setSettingsMode(true);
                            setAdminMode(false);
                            setCatalogMode(null);
+                           setWhatsNewMode(false);
+                           setWhatsNewEntryId(null);
                            setIsUserMenuOpen(false);
                          }}
                          className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
@@ -2547,6 +2667,8 @@ const App: React.FC = () => {
                              setAdminMode(true);
                              setSettingsMode(false);
                              setCatalogMode(null);
+                             setWhatsNewMode(false);
+                             setWhatsNewEntryId(null);
                              setIsUserMenuOpen(false);
                            }}
                            className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
@@ -2554,6 +2676,18 @@ const App: React.FC = () => {
                            <ShieldCheck size={16} /> Admin
                          </button>
                        )}
+                       {/* Theme toggle lives here so the header stays clean.
+                           Label describes the *target* mode (matches click
+                           behavior). Keeps the menu open so the user can
+                           preview the new theme without re-opening. */}
+                       <button
+                         onClick={() => setIsDarkMode(prev => !prev)}
+                         className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+                         aria-pressed={isDarkMode}
+                       >
+                         {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
+                         {isDarkMode ? 'Light mode' : 'Dark mode'}
+                       </button>
                      </div>
                       <button 
                         onClick={handleLogout}
@@ -2590,7 +2724,7 @@ const App: React.FC = () => {
                admin/settings/catalog), where the ControlPanel is mounted.
                The header itself stays z-50 so the click target sits
                above the (z-40) toolbar even mid-collapse. */}
-           {!adminMode && !settingsMode && !catalogMode && (
+           {!adminMode && !settingsMode && !catalogMode && !whatsNewMode && (
              <button
                onClick={() => setIsToolbarCollapsed(prev => !prev)}
                className="hidden md:inline-flex p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
@@ -2602,13 +2736,6 @@ const App: React.FC = () => {
              </button>
            )}
 
-           <button 
-             onClick={() => setIsHelpOpen(true)}
-             className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
-             title="Help"
-           >
-             <HelpCircle size={20} />
-           </button>
            <a
              href={GITHUB_REPO_BASE}
              target="_blank"
@@ -2619,13 +2746,35 @@ const App: React.FC = () => {
            >
              <Github size={20} />
            </a>
-           <button 
-             onClick={() => setIsDarkMode(!isDarkMode)}
-             className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
-             title="Toggle Theme"
-           >
-             {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-           </button>
+
+           {/* Theme toggle for guests only. Signed-in users get this inside
+               the user dropdown menu so the header stays uncluttered. */}
+           {!user && (
+             <button
+               onClick={() => setIsDarkMode(!isDarkMode)}
+               className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+               title="Toggle theme"
+               aria-label="Toggle theme"
+             >
+               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+             </button>
+           )}
+
+           {/* What's New bell — last icon in the row so the unread count
+               bubble sits in the corner where users expect notification
+               pings. Available to signed-in users and guests alike. */}
+           <WhatsNewBell
+             entries={whatsNew.entries}
+             unreadCount={whatsNew.unreadCount}
+             unseenIds={whatsNew.unseenIds}
+             isOpen={whatsNew.isBellOpen}
+             focusedEntryId={whatsNew.focusedEntryId}
+             onOpen={whatsNew.openBell}
+             onClose={whatsNew.closeBell}
+             onClearFocusedEntry={whatsNew.clearFocusedEntry}
+             onOpenPage={() => openWhatsNewPage(null)}
+             onSelectEntry={(id) => openWhatsNewPage(id)}
+           />
         </div>
       </header>
 
@@ -2658,6 +2807,19 @@ const App: React.FC = () => {
             onBack={() => setCatalogMode(null)}
             onImport={handleImportFromCatalog}
             userId={user?.id}
+          />
+        </Suspense>
+      ) : whatsNewMode ? (
+        <Suspense fallback={<LazyPageFallback label="Loading updates..." />}>
+          <WhatsNewPage
+            entries={whatsNew.entries}
+            unseenIds={whatsNew.unseenIds}
+            selectedEntryId={whatsNewEntryId}
+            onSelectEntry={(id) => setWhatsNewEntryId(id)}
+            onBack={() => {
+              setWhatsNewMode(false);
+              setWhatsNewEntryId(null);
+            }}
           />
         </Suspense>
       ) : (
@@ -2975,7 +3137,16 @@ const App: React.FC = () => {
                 onResizeCanvasRefine={handleResizeCanvasRefine}
                 isRefining={isGenerating}
                 onCopy={handleCopyCurrent}
-                onDelete={requestDeleteCurrent}
+                onDelete={() => {
+                  // The ImageDisplay delete button now self-confirms via a
+                  // double-tap pattern (see hooks/useConfirmAction), so we
+                  // bypass the App-level modal here and fire the actual
+                  // delete on the second click that reaches this handler.
+                  executeDeleteCurrent().catch((err: any) => {
+                    console.error('Failed to delete current image:', err);
+                    setError(err?.message || 'Failed to delete image.');
+                  });
+                }}
                 onVersionChange={handleVersionChange}
                 onDeleteRefinementVersion={handleDeleteRefinementVersion}
                 selectedModel={selectedModel}
@@ -2983,6 +3154,7 @@ const App: React.FC = () => {
                 resizeAspectRatios={getAspectRatiosForModel('gemini', aspectRatios)}
                 options={context}
                 history={history}
+                galleryViewFolderId={galleryViewFolderId}
                 comparisonState={comparisonState}
                 onEnterComparePicker={enterComparePickerMode}
                 onExitComparePicker={exitComparePickerMode}
@@ -2994,8 +3166,16 @@ const App: React.FC = () => {
             {/* History Gallery */}
             <RecentGenerations
               history={history}
+              activeGenerationId={currentGeneration?.id}
               onSelect={handleRestoreFromHistory}
-              onDelete={requestDeleteHistory}
+              onDelete={(historyId: string) => {
+                // Tile delete is self-confirming via double-tap inside
+                // RecentGenerations, so skip the App-level modal here too.
+                executeDeleteHistory(historyId).catch((err: any) => {
+                  console.error('Failed to delete history item:', err);
+                  setError(err?.message || 'Failed to delete generation.');
+                });
+              }}
               options={context}
               isComparePicking={comparisonState.mode === 'picking'}
               onPickMark={pickMarkForComparison}
@@ -3139,7 +3319,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {needsSetup && isSetupModalOpen && (
+      {isAuthResolved && needsSetup && isSetupModalOpen && (
         <div
           className="fixed inset-0 z-[140] flex items-center justify-center p-4 sm:p-6"
           onClick={() => setIsSetupModalOpen(false)}
@@ -3246,94 +3426,6 @@ const App: React.FC = () => {
                   Continue Exploring
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Help Modal */}
-      {isHelpOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl w-full max-w-lg shadow-2xl p-6 relative animate-in zoom-in-95 duration-200 text-slate-900 dark:text-white">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-bold">How to use BranDoIt</h3>
-              <button onClick={() => setIsHelpOpen(false)} className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-md hover:bg-gray-100 dark:hover:bg-[#30363d] transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="space-y-4 text-sm text-slate-600 dark:text-slate-300">
-              <p className="mb-4">
-                BranDoIt helps you create consistent graphics for your brand using AI.
-              </p>
-              <ul className="space-y-4">
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <UserIcon size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Account + API Key:</strong> Free accounts use BYOK. Add your Gemini/OpenAI API key in Settings, then generate. Your account saves your custom colors, styles, settings, and history for next time.
-                  </div>
-                </li>
-               <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <UploadCloud size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Upload Guidelines:</strong> Upload your brand guidelines (PDF or Image) to automatically generate custom styles and colors.
-                  </div>
-                </li>
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <Layout size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Select Type:</strong> Choose what kind of graphic you need (e.g., Icon, Chart).
-                  </div>
-                </li>
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <PenTool size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Select Style:</strong> Pick a visual style that includes your brand's color palette.
-                  </div>
-                </li>
-                {/* Removed separate Color section in Help */}
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <Plus size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Custom Options:</strong> Add your own custom types or styles (with custom colors) by clicking "Add Custom...".
-                  </div>
-                </li>
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <MessageSquare size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Prompt:</strong> Describe what you want to see. Be specific!
-                  </div>
-                </li>
-                <li className="flex items-start gap-3">
-                  <div className="mt-0.5 p-1.5 bg-gray-100 dark:bg-[#21262d] rounded-md text-brand-red dark:text-brand-orange shrink-0">
-                    <RefreshCw size={16} />
-                  </div>
-                  <div>
-                    <strong className="text-slate-900 dark:text-white">Refine:</strong> Once generated, use the text box below the image to ask for changes.
-                  </div>
-                </li>
-              </ul>
-            </div>
-
-            <div className="mt-8 flex justify-end border-t border-gray-200 dark:border-[#30363d] pt-4">
-              <button 
-                onClick={() => setIsHelpOpen(false)}
-                className="px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm shadow-lg shadow-brand-red/20"
-              >
-                Got it
-              </button>
             </div>
           </div>
         </div>

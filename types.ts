@@ -184,6 +184,85 @@ export interface UserPreferences {
    * signed-in users; localStorage for guests). Invalid ids fall back to Inbox.
    */
   galleryViewFolderId?: string;
+  /**
+   * Most recent What's New entry id the user has acknowledged (by opening the
+   * bell dropdown). Drives the unread badge: when the newest entry id differs
+   * from this value, the bell shows the badge. Guests persist this in
+   * localStorage instead.
+   */
+  lastSeenWhatsNewId?: string;
+  /**
+   * Ids of `featured: true` What's New entries the user has explicitly
+   * dismissed from the spotlight modal. The modal never re-fires for a
+   * dismissed id. Guests persist this in localStorage instead.
+   */
+  dismissedSpotlightIds?: string[];
+}
+
+/**
+ * A single user-facing release / feature announcement. Drives both the
+ * header bell dropdown (every entry) and the spotlight modal (only entries
+ * with `featured: true`). Curated by hand in `data/whatsNew.ts` alongside
+ * each CHANGELOG.md update so the prose stays user-voiced.
+ */
+/**
+ * A single instruction inside a {@link WhatsNewSection}. Steps are rendered
+ * as a numbered list on the detail page. They can optionally carry a tiny
+ * visual marker so users can recognize the corresponding UI affordance:
+ *   - `icon`: a Lucide-react icon *name* string (e.g., "Bell"). Rendered as
+ *     a small pill that visually echoes the actual app button.
+ *   - `kbd`: a keyboard-shortcut string (e.g., "Cmd+K"). The component
+ *     splits on `+` and renders each token as a styled `<kbd>` chip.
+ * If both are provided, both are rendered (icon then kbd).
+ */
+export interface WhatsNewStep {
+  text: string;
+  icon?: string;
+  kbd?: string;
+}
+
+/**
+ * One sub-topic inside a release's detail page (e.g., "The bell" vs.
+ * "The discovery page"). A section is a heading + optional paragraph body
+ * + optional ordered steps. Sections are rendered top-to-bottom in array
+ * order, so authors control the narrative flow.
+ */
+export interface WhatsNewSection {
+  heading: string;
+  body?: string;
+  steps?: WhatsNewStep[];
+}
+
+export interface WhatsNewEntry {
+  /** Stable slug used for unread/dismissed tracking, e.g. `v0.15.0-prompt-image-drop`. */
+  id: string;
+  title: string;
+  /**
+   * One-sentence preview rendered in the bell dropdown. Keep it short — the
+   * dropdown shows two lines max before truncation.
+   */
+  summary: string;
+  /**
+   * Medium-length user-voiced description rendered in the spotlight modal
+   * and on the discovery-page card grid. One short paragraph is ideal.
+   */
+  blurb: string;
+  /** Milliseconds since epoch; the list renders sorted descending by this. */
+  publishedAt: number;
+  /** Optional release tag, e.g. `0.15.0`. */
+  version?: string;
+  /** Optional public path or imported asset shown in bell row, spotlight hero, and detail page hero. */
+  image?: string;
+  /** When true, eligible to auto-open the spotlight modal on first load. */
+  featured?: boolean;
+  /** Optional URL for an external "Learn more" link rendered on the detail page footer. */
+  learnMoreHref?: string;
+  /**
+   * Structured rich content rendered on the detail page. Each section is a
+   * sub-feature of the release. If omitted, the detail page falls back to
+   * showing only the blurb so older entries still render gracefully.
+   */
+  sections?: WhatsNewSection[];
 }
 
 /**

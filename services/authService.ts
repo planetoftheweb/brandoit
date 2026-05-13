@@ -121,6 +121,17 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
     clean.galleryViewFolderId = prefs.galleryViewFolderId;
   }
 
+  if (typeof prefs.lastSeenWhatsNewId === 'string' && prefs.lastSeenWhatsNewId.length > 0) {
+    clean.lastSeenWhatsNewId = prefs.lastSeenWhatsNewId;
+  }
+
+  if (Array.isArray(prefs.dismissedSpotlightIds) && prefs.dismissedSpotlightIds.length > 0) {
+    const ids = prefs.dismissedSpotlightIds.filter(
+      (id): id is string => typeof id === 'string' && id.length > 0
+    );
+    if (ids.length > 0) clean.dismissedSpotlightIds = Array.from(new Set(ids));
+  }
+
   return clean;
 };
 
@@ -185,6 +196,15 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
       typeof savedPrefs.galleryViewFolderId === 'string' && savedPrefs.galleryViewFolderId.length > 0
         ? savedPrefs.galleryViewFolderId
         : undefined,
+    lastSeenWhatsNewId:
+      typeof savedPrefs.lastSeenWhatsNewId === 'string' && savedPrefs.lastSeenWhatsNewId.length > 0
+        ? savedPrefs.lastSeenWhatsNewId
+        : undefined,
+    dismissedSpotlightIds: Array.isArray(savedPrefs.dismissedSpotlightIds)
+      ? (savedPrefs.dismissedSpotlightIds as any[]).filter(
+          (id): id is string => typeof id === 'string' && id.length > 0
+        )
+      : [],
   };
 };
 
