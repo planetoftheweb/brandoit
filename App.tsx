@@ -2635,69 +2635,139 @@ const App: React.FC = () => {
                  </div>
                </button>
 
-               {isUserMenuOpen && (
-                 <>
-                   <div className="fixed inset-0 z-40" onClick={() => setIsUserMenuOpen(false)}></div>
-                   <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-                      <div className="p-3 border-b border-gray-200 dark:border-[#30363d]">
-                        <p className="text-xs text-slate-500 uppercase font-bold">Signed in as</p>
-                          <p className="text-sm font-medium truncate text-slate-900 dark:text-white">{user.email}</p>
-                      </div>
-                     <div className="p-3 border-b border-gray-200 dark:border-[#30363d] space-y-2">
-                       <button 
-                         onClick={() => {
-                           setSettingsMode(true);
-                           setAdminMode(false);
-                           setCatalogMode(null);
-                           setWhatsNewMode(false);
-                           setWhatsNewEntryId(null);
-                           setIsUserMenuOpen(false);
-                         }}
-                         className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-                       >
-                         <SettingsIcon size={16} /> Settings
-                       </button>
-                       {/* Admin link: visible to users with the admin claim. The
-                           `planetoftheweb` username is retained as a bootstrap
-                           fallback so the first admin can self-promote even
-                           before the claim is minted. */}
-                       {(user.isAdmin || user.username === 'planetoftheweb') && (
-                         <button
-                           onClick={() => {
-                             setAdminMode(true);
-                             setSettingsMode(false);
-                             setCatalogMode(null);
-                             setWhatsNewMode(false);
-                             setWhatsNewEntryId(null);
-                             setIsUserMenuOpen(false);
-                           }}
-                           className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-                         >
-                           <ShieldCheck size={16} /> Admin
-                         </button>
-                       )}
-                       {/* Theme toggle lives here so the header stays clean.
-                           Label describes the *target* mode (matches click
-                           behavior). Keeps the menu open so the user can
-                           preview the new theme without re-opening. */}
-                       <button
-                         onClick={() => setIsDarkMode(prev => !prev)}
-                         className="w-full text-left flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
-                         aria-pressed={isDarkMode}
-                       >
-                         {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
-                         {isDarkMode ? 'Light mode' : 'Dark mode'}
-                       </button>
-                     </div>
-                      <button 
-                        onClick={handleLogout}
-                        className="w-full text-left p-3 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2 transition-colors"
+              {isUserMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsUserMenuOpen(false)}
+                    aria-hidden="true"
+                  ></div>
+                  {/* Account menu — spacing modeled on a section-grouped pattern:
+                      identity → navigation actions → preference toggles → destructive
+                      action, each separated by a hairline divider so the eye lands
+                      on the right cluster instantly. Wider panel (`w-64`) gives the
+                      Dark-mode toggle pill room to sit on the right without
+                      crowding the label. Each row uses uniform `px-4 py-2.5` so the
+                      hit targets stay finger-sized on touch. */}
+                  <div
+                    role="menu"
+                    aria-label="Account menu"
+                    className="absolute right-0 top-full mt-2 w-64 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+                  >
+                    {/* Identity header — display name on top, email below in
+                        muted weight, both truncated so long emails don't blow
+                        out the panel width. */}
+                    <div className="px-4 py-3 border-b border-gray-200 dark:border-[#30363d]">
+                      <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                        {user.name}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {user.email}
+                      </p>
+                    </div>
+
+                    {/* Navigation actions */}
+                    <div className="py-1.5 border-b border-gray-200 dark:border-[#30363d]">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setSettingsMode(true);
+                          setAdminMode(false);
+                          setCatalogMode(null);
+                          setWhatsNewMode(false);
+                          setWhatsNewEntryId(null);
+                          setIsUserMenuOpen(false);
+                        }}
+                        className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#21262d] hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
                       >
-                        <LogOut size={16} /> Sign Out
+                        <SettingsIcon size={16} className="shrink-0 text-slate-500 dark:text-slate-400" />
+                        <span>Settings</span>
                       </button>
-                   </div>
-                 </>
-               )}
+                      {/* Admin link: visible to users with the admin claim. The
+                          `planetoftheweb` username is retained as a bootstrap
+                          fallback so the first admin can self-promote even
+                          before the claim is minted. */}
+                      {(user.isAdmin || user.username === 'planetoftheweb') && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAdminMode(true);
+                            setSettingsMode(false);
+                            setCatalogMode(null);
+                            setWhatsNewMode(false);
+                            setWhatsNewEntryId(null);
+                            setIsUserMenuOpen(false);
+                          }}
+                          className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#21262d] hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+                        >
+                          <ShieldCheck size={16} className="shrink-0 text-slate-500 dark:text-slate-400" />
+                          <span>Admin</span>
+                        </button>
+                      )}
+                      {/* GitHub repo link — moved out of the header so the
+                          right-side icon strip stays focused on Focus mode +
+                          What's New. Anchor (not button) so the OS / browser
+                          new-tab affordances work naturally. */}
+                      <a
+                        href={GITHUB_REPO_BASE}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        role="menuitem"
+                        onClick={() => setIsUserMenuOpen(false)}
+                        className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#21262d] hover:text-brand-teal dark:hover:text-brand-teal transition-colors"
+                      >
+                        <Github size={16} className="shrink-0 text-slate-500 dark:text-slate-400" />
+                        <span>View on GitHub</span>
+                      </a>
+                    </div>
+
+                    {/* Preferences — the whole row is the toggle target; the
+                        pill on the right is a visual indicator (aria-hidden)
+                        so the button itself carries the switch semantics. The
+                        thumb's translate values are tuned to the 36px track +
+                        14px thumb + 3px end-padding so the pill reads as a
+                        proper iOS-style switch. */}
+                    <div className="py-1.5 border-b border-gray-200 dark:border-[#30363d]">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isDarkMode}
+                        onClick={() => setIsDarkMode(prev => !prev)}
+                        className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#21262d] transition-colors"
+                      >
+                        <Moon size={16} className="shrink-0 text-slate-500 dark:text-slate-400" />
+                        <span className="flex-1">Dark mode</span>
+                        <span
+                          aria-hidden="true"
+                          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                            isDarkMode ? 'bg-brand-teal' : 'bg-slate-300 dark:bg-slate-600'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transform transition-transform ${
+                              isDarkMode ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                            }`}
+                          />
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Destructive action sits on its own at the bottom — no
+                        divider above, the visual break is the red tint. */}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleLogout}
+                      className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-sm text-brand-red hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <LogOut size={16} className="shrink-0" />
+                      <span>Logout</span>
+                    </button>
+                  </div>
+                </>
+              )}
              </div>
           ) : (
             <div className="flex items-center gap-2 mr-2">
@@ -2736,16 +2806,21 @@ const App: React.FC = () => {
              </button>
            )}
 
-           <a
-             href={GITHUB_REPO_BASE}
-             target="_blank"
-             rel="noopener noreferrer"
-             className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
-             title="View source code on GitHub"
-             aria-label="View source code on GitHub"
-           >
-             <Github size={20} />
-           </a>
+           {/* GitHub repo link lives inside the user dropdown for signed-in
+               users; guests get it inline here so they can still find the
+               source without having to sign in first. */}
+           {!user && (
+             <a
+               href={GITHUB_REPO_BASE}
+               target="_blank"
+               rel="noopener noreferrer"
+               className="p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
+               title="View source code on GitHub"
+               aria-label="View source code on GitHub"
+             >
+               <Github size={20} />
+             </a>
+           )}
 
            {/* Theme toggle for guests only. Signed-in users get this inside
                the user dropdown menu so the header stays uncluttered. */}
