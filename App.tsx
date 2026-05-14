@@ -1404,6 +1404,7 @@ const App: React.FC = () => {
           if (!hasUsableBytes) {
             throw new Error('Model returned an empty image — skipping');
           }
+          const actualModelId = result.modelId || modelId;
 
           // Append into the SHARED tile for this top-level prompt entry. The
           // first version in that entry creates the Generation; everything
@@ -1423,13 +1424,13 @@ const App: React.FC = () => {
               const generation = await createGeneration(
                 result,
                 { ...jobConfig },
-                primaryModelId,
+                primaryModelId === modelId ? actualModelId : primaryModelId,
                 comparisonBatchId,
                 runFolderId
               );
               // Tag this first version with whichever model actually produced it.
               if (generation.versions[0]) {
-                generation.versions[0].modelId = modelId;
+                generation.versions[0].modelId = actualModelId;
                 generation.versions[0].aspectRatio = jobConfig.aspectRatio;
               }
               sharedBatchGenerations[promptEntryIndex] = generation;
@@ -1444,7 +1445,7 @@ const App: React.FC = () => {
               job.prompt,
               sharedBatchGeneration.versions[sharedBatchGeneration.currentVersionIndex]?.id,
               jobConfig.aspectRatio,
-              modelId
+              actualModelId
             );
             const updated: Generation = {
               ...sharedBatchGeneration,

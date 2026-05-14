@@ -50,6 +50,12 @@ const shouldRetryFlashModelAfterError = (err: unknown): boolean =>
     stringifyGeminiCallError(err)
   );
 
+/** True when another Gemini image model may still work for the same key/project. */
+const shouldRetryImageModelAfterError = (err: unknown): boolean =>
+  /API_KEY_INVALID|INVALID_ARGUMENT|not found|not supported|is not available|Model .*not/i.test(
+    stringifyGeminiCallError(err)
+  );
+
 /** Strip optional ```json fences so structured-output parsing doesn't throw. */
 const parseJsonFromModelText = <T>(raw: string): T => {
   let s = raw.trim();
@@ -100,12 +106,18 @@ const withSystemInstruction = <T extends Record<string, any>>(
   return { ...(baseConfig || {} as T), systemInstruction: trimmed };
 };
 
-const resolveGeminiImageModel = (selectedModel?: string): string => {
-  if (selectedModel === NANO_BANANA_2_MODEL) {
-    return NANO_BANANA_2_MODEL;
-  }
-  return NANO_BANANA_PRO_MODEL;
-};
+const getGeminiImageModelCandidates = (selectedModel?: string): readonly string[] =>
+  selectedModel === NANO_BANANA_2_MODEL
+    ? [NANO_BANANA_2_MODEL, NANO_BANANA_PRO_MODEL]
+    : [NANO_BANANA_PRO_MODEL];
+
+const getUiModelIdForGeminiImageModel = (generationModel: string): string =>
+  generationModel === NANO_BANANA_2_MODEL ? NANO_BANANA_2_MODEL : 'gemini';
+
+const withActualGeminiModel = (image: GeneratedImage, generationModel: string): GeneratedImage => ({
+  ...image,
+  modelId: getUiModelIdForGeminiImageModel(generationModel),
+});
 
 /**
  * Constructs the engineered prompt based on selected presets and dynamic context
@@ -140,34 +152,49 @@ export const generateGraphic = async (
   const ai = getAiClient(customApiKey);
   const fullPrompt = constructFullPrompt(config, context);
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
-  const generationModel = resolveGeminiImageModel(selectedModel);
+  const generationModels = getGeminiImageModelCandidates(selectedModel);
+  let lastError: unknown;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: generationModel,
-      contents: {
-        parts: [{ text: fullPrompt }],
-      },
-      config: withSystemInstruction({
-        responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: {
-          aspectRatio: safeAspectRatio,
-        }
-      }, systemPrompt),
-    });
+  for (let mi = 0; mi < generationModels.length; mi++) {
+    const generationModel = generationModels[mi];
+    try {
+      const response = await ai.models.generateContent({
+        model: generationModel,
+        contents: {
+          parts: [{ text: fullPrompt }],
+        },
+        config: withSystemInstruction({
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: safeAspectRatio,
+          }
+        }, systemPrompt),
+      });
 
-    return extractImageFromResponse(response);
-  } catch (error: any) {
-    console.error("Gemini Generation Error:", error);
-    const raw = stringifyGeminiCallError(error);
-    if (/API_KEY_INVALID|API key not valid/i.test(raw)) {
-      throw new Error(
-        'Google rejected your Gemini API key. In Settings, paste a valid key from Google AI Studio and ensure the Generative Language API is enabled for that Google Cloud project.'
-      );
+      return withActualGeminiModel(extractImageFromResponse(response), generationModel);
+    } catch (error: unknown) {
+      lastError = error;
+      const moreModels = mi < generationModels.length - 1;
+      if (moreModels && shouldRetryImageModelAfterError(error)) {
+        console.warn(`Gemini generation: model ${generationModel} failed, retrying with Nano Banana Pro`, error);
+        continue;
+      }
+      console.error("Gemini Generation Error:", error);
+      const raw = stringifyGeminiCallError(error);
+      if (/API_KEY_INVALID|API key not valid/i.test(raw)) {
+        throw new Error(
+          'Google rejected the selected Gemini image model/key combination. If this key worked before, switch to Nano Banana Pro or confirm the selected Gemini image model is enabled for that Google Cloud project.'
+        );
+      }
+      const formatted = formatUserFacingGeminiError(raw);
+      throw new Error(formatted || "Failed to generate image. Please try again.");
     }
-    const formatted = formatUserFacingGeminiError(raw);
-    throw new Error(formatted || "Failed to generate image. Please try again.");
   }
+
+  console.error("Gemini Generation Error:", lastError);
+  const raw = stringifyGeminiCallError(lastError);
+  const formatted = formatUserFacingGeminiError(raw);
+  throw new Error(formatted || "Failed to generate image. Please try again.");
 };
 
 interface StyleReferenceGenerationOptions {
@@ -194,7 +221,7 @@ export const generateGraphicWithStyleReference = async (
   const styleDesc = style ? style.description : 'consistent illustrated style';
   const typeName = type ? type.name : 'infographic';
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
-  const generationModel = resolveGeminiImageModel(selectedModel);
+  const generationModels = getGeminiImageModelCandidates(selectedModel);
   const imageStyleDescription = options.imageStyleDescription?.trim();
   const styleReferenceInstruction =
     options.influenceMode === 'menus'
@@ -222,34 +249,53 @@ export const generateGraphicWithStyleReference = async (
     ${conceptPrompt}
   `.trim();
 
-  try {
-    const sourceImage = await resolveImageInputForRefinement(styleReferenceImage);
-    const response = await ai.models.generateContent({
-      model: generationModel,
-      contents: {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              data: sourceImage.base64Data,
-              mimeType: sourceImage.mimeType,
-            },
-          }
-        ]
-      },
-      config: withSystemInstruction({
-        responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: {
-          aspectRatio: safeAspectRatio,
-        }
-      }, systemPrompt)
-    });
+  const sourceImage = await resolveImageInputForRefinement(styleReferenceImage);
+  let lastError: unknown;
 
-    return extractImageFromResponse(response);
-  } catch (error: any) {
-    console.error("Gemini Style Reference Generation Error:", error);
-    throw new Error(error.message || "Failed to generate from style reference.");
+  for (let mi = 0; mi < generationModels.length; mi++) {
+    const generationModel = generationModels[mi];
+    try {
+      const response = await ai.models.generateContent({
+        model: generationModel,
+        contents: {
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                data: sourceImage.base64Data,
+                mimeType: sourceImage.mimeType,
+              },
+            }
+          ]
+        },
+        config: withSystemInstruction({
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: safeAspectRatio,
+          }
+        }, systemPrompt)
+      });
+
+      return withActualGeminiModel(extractImageFromResponse(response), generationModel);
+    } catch (error: unknown) {
+      lastError = error;
+      const moreModels = mi < generationModels.length - 1;
+      if (moreModels && shouldRetryImageModelAfterError(error)) {
+        console.warn(`Gemini style reference generation: model ${generationModel} failed, retrying with Nano Banana Pro`, error);
+        continue;
+      }
+      console.error("Gemini Style Reference Generation Error:", error);
+      const raw = stringifyGeminiCallError(error);
+      const formatted = formatUserFacingGeminiError(raw);
+      throw new Error(formatted || "Failed to generate from style reference.");
+    }
   }
+
+  console.error("Gemini Style Reference Generation Error:", lastError);
+  throw new Error(
+    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) ||
+      "Failed to generate from style reference."
+  );
 };
 
 export const refineGraphic = async (
@@ -267,7 +313,7 @@ export const refineGraphic = async (
   const colorScheme = context.brandColors.find(c => c.id === config.colorSchemeId);
   const style = context.visualStyles.find(s => s.id === config.visualStyleId);
   const safeAspectRatio = getSafeAspectRatioForModel(selectedModel, config.aspectRatio, []);
-  const generationModel = resolveGeminiImageModel(selectedModel);
+  const generationModels = getGeminiImageModelCandidates(selectedModel);
   
   const colors = colorScheme ? colorScheme.colors.join(', ') : '';
   const styleDesc = style ? style.description : '';
@@ -323,36 +369,55 @@ export const refineGraphic = async (
     ${fillCanvasDirective}
   `.trim();
 
-  try {
-    const sourceImage = await resolveImageInputForRefinement(currentImage);
-    const response = await ai.models.generateContent({
-      model: generationModel,
-      contents: {
-        parts: [
-          {
-            text: fullRefinementPrompt,
-          },
-          {
-            inlineData: {
-              data: sourceImage.base64Data,
-              mimeType: sourceImage.mimeType,
-            },
-          },
-        ],
-      },
-      config: withSystemInstruction({
-        responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: {
-          aspectRatio: safeAspectRatio,
-        }
-      }, systemPrompt),
-    });
+  const sourceImage = await resolveImageInputForRefinement(currentImage);
+  let lastError: unknown;
 
-    return extractImageFromResponse(response);
-  } catch (error: any) {
-    console.error("Gemini Refinement Error:", error);
-    throw new Error(error.message || "Failed to refine image. Please try again.");
+  for (let mi = 0; mi < generationModels.length; mi++) {
+    const generationModel = generationModels[mi];
+    try {
+      const response = await ai.models.generateContent({
+        model: generationModel,
+        contents: {
+          parts: [
+            {
+              text: fullRefinementPrompt,
+            },
+            {
+              inlineData: {
+                data: sourceImage.base64Data,
+                mimeType: sourceImage.mimeType,
+              },
+            },
+          ],
+        },
+        config: withSystemInstruction({
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: safeAspectRatio,
+          }
+        }, systemPrompt),
+      });
+
+      return withActualGeminiModel(extractImageFromResponse(response), generationModel);
+    } catch (error: unknown) {
+      lastError = error;
+      const moreModels = mi < generationModels.length - 1;
+      if (moreModels && shouldRetryImageModelAfterError(error)) {
+        console.warn(`Gemini refinement: model ${generationModel} failed, retrying with Nano Banana Pro`, error);
+        continue;
+      }
+      console.error("Gemini Refinement Error:", error);
+      const raw = stringifyGeminiCallError(error);
+      const formatted = formatUserFacingGeminiError(raw);
+      throw new Error(formatted || "Failed to refine image. Please try again.");
+    }
   }
+
+  console.error("Gemini Refinement Error:", lastError);
+  throw new Error(
+    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) ||
+      "Failed to refine image. Please try again."
+  );
 };
 
 /**
