@@ -3,6 +3,47 @@ import type { User } from '../types';
 const normalizeStoredApiKey = (value: string): string =>
   value.replace(/^\uFEFF/, '').trim();
 
+type ApiKeyProvider = 'gemini' | 'openai';
+
+const getProviderForModel = (modelId: string): ApiKeyProvider | undefined => {
+  if (
+    modelId === 'gemini' ||
+    modelId === 'gemini-3.1-flash-image-preview' ||
+    modelId === 'gemini-svg'
+  ) {
+    return 'gemini';
+  }
+  if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
+    return 'openai';
+  }
+  return undefined;
+};
+
+// Real Gemini keys start with `AIza` and are 39 characters long. Real OpenAI
+// keys start with `sk-` (project keys ~164 chars). We use length bounds so a
+// pasted .env file or config blob can't slip through as a "valid" key.
+const isLikelyOpenAIKey = (value: string): boolean =>
+  /^sk-[A-Za-z0-9_-]+$/.test(value) && value.length >= 20 && value.length <= 256;
+const isLikelyGoogleApiKey = (value: string): boolean =>
+  /^AIza[A-Za-z0-9_-]+$/.test(value) && value.length >= 30 && value.length <= 60;
+
+const normalizeProviderKey = (
+  value: string | undefined,
+  provider: ApiKeyProvider
+): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const key = normalizeStoredApiKey(value);
+  if (!key) return undefined;
+
+  // Strict provider check — only accept keys that look like the right provider's
+  // format. Anything else (cross-provider paste, .env dump, Firebase config
+  // blob, raw JSON, etc.) is rejected so the resolver can fall through to the
+  // next slot instead of sending garbage to the API.
+  if (provider === 'gemini') return isLikelyGoogleApiKey(key) ? key : undefined;
+  if (provider === 'openai') return isLikelyOpenAIKey(key) ? key : undefined;
+  return undefined;
+};
+
 /**
  * BYOK resolution (per-model override, then shared Gemini / OpenAI slots).
  * Kept in sync with App `getApiKeyForModel` / Settings trimming behavior.
@@ -12,41 +53,27 @@ export function getApiKeyForModelFromUser(
   modelId: string
 ): string | undefined {
   if (!user) return undefined;
+  const provider = getProviderForModel(modelId);
   const slot = user.preferences.apiKeys?.[modelId];
-  if (typeof slot === 'string') {
-    const t = normalizeStoredApiKey(slot);
+  if (provider) {
+    const t = normalizeProviderKey(slot, provider);
     if (t) return t;
   }
-  if (
-    modelId === 'gemini' ||
-    modelId === 'gemini-3.1-flash-image-preview' ||
-    modelId === 'gemini-svg'
-  ) {
-    const shared = user.preferences.apiKeys?.gemini;
-    if (typeof shared === 'string') {
-      const s = normalizeStoredApiKey(shared);
-      if (s) return s;
-    }
-    const legacy = user.preferences.geminiApiKey;
-    if (typeof legacy === 'string') {
-      const l = normalizeStoredApiKey(legacy);
-      if (l) return l;
-    }
+
+  if (provider === 'gemini') {
+    const shared = normalizeProviderKey(user.preferences.apiKeys?.gemini, 'gemini');
+    if (shared) return shared;
+    const legacy = normalizeProviderKey(user.preferences.geminiApiKey, 'gemini');
+    if (legacy) return legacy;
     // Nano Banana Pro — if only NB2 per-model override exists, use it (same Google project/key).
     if (modelId === 'gemini') {
-      const nb2 = user.preferences.apiKeys?.['gemini-3.1-flash-image-preview'];
-      if (typeof nb2 === 'string') {
-        const n = normalizeStoredApiKey(nb2);
-        if (n) return n;
-      }
+      const nb2 = normalizeProviderKey(user.preferences.apiKeys?.['gemini-3.1-flash-image-preview'], 'gemini');
+      if (nb2) return nb2;
     }
   }
-  if (modelId === 'openai' || modelId === 'openai-2' || modelId === 'openai-mini') {
-    const k = user.preferences.apiKeys?.openai;
-    if (typeof k === 'string') {
-      const t = normalizeStoredApiKey(k);
-      if (t) return t;
-    }
+  if (provider === 'openai') {
+    const k = normalizeProviderKey(user.preferences.apiKeys?.openai, 'openai');
+    if (k) return k;
   }
   return undefined;
 }

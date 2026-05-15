@@ -1,7 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, SvgMode } from "../types";
-
-const SVG_MODEL = 'gemini-3.1-pro-preview';
+import {
+  formatUserFacingGeminiError,
+  stringifyGeminiCallError,
+} from "./geminiTextModelService";
 
 interface SvgGenerationContext {
   brandColors: BrandColor[];
@@ -9,9 +11,25 @@ interface SvgGenerationContext {
   graphicTypes: GraphicType[];
 }
 
+const looksLikeGeminiKey = (key: string): boolean =>
+  /^AIza[A-Za-z0-9_-]+$/.test(key) && key.length >= 30 && key.length <= 60;
+
 const getAiClient = (customKey?: string) => {
   const key = (customKey || '').trim();
   if (!key) throw new Error("API Key Required. Please log in and add your Google Gemini API Key in Settings.");
+  if (!looksLikeGeminiKey(key)) {
+    // Fail fast with an actionable message instead of sending a 416-char blob
+    // (or any other non-Gemini-shaped string) to Google and getting back the
+    // misleading "API key not valid" error for every model.
+    const head = key.length <= 8 ? key : `${key.slice(0, 4)}…${key.slice(-4)}`;
+    throw new Error(
+      `The Gemini API key saved for SVG generation doesn't look like a real Gemini key. ` +
+      `Got "${head}" (${key.length} chars). Real Gemini keys start with "AIza" and are 39 characters long. ` +
+      `Open Settings → API Configuration. If you have a per-model override for "Gemini SVG", clear it ` +
+      `(the shared Gemini key will be used). Otherwise paste a fresh Gemini key from ` +
+      `https://aistudio.google.com/app/apikey into the shared Gemini slot.`
+    );
+  }
   return new GoogleGenAI({ apiKey: key });
 };
 
@@ -122,6 +140,106 @@ const svgToGeneratedImage = (svgCode: string): GeneratedImage => {
   };
 };
 
+// Wide candidate list — covers Pro, Flash, and older 1.5/2.0 stable models so
+// we work with whatever the user's project has enabled. The list intentionally
+// does NOT include image-preview ids; those models reject TEXT-only requests
+// (they require IMAGE in responseModalities) and would just add noise.
+const SVG_MODEL_CANDIDATES: ReadonlyArray<string> = [
+  'gemini-3.1-pro-preview',
+  'gemini-2.5-pro',
+  'gemini-pro-latest',
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-pro',
+  'gemini-1.5-flash',
+];
+
+const isModelAvailabilityError = (err: unknown): boolean =>
+  /API_KEY_INVALID|API key not valid|INVALID_ARGUMENT|not found|not supported|is not available|Model .*not|PERMISSION_DENIED|FAILED_PRECONDITION|NOT_FOUND/i.test(
+    stringifyGeminiCallError(err)
+  );
+
+const fingerprintKey = (key: string): string => {
+  const trimmed = key.trim();
+  if (trimmed.length <= 8) return '****';
+  return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)} (${trimmed.length} chars)`;
+};
+
+interface SvgModelAttempt {
+  model: string;
+  error: string;
+}
+
+class SvgGenerationFailure extends Error {
+  attempts: SvgModelAttempt[];
+  keyFingerprint: string;
+  constructor(message: string, attempts: SvgModelAttempt[], keyFingerprint: string) {
+    super(message);
+    this.attempts = attempts;
+    this.keyFingerprint = keyFingerprint;
+  }
+}
+
+const callSvgModel = async (
+  ai: GoogleGenAI,
+  prompt: string,
+  label: string,
+  apiKey: string
+): Promise<{ text: string; modelUsed: string }> => {
+  const attempts: SvgModelAttempt[] = [];
+  for (let i = 0; i < SVG_MODEL_CANDIDATES.length; i++) {
+    const model = SVG_MODEL_CANDIDATES[i];
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+      });
+      const text = response.text ?? '';
+      if (!text) {
+        attempts.push({ model, error: 'empty text response' });
+        console.warn(`${label}: model ${model} returned empty text, trying next`);
+        continue;
+      }
+      return { text, modelUsed: model };
+    } catch (error: unknown) {
+      const errMsg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+      attempts.push({ model, error: errMsg });
+      if (isModelAvailabilityError(error)) {
+        console.warn(`${label}: model ${model} unavailable for this key, trying next`, errMsg);
+        continue;
+      }
+      // Non-availability error (rate limit, network, etc.) — bubble up immediately.
+      throw error;
+    }
+  }
+  // Every candidate failed. Build a diagnostic error that lists each attempt
+  // and the key fingerprint so the user can verify they're sending what they
+  // think they're sending. We do NOT just say "API key invalid" because the
+  // user has confirmed image generation works with this same key.
+  const lines = attempts.map(a => `  • ${a.model}: ${a.error}`).join('\n');
+  const fingerprint = fingerprintKey(apiKey);
+  const detail =
+    `${label} failed for every Gemini text model. Your API key (${fingerprint}) was sent to each, ` +
+    `and Google rejected each one. This is almost always a project-side model-enablement issue ` +
+    `(your key works for image preview models but not Pro/Flash text models).\n\n` +
+    `Per-model attempts:\n${lines}\n\n` +
+    `Fix: Open https://aistudio.google.com/app/apikey, click your key, and confirm the linked Google ` +
+    `Cloud project has the Generative Language API enabled with no model restrictions. If you have a ` +
+    `separate per-model API key saved for "Gemini SVG" in Settings → API Configuration, clear it so ` +
+    `the shared Gemini key is used.`;
+  throw new SvgGenerationFailure(detail, attempts, fingerprint);
+};
+
+const wrapSvgError = (error: unknown, action: 'generate' | 'refine'): Error => {
+  if (error instanceof SvgGenerationFailure) {
+    return error;
+  }
+  const raw = stringifyGeminiCallError(error);
+  const msg = formatUserFacingGeminiError(raw);
+  return new Error(msg || `Failed to ${action} SVG. Please try again.`);
+};
+
 export const generateSvg = async (
   config: GenerationConfig,
   context: SvgGenerationContext,
@@ -132,12 +250,7 @@ export const generateSvg = async (
   const prompt = buildSvgPrompt(config, context, systemPrompt);
 
   try {
-    const response = await ai.models.generateContent({
-      model: SVG_MODEL,
-      contents: { parts: [{ text: prompt }] },
-    });
-
-    const text = response.text ?? '';
+    const { text } = await callSvgModel(ai, prompt, 'SVG generation', customApiKey || '');
     const raw = extractSvg(text);
     if (!raw) {
       throw new Error('The model did not return valid SVG code. Try refining your prompt.');
@@ -145,9 +258,9 @@ export const generateSvg = async (
 
     const svgCode = ensureSvgDimensions(sanitizeSvg(raw));
     return { ...svgToGeneratedImage(svgCode), svgCode };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("SVG Generation Error:", error);
-    throw new Error(error.message || "Failed to generate SVG. Please try again.");
+    throw wrapSvgError(error, 'generate');
   }
 };
 
@@ -173,12 +286,7 @@ export const refineSvg = async (
   ];
 
   try {
-    const response = await ai.models.generateContent({
-      model: SVG_MODEL,
-      contents: { parts: [{ text: parts.filter(Boolean).join('\n') }] },
-    });
-
-    const text = response.text ?? '';
+    const { text } = await callSvgModel(ai, parts.filter(Boolean).join('\n'), 'SVG refinement', customApiKey || '');
     const raw = extractSvg(text);
     if (!raw) {
       throw new Error('The model did not return valid SVG code during refinement.');
@@ -186,8 +294,8 @@ export const refineSvg = async (
 
     const svgCode = ensureSvgDimensions(sanitizeSvg(raw));
     return { ...svgToGeneratedImage(svgCode), svgCode };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("SVG Refinement Error:", error);
-    throw new Error(error.message || "Failed to refine SVG. Please try again.");
+    throw wrapSvgError(error, 'refine');
   }
 };

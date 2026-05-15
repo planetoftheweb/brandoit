@@ -235,6 +235,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
 
   const version = generation ? getCurrentVersion(generation) : null;
   const isSvg = version?.mimeType === 'image/svg+xml';
+  const lastRefineModelSyncKeyRef = useRef<string | null>(null);
   const getVersionImageKey = (generationId: string, versionId: string): string =>
     `${generationId}|${versionId}`;
   const getVersionDisplayImageUrl = (generationId: string, targetVersion: GenerationVersion): string =>
@@ -1305,12 +1306,18 @@ ${version.svgCode}
   })();
   const safeRefineModelId = preferredRefineModelId;
 
+  const refineModelSyncKey = generation && version ? `${generation.id}|${version.id}` : null;
   useEffect(() => {
-    if (!generation || !version) return;
+    if (!refineModelSyncKey) {
+      lastRefineModelSyncKeyRef.current = null;
+      return;
+    }
+    if (lastRefineModelSyncKeyRef.current === refineModelSyncKey) return;
+    lastRefineModelSyncKeyRef.current = refineModelSyncKey;
     if (safeRefineModelId !== selectedModel) {
       onModelChange(safeRefineModelId);
     }
-  }, [generation?.id, version?.id, safeRefineModelId, selectedModel, onModelChange]);
+  }, [refineModelSyncKey, safeRefineModelId, selectedModel, onModelChange]);
 
   useEffect(() => {
     if (!generation || !version) return;
@@ -1960,7 +1967,7 @@ ${version.svgCode}
 
           {/* Info overlay (toggle) */}
           {infoVisible && (
-            <div className="absolute left-4 bottom-4 z-10 animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div className="absolute right-4 bottom-4 z-10 animate-in fade-in slide-in-from-bottom-2 duration-150">
               <div className="bg-black/80 backdrop-blur-sm text-white rounded-lg max-w-[420px] max-h-[220px] flex flex-col overflow-hidden">
                 <div className="flex items-center justify-between px-3 pt-2 pb-1 shrink-0">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Details</span>
@@ -2352,7 +2359,7 @@ ${version.svgCode}
                           type="button"
                           onClick={handleResizeCanvasClick}
                           disabled={refinementControlsLocked || !canResizeToSelected}
-                          className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group ${
+                          className={`relative inline-flex h-9 items-center gap-1.5 px-3.5 rounded-xl border text-xs font-semibold transition-all group/recomposeBtn ${
                             refinementControlsLocked || !canResizeToSelected
                               ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                               : 'bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
@@ -2362,7 +2369,7 @@ ${version.svgCode}
                         >
                           {isResizingCanvas ? <RefreshCw size={12} className="animate-spin" /> : <Maximize2 size={12} />}
                           {isResizingCanvas ? 'Recomposing…' : 'Recompose'}
-                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover/recomposeBtn:opacity-100 transition-opacity z-20">
                             Rebuilds the image for {resizeAspectLabel} while preserving the same style and palette.
                           </span>
                         </button>
@@ -2395,7 +2402,7 @@ ${version.svgCode}
                           type="button"
                           onClick={handleExpandRefinementClick}
                           disabled={refinementControlsLocked}
-                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group/expandBtn ${
                             refinementControlsLocked
                               ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                               : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
@@ -2404,7 +2411,7 @@ ${version.svgCode}
                           title="Expand prompt — uses your text, or the tile's original prompt if empty"
                         >
                           {isExpandingRefinement ? <RefreshCw size={16} className="animate-spin" /> : <Expand size={16} />}
-                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/expandBtn:opacity-100 transition-opacity">
                             Expand prompt
                           </span>
                         </button>
@@ -2426,7 +2433,7 @@ ${version.svgCode}
                           type="button"
                           onClick={handleAnalyzeRefineClick}
                           disabled={refinementControlsLocked}
-                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group ${
+                          className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all group/analyzeBtn ${
                             refinementControlsLocked
                               ? 'bg-gray-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 border-gray-200 dark:border-[#30363d] cursor-not-allowed'
                               : 'bg-white dark:bg-[#161b22] text-slate-800 dark:text-slate-100 border-gray-200 dark:border-[#30363d] hover:bg-brand-teal hover:border-brand-teal hover:text-white shadow-sm'
@@ -2435,10 +2442,10 @@ ${version.svgCode}
                           title="Run analysis"
                         >
                           {isAnalyzingRefinePrompt ? <RefreshCw size={16} className="animate-spin" /> : <ScanSearch size={16} />}
-                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/analyzeBtn:opacity-100 transition-opacity">
                             Run analysis
                           </span>
-                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                          <span className="pointer-events-none absolute top-full mt-2 right-0 w-72 text-left text-[11px] leading-relaxed px-3 py-2 rounded-lg bg-black/90 text-white shadow-xl opacity-0 group-hover/analyzeBtn:opacity-100 transition-opacity z-20">
                             Checks text accuracy, spelling, and label/factual issues, then drafts a detailed correction prompt and switches refine model to Nano Banana Pro. Uses a fast vision model (not image generation) with the same API provider as your toolbar when your keys allow it.
                           </span>
                         </button>
@@ -2486,14 +2493,18 @@ ${version.svgCode}
                 </ActionButton>
               )}
 
-              {/* Info toggle */}
-              <ActionButton
-                onClick={() => setInfoVisible(v => !v)}
-                title={infoVisible ? 'Hide details' : 'Show details'}
-                tooltip={infoVisible ? 'Hide info' : 'Info'}
-              >
-                <Info size={18} />
-              </ActionButton>
+              {/* Info toggle. Hidden while the info box is open — the box has
+                  its own X close button, so showing both is redundant clutter
+                  in the same corner. Re-appears when the user closes the box. */}
+              {!infoVisible && (
+                <ActionButton
+                  onClick={() => setInfoVisible(true)}
+                  title="Show details"
+                  tooltip="Info"
+                >
+                  <Info size={18} />
+                </ActionButton>
+              )}
 
               {/* Fullscreen / slideshow toggle. Shortcut: F. Inside fullscreen
                   H hides the chrome, ← → walk the current folder. */}

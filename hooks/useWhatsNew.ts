@@ -83,6 +83,19 @@ export interface UseWhatsNewOptions {
    * caller's responsibility.
    */
   onPersistSignedIn: (patch: Partial<User['preferences']>) => void;
+  /**
+   * True once the auth layer has reported in at least once (signed-in
+   * user resolved or confirmed guest). While false, `user` is `null`
+   * because the session is still being restored from Firebase — not
+   * because the visitor is genuinely a guest. Without this gate, signed-in
+   * users who already dismissed the spotlight or read the latest entry
+   * see a brief flash of the spotlight modal and unread bell badge on
+   * every page reload, because `useWhatsNew` falls back to empty guest
+   * `localStorage` state during the resolution window. Default `true`
+   * keeps the hook usable in contexts (tests, storybook) that don't
+   * thread auth state through.
+   */
+  isAuthResolved?: boolean;
 }
 
 export interface UseWhatsNewResult {
@@ -124,6 +137,7 @@ const sortByNewest = (entries: WhatsNewEntry[]): WhatsNewEntry[] =>
 export const useWhatsNew = ({
   user,
   onPersistSignedIn,
+  isAuthResolved = true,
 }: UseWhatsNewOptions): UseWhatsNewResult => {
   const entries = useMemo(() => sortByNewest(WHATS_NEW), []);
   const newestId = entries[0]?.id;
@@ -159,6 +173,11 @@ export const useWhatsNew = ({
   });
 
   const unreadCount = useMemo(() => {
+    // Stay silent until auth has resolved — otherwise signed-in users who
+    // have already read everything see the bell badge briefly flicker to
+    // "1" on reload while we're still hydrating their preferences from
+    // Firestore. See `isAuthResolved` doc on `UseWhatsNewOptions`.
+    if (!isAuthResolved) return 0;
     if (!lastSeenWhatsNewId) {
       // First-time visitor — show a single-dot badge for the newest entry
       // rather than counting the entire backlog.
@@ -170,14 +189,19 @@ export const useWhatsNew = ({
       count += 1;
     }
     return count;
-  }, [entries, lastSeenWhatsNewId]);
+  }, [entries, lastSeenWhatsNewId, isAuthResolved]);
 
   const spotlightEntry = useMemo<WhatsNewEntry | null>(() => {
+    // Same flash-prevention gate as `unreadCount`: if a signed-in user has
+    // already dismissed this spotlight, we don't want the modal to render
+    // for the half-second between mount and the auth listener firing with
+    // their hydrated preferences.
+    if (!isAuthResolved) return null;
     const newestFeatured = entries.find((entry) => entry.featured === true);
     if (!newestFeatured) return null;
     if (dismissedSpotlightIds.includes(newestFeatured.id)) return null;
     return newestFeatured;
-  }, [entries, dismissedSpotlightIds]);
+  }, [entries, dismissedSpotlightIds, isAuthResolved]);
 
   const [isBellOpen, setIsBellOpen] = useState(false);
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);

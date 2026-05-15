@@ -8,47 +8,14 @@ import {
   type CorrectionAnalysisContext,
   type ExpandPromptContext,
 } from "./correctionAnalysisShared";
+import {
+  formatUserFacingGeminiError,
+  generateContentWithGeminiTextFallback,
+  stringifyGeminiCallError,
+} from "./geminiTextModelService";
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
-// Vision/text analysis calls use Flash. Google sometimes returns API_KEY_INVALID
-// when the real issue is model enablement on the project — same key works for
-// image models. We try a short fallback list (alias first, then explicit ids).
-// See https://ai.google.dev/gemini-api/docs/models
-const FLASH_TEXT_MODEL_FALLBACKS = [
-  'gemini-flash-latest',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-] as const;
-const ANALYSIS_MODEL = FLASH_TEXT_MODEL_FALLBACKS[0];
-
-const stringifyGeminiCallError = (err: unknown): string => {
-  if (err instanceof Error && err.message) return err.message;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
-};
-
-/** Prefer a short API message over a huge JSON blob in UI toasts. */
-const formatUserFacingGeminiError = (raw: string): string => {
-  const s = raw.trim();
-  try {
-    const j = JSON.parse(s) as { message?: string; error?: { message?: string } };
-    const inner = j?.error?.message || j?.message;
-    if (typeof inner === 'string' && inner.trim()) return inner.trim();
-  } catch {
-    /* not JSON */
-  }
-  return s.length > 900 ? `${s.slice(0, 900)}…` : s;
-};
-
-/** True when retrying with another Flash model id might succeed (Google often mislabels model/API enablement as API_KEY_INVALID). */
-const shouldRetryFlashModelAfterError = (err: unknown): boolean =>
-  /API_KEY_INVALID|INVALID_ARGUMENT|not found|not supported|is not available|Model .*not/i.test(
-    stringifyGeminiCallError(err)
-  );
 
 /** True when another Gemini image model may still work for the same key/project. */
 const shouldRetryImageModelAfterError = (err: unknown): boolean =>
@@ -56,13 +23,6 @@ const shouldRetryImageModelAfterError = (err: unknown): boolean =>
     stringifyGeminiCallError(err)
   );
 
-/** Strip optional ```json fences so structured-output parsing doesn't throw. */
-const parseJsonFromModelText = <T>(raw: string): T => {
-  let s = raw.trim();
-  const fence = /^```(?:json)?\s*\n?([\s\S]*?)```\s*$/im.exec(s);
-  if (fence) s = fence[1].trim();
-  return JSON.parse(s) as T;
-};
 const SUPPORTED_INPUT_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -443,8 +403,7 @@ export const analyzeBrandGuidelines = async (
   `.trim();
 
   try {
-    const response = await ai.models.generateContent({
-      model: ANALYSIS_MODEL,
+    const response = await generateContentWithGeminiTextFallback(ai, {
       contents: {
         parts: [
           {
@@ -493,7 +452,7 @@ export const analyzeBrandGuidelines = async (
           }
         }
       }, systemPrompt)
-    });
+    }, "Brand analysis");
 
     if (!response.text) throw new Error("No analysis result generated");
     
@@ -561,47 +520,30 @@ export const analyzeImageForOption = async (
     systemPrompt
   );
 
-  let lastError: unknown;
-  for (let mi = 0; mi < FLASH_TEXT_MODEL_FALLBACKS.length; mi++) {
-    const model = FLASH_TEXT_MODEL_FALLBACKS[mi];
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType,
-              },
+  try {
+    const response = await generateContentWithGeminiTextFallback(ai, {
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType,
             },
-            { text: prompt },
-          ],
-        },
-        config: jsonConfig,
-      });
+          },
+          { text: prompt },
+        ],
+      },
+      config: jsonConfig,
+    }, "Option analysis");
 
-      if (!response.text) throw new Error("No analysis result generated");
+    if (!response.text) throw new Error("No analysis result generated");
 
-      return JSON.parse(response.text);
-    } catch (error: unknown) {
-      lastError = error;
-      const moreModels = mi < FLASH_TEXT_MODEL_FALLBACKS.length - 1;
-      if (moreModels && shouldRetryFlashModelAfterError(error)) {
-        console.warn(`Option analysis: model ${model} failed, retrying with next Flash id`, error);
-        continue;
-      }
-      console.error("Option Analysis Error:", error);
-      const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
-      throw new Error(msg || `Failed to analyze image for ${type}.`);
-    }
+    return JSON.parse(response.text);
+  } catch (error: unknown) {
+    console.error("Option Analysis Error:", error);
+    const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+    throw new Error(msg || `Failed to analyze image for ${type}.`);
   }
-
-  console.error("Option Analysis Error:", lastError);
-  throw new Error(
-    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) ||
-      `Failed to analyze image for ${type}.`
-  );
 };
 
 // Describe an image to produce a rich recreation prompt
@@ -634,32 +576,16 @@ export const describeImagePrompt = async (
     ],
   };
 
-  let lastError: unknown;
-  for (let mi = 0; mi < FLASH_TEXT_MODEL_FALLBACKS.length; mi++) {
-    const model = FLASH_TEXT_MODEL_FALLBACKS[mi];
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-      });
+  try {
+    const response = await generateContentWithGeminiTextFallback(ai, { contents }, "Image describe");
 
-      if (!response.text) throw new Error("No description generated");
-      return response.text.trim();
-    } catch (error: unknown) {
-      lastError = error;
-      const moreModels = mi < FLASH_TEXT_MODEL_FALLBACKS.length - 1;
-      if (moreModels && shouldRetryFlashModelAfterError(error)) {
-        console.warn(`Image describe: model ${model} failed, retrying with next Flash id`, error);
-        continue;
-      }
-      console.error('Image describe error:', error);
-      const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
-      throw new Error(msg || 'No description generated');
-    }
+    if (!response.text) throw new Error("No description generated");
+    return response.text.trim();
+  } catch (error: unknown) {
+    console.error('Image describe error:', error);
+    const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+    throw new Error(msg || 'No description generated');
   }
-
-  console.error('Image describe error:', lastError);
-  throw new Error(formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) || 'No description generated');
 };
 
 // Describe an image for the prompt box while leaving toolbar-controlled choices
@@ -703,35 +629,20 @@ export const describeImageContentPrompt = async (
 
   const config = withSystemInstruction({}, systemPrompt);
 
-  let lastError: unknown;
-  for (let mi = 0; mi < FLASH_TEXT_MODEL_FALLBACKS.length; mi++) {
-    const model = FLASH_TEXT_MODEL_FALLBACKS[mi];
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config,
-      });
+  try {
+    const response = await generateContentWithGeminiTextFallback(
+      ai,
+      { contents, config },
+      "Content-only image describe"
+    );
 
-      if (!response.text) throw new Error("No content prompt generated");
-      return response.text.trim();
-    } catch (error: unknown) {
-      lastError = error;
-      const moreModels = mi < FLASH_TEXT_MODEL_FALLBACKS.length - 1;
-      if (moreModels && shouldRetryFlashModelAfterError(error)) {
-        console.warn(`Content-only image describe: model ${model} failed, retrying with next Flash id`, error);
-        continue;
-      }
-      console.error('Content-only image describe error:', error);
-      const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
-      throw new Error(msg || "No content prompt generated");
-    }
+    if (!response.text) throw new Error("No content prompt generated");
+    return response.text.trim();
+  } catch (error: unknown) {
+    console.error('Content-only image describe error:', error);
+    const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+    throw new Error(msg || "No content prompt generated");
   }
-
-  console.error('Content-only image describe error:', lastError);
-  throw new Error(
-    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) || 'No content prompt generated'
-  );
 };
 
 export const analyzeImageForCorrectionPrompt = async (
@@ -759,63 +670,46 @@ export const analyzeImageForCorrectionPrompt = async (
     }
   }, systemPrompt);
 
-  let lastError: unknown;
-  for (let mi = 0; mi < FLASH_TEXT_MODEL_FALLBACKS.length; mi++) {
-    const model = FLASH_TEXT_MODEL_FALLBACKS[mi];
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: sourceImage.base64Data,
-                mimeType: sourceImage.mimeType,
-              },
+  try {
+    const response = await generateContentWithGeminiTextFallback(ai, {
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: sourceImage.base64Data,
+              mimeType: sourceImage.mimeType,
             },
-            { text: prompt }
-          ]
-        },
-        config: jsonConfig
-      });
+          },
+          { text: prompt }
+        ]
+      },
+      config: jsonConfig
+    }, "Correction analysis");
 
-      if (!response.text) throw new Error("No correction analysis generated");
-      let parsed: Partial<ImageCorrectionPlan>;
-      try {
-        parsed = parseStructuredJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
-      } catch {
-        throw new Error(
-          "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
-        );
-      }
-
-      return {
-        analysisSummary: (parsed.analysisSummary || '').trim(),
-        issues: Array.isArray(parsed.issues)
-          ? parsed.issues.map(issue => String(issue).trim()).filter(Boolean)
-          : [],
-        fixPrompt: (parsed.fixPrompt || '').trim()
-      };
-    } catch (error: unknown) {
-      lastError = error;
-      const moreModels = mi < FLASH_TEXT_MODEL_FALLBACKS.length - 1;
-      if (moreModels && shouldRetryFlashModelAfterError(error)) {
-        console.warn(`Correction analysis: model ${model} failed, retrying with next Flash id`, error);
-        continue;
-      }
-      console.error("Image Correction Analysis Error:", error);
-      const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+    if (!response.text) throw new Error("No correction analysis generated");
+    let parsed: Partial<ImageCorrectionPlan>;
+    try {
+      parsed = parseStructuredJsonFromModelText<Partial<ImageCorrectionPlan>>(response.text);
+    } catch {
       throw new Error(
-        msg || "Failed to analyze image for correction."
+        "Could not read the analysis response. Try Run analysis again, or shorten your Settings system prompt if it conflicts with JSON output."
       );
     }
-  }
 
-  console.error("Image Correction Analysis Error:", lastError);
-  throw new Error(
-    formatUserFacingGeminiError(stringifyGeminiCallError(lastError)) ||
-      "Failed to analyze image for correction."
-  );
+    return {
+      analysisSummary: (parsed.analysisSummary || '').trim(),
+      issues: Array.isArray(parsed.issues)
+        ? parsed.issues.map(issue => String(issue).trim()).filter(Boolean)
+        : [],
+      fixPrompt: (parsed.fixPrompt || '').trim()
+    };
+  } catch (error: unknown) {
+    console.error("Image Correction Analysis Error:", error);
+    const msg = formatUserFacingGeminiError(stringifyGeminiCallError(error));
+    throw new Error(
+      msg || "Failed to analyze image for correction."
+    );
+  }
 };
 
 // Expand a short prompt into a richer, visual-focused description (text-only, no reference image)
@@ -834,8 +728,7 @@ export const expandPrompt = async (
   // `systemInstruction` field so it outranks the expansion task's own
   // "return ONLY the brief" rule. The task-specific instructions stay in the
   // prompt body where the model expects them.
-  const response = await ai.models.generateContent({
-    model: ANALYSIS_MODEL,
+  const response = await generateContentWithGeminiTextFallback(ai, {
     contents: {
       parts: [
         { text: expansionInstructions },
@@ -843,7 +736,7 @@ export const expandPrompt = async (
       ]
     },
     config: withSystemInstruction(undefined, userSystemPrompt)
-  });
+  }, "Expand prompt");
 
   if (!response.text) throw new Error("No expanded prompt generated");
   return response.text.trim();

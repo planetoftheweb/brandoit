@@ -1,13 +1,14 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getLatestVersion } from '../services/historyService';
 import { DownloadMenu } from './DownloadMenu';
 import { RichSelect, RichSelectOption } from './RichSelect';
+import { useConfirmAction } from '../hooks/useConfirmAction';
 
 type ThumbnailSize = 'xs' | 'sm' | 'md' | 'lg';
 
@@ -128,6 +129,17 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [newFolderDraft, setNewFolderDraft] = React.useState('');
   const [folderBusy, setFolderBusy] = React.useState(false);
   const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
+  // In-flight move-to-folder progress. `moveProgress` drives a sticky
+  // "Moving N items to <folder>…" banner with a spinner so the user sees
+  // immediate feedback when they pick a destination — large batches go
+  // through Firestore one tile at a time and can take several seconds. The
+  // tile IDs in the set get a dimmed/pulsing visual state until the
+  // operation completes. `null` means no move is in flight.
+  const [moveProgress, setMoveProgress] = React.useState<{
+    ids: Set<string>;
+    folderName: string;
+    total: number;
+  } | null>(null);
   // Combined page-jump + per-page popover anchored under the "1/2 ▾" button
   // in the gallery header. Replaces the prior wide page-size dropdown and
   // the standalone numeric page indicator with a single compact trigger.
@@ -238,10 +250,44 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     [selectionMode, isComparePicking]
   );
 
+  // Bulk-delete confirm uses the same double-tap pattern as the rest of
+  // the app (per-version delete in `ImageDisplay`, preset delete in
+  // `ControlPanel`). First click on the trash button arms it for ~3s and
+  // changes label/style to "Click again to delete N items"; second click
+  // within the window fires `onDelete` for each selected id and exits
+  // selection mode. Arming auto-resets after the timeout so a forgotten
+  // arm doesn't linger after the user moves on.
+  const [bulkDeleting, setBulkDeleting] = React.useState(false);
+  const bulkDelete = useConfirmAction<'delete-selected'>({
+    onConfirm: async () => {
+      if (selectedIds.length === 0) return;
+      const idsToDelete = [...selectedIds];
+      setBulkDeleting(true);
+      try {
+        // `onDelete` is fire-and-forget at the App level (it dispatches an
+        // async `executeDeleteHistory` per id), so we can fan out without
+        // awaiting. Clearing selection + exiting selection mode happens
+        // synchronously; the parent's `history` prop updates as deletes
+        // resolve and React removes the tiles via diff.
+        idsToDelete.forEach((id) => onDelete(id));
+        showToast(
+          `Deleting ${idsToDelete.length} item${idsToDelete.length === 1 ? '' : 's'}…`
+        );
+        setSelectedIds([]);
+        setSelectionMode(false);
+      } finally {
+        setBulkDeleting(false);
+      }
+    },
+  });
+
   const exitSelectionMode = React.useCallback(() => {
     setSelectionMode(false);
     setSelectedIds([]);
-  }, []);
+    // Disarm the trash button on exit so re-entering selection mode
+    // doesn't leave the destructive button half-armed from a prior session.
+    bulkDelete.reset();
+  }, [bulkDelete]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -1173,11 +1219,22 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                           onClick={async () => {
                             setMoveMenuOpen(false);
                             if (selectedIds.length === 0) return;
+                            // Snapshot the IDs so the in-flight set is
+                            // stable even if `selectedIds` mutates during
+                            // the await (it doesn't today, but this is
+                            // cheap insurance).
+                            const idsToMove = [...selectedIds];
+                            const total = idsToMove.length;
+                            setMoveProgress({
+                              ids: new Set(idsToMove),
+                              folderName: folder.name,
+                              total,
+                            });
                             try {
                               setFolderBusy(true);
-                              await onMoveToFolder(selectedIds, folder.id);
+                              await onMoveToFolder(idsToMove, folder.id);
                               showToast(
-                                `Moved ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'} to ${folder.name}`
+                                `Moved ${total} item${total === 1 ? '' : 's'} to ${folder.name}`
                               );
                               setSelectedIds([]);
                             } catch (err) {
@@ -1185,6 +1242,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                               showToast('Move failed');
                             } finally {
                               setFolderBusy(false);
+                              setMoveProgress(null);
                             }
                           }}
                           className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs rounded-md transition ${
@@ -1204,6 +1262,53 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   </div>
                 )}
               </div>
+              {/* Bulk delete — destructive action so it follows the same
+                  double-tap-to-confirm pattern used elsewhere (per-version
+                  rail delete in ImageDisplay, preset delete in
+                  ControlPanel). First click arms (amber + Check icon +
+                  pulse + tooltip swaps to "Click again to delete N"),
+                  second click within ~3s fires `onDelete` for each
+                  selected id. Disabled when nothing is selected. The
+                  trash icon is intentionally red on the idle state so
+                  it's visually distinct from the neutral folder/select
+                  buttons next to it. */}
+              {(() => {
+                const isArmed = bulkDelete.isArmed('delete-selected');
+                const disabled = selectedIds.length === 0 || bulkDeleting;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => bulkDelete.trigger('delete-selected')}
+                    disabled={disabled}
+                    aria-label={
+                      isArmed
+                        ? `Click again to delete ${selectedIds.length} selected item${selectedIds.length === 1 ? '' : 's'}`
+                        : 'Delete selected items'
+                    }
+                    className={`group/tip-bulkdelete relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border transition shrink-0 disabled:opacity-50 disabled:pointer-events-none ${
+                      isArmed
+                        ? 'border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 animate-pulse'
+                        : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-red-600 dark:text-red-400 hover:border-red-500 hover:bg-red-500/5'
+                    }`}
+                  >
+                    {isArmed ? (
+                      <Check size={16} strokeWidth={3} aria-hidden />
+                    ) : (
+                      <Trash2 size={16} aria-hidden />
+                    )}
+                    <span
+                      role="tooltip"
+                      className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-bulkdelete:opacity-100 group-focus-visible/tip-bulkdelete:opacity-100 transition-opacity z-20"
+                    >
+                      {isArmed
+                        ? `Click again to delete ${selectedIds.length}`
+                        : selectedIds.length === 0
+                          ? 'Delete selected'
+                          : `Delete ${selectedIds.length} selected`}
+                    </span>
+                  </button>
+                );
+              })()}
               <button
                 type="button"
                 onClick={exitSelectionMode}
@@ -1281,7 +1386,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectionMode(true)}
-                aria-label="Select items to move to a folder or export"
+                aria-label="Select items to move, export, or delete in bulk"
                 className="group/tip-select relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal transition shrink-0"
               >
                 <CheckSquare size={16} aria-hidden />
@@ -1354,6 +1459,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           // ring is the ambient "you are here" cue when neither of those
           // modes is engaged.
           const isActiveTile = !!activeGenerationId && activeGenerationId === gen.id;
+          const isMoving = !!moveProgress && moveProgress.ids.has(gen.id);
 
           return (
             <div 
@@ -1366,7 +1472,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     : isActiveTile
                       ? 'border-brand-red ring-2 ring-brand-red/50 dark:ring-brand-red/40 shadow-md'
                       : 'border-gray-200 dark:border-[#30363d] hover:border-brand-teal dark:hover:border-brand-teal'
-              }`}
+              } ${isMoving ? 'opacity-60 animate-pulse pointer-events-none' : ''}`}
               data-comparison-batch={batchId || undefined}
               data-active-tile={isActiveTile ? 'true' : undefined}
               aria-current={isActiveTile ? 'true' : undefined}
@@ -1461,25 +1567,31 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   }}
                   className={
                     selectionMode
-                      ? 'absolute inset-0 bg-black/25 flex items-center justify-center opacity-100 transition-colors'
+                      // In selection mode the corner checkbox button + the
+                      // teal ring on selected tiles already convey "select
+                      // me" / "I'm selected" — adding an always-on dim
+                      // overlay and a centered "Select"/"Selected" pill on
+                      // top of that was visually busy (every tile in the
+                      // grid showed the same pill at once). Keep the
+                      // full-bleed click target so anywhere on the tile
+                      // toggles selection, but drop the static dim and let
+                      // hover give the confirmation cue.
+                      ? 'absolute inset-0 bg-black/0 hover:bg-black/20 focus:bg-black/20 transition-colors'
                       : isComparePicking
                         ? 'absolute inset-0 bg-black/0 hover:bg-brand-teal/30 transition-colors flex items-center justify-center'
                         : 'absolute inset-0 bg-black/0 group-hover:bg-black/40 focus:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 group-focus-within:opacity-100'
                   }
                   aria-label={selectionMode ? 'Toggle selection' : isComparePicking ? 'Pick this tile to compare' : 'Restore generation'}
                 >
-                  <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
-                    {selectionMode ? (
-                      <>
-                        {selectedIds.includes(gen.id) ? <CheckSquare size={14} /> : <Square size={14} />}{' '}
-                        {selectedIds.includes(gen.id) ? 'Selected' : 'Select'}
-                      </>
-                    ) : (
-                      <>
-                        <ArrowUpRight size={14} /> Restore
-                      </>
-                    )}
-                  </span>
+                  {/* Pill is normal-mode only. In selection mode the
+                      corner checkbox button is the canonical visible
+                      affordance; rendering a duplicate "Select" pill
+                      here just clutters the grid. */}
+                  {!selectionMode && (
+                    <span className="text-white font-medium flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md text-xs">
+                      <ArrowUpRight size={14} /> Restore
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -1738,6 +1850,40 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center">
           <div className="bg-brand-red text-white text-sm px-4 py-3 rounded-lg shadow-2xl border border-brand-red/70 animate-in fade-in duration-150" role="status" aria-live="polite">
             {toastMessage}
+          </div>
+        </div>
+      )}
+
+      {/* Sticky busy banner shown while a bulk move-to-folder is in flight.
+          Sits one z-layer above `toastMessage` so the success toast that
+          appears when the operation finishes can briefly overlap without
+          getting hidden underneath. The matching tiles in the grid are
+          dimmed + pulsing (see `isMoving` above) so the user can see at a
+          glance which items are currently being relocated. */}
+      {moveProgress && (
+        <div
+          className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="pointer-events-auto inline-flex items-center gap-3 rounded-lg border border-brand-teal/40 bg-white/95 dark:bg-[#161b22]/95 backdrop-blur px-4 py-3 shadow-2xl">
+            <Loader2
+              size={18}
+              className="text-brand-teal animate-spin shrink-0"
+              aria-hidden
+            />
+            <div className="text-sm text-slate-700 dark:text-slate-100">
+              <span className="font-semibold">
+                Moving {moveProgress.total} item{moveProgress.total === 1 ? '' : 's'}
+              </span>
+              <span className="text-slate-500 dark:text-slate-400">
+                {' '}to{' '}
+              </span>
+              <span className="font-semibold text-brand-teal">
+                {moveProgress.folderName}
+              </span>
+              <span className="text-slate-500 dark:text-slate-400">…</span>
+            </div>
           </div>
         </div>
       )}

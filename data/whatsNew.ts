@@ -23,6 +23,112 @@ import type { WhatsNewEntry } from '../types';
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: 'v0.17.0-slideshow-and-safer-deletes',
+    title: 'Fullscreen slideshow, calmer canvas, safer deletes',
+    summary:
+      'Press F to enter a folder-scoped slideshow, double-tap any delete, and bulk-delete selected tiles.',
+    blurb:
+      "A handful of viewing and editing upgrades land together. Press F on any tile to open a fullscreen slideshow scoped to your active folder, with cursor and chrome that fade out after five seconds of stillness. Every destructive button across the app now uses double-tap-to-confirm — one click arms it, a second click within three seconds fires — and the selection-mode toolbar gains a bulk Delete next to Move-to-folder. Behind the scenes, Gemini image generation falls back to Nano Banana Pro when Nano Banana 2 is unavailable, and SVG generation gives you a real, actionable error instead of a generic 'API key not valid'.",
+    publishedAt: Date.parse('2026-05-15T15:00:00Z'),
+    version: '0.17.0',
+    image: '/whats-new/whatsnew-v0.17.0.png',
+    featured: true,
+    sections: [
+      {
+        heading: 'Fullscreen slideshow mode',
+        body: 'A new immersive viewer for any tile, scoped to the folder you are currently browsing. Chrome stays out of the way until you ask for it, the cursor fades after five seconds, and arrow keys walk the folder you actually have open instead of the entire global history.',
+        steps: [
+          { text: 'Open a tile in the main preview, then press F to enter slideshow.', kbd: 'F' },
+          { text: 'Use the arrow keys to walk through your active folder.', icon: 'ArrowRight' },
+          { text: 'Press H to toggle the chrome overlay back on if you want the controls.', kbd: 'H' },
+          { text: 'Press Esc (or F again) to exit slideshow.', kbd: 'Esc' },
+        ],
+      },
+      {
+        heading: 'Calmer main canvas',
+        body: 'The same idle-fade behavior now applies to the regular main preview. Five seconds of a stationary mouse hides the cursor and every hover-revealed control — history arrows, version dropdown, refinement rail, action buttons — so the image owns the viewport while you look at it. Move the mouse and everything reappears.',
+        steps: [
+          { text: 'Hover the preview area, then leave the mouse still for five seconds.' },
+          { text: 'Watch the chrome and cursor fade out together.', icon: 'EyeOff' },
+          { text: 'Move the mouse to bring everything back instantly.', icon: 'Eye' },
+        ],
+      },
+      {
+        heading: 'Double-tap to delete, anywhere',
+        body: 'A new shared confirm pattern means every destructive button in the app now arms on first click and fires on second click within three seconds — no more accidental deletes from a stray tap, and no more modal dialog that some users had silenced via preferences. The arm window auto-resets so a forgotten arm never lingers.',
+        steps: [
+          { text: 'Click any delete button — trash icons on tiles, version-rail thumbnails, or the new bulk-delete in selection mode.', icon: 'Trash2' },
+          { text: 'The button turns amber and pulses for a few seconds — that is the armed state.' },
+          { text: 'Click again within three seconds to confirm; ignore it and the button quietly disarms.', icon: 'Check' },
+        ],
+      },
+      {
+        heading: 'Bulk-delete selected tiles',
+        body: 'Selection mode used to only support move-to-folder and bulk-export. Now there is a Delete button next to those, using the same double-tap pattern — pick any number of tiles, click the trash, click it again to confirm.',
+        steps: [
+          { text: 'Click the Select-items button in the gallery toolbar to enter selection mode.', icon: 'CheckSquare' },
+          { text: 'Click any tile to toggle its selection — the corner checkbox is the visible cue.' },
+          { text: 'Click the red trash button in the selection toolbar to arm bulk-delete, then click it again to fire.', icon: 'Trash2' },
+        ],
+      },
+      {
+        heading: 'Quieter header, smarter fallbacks',
+        body: 'The header now only carries Avatar, Focus, and Bell on the right side — GitHub moved into the user dropdown for signed-in users. Nano Banana Pro takes over automatically when Nano Banana 2 is unavailable, with the actual model that produced the image recorded on the version. And SVG generation surfaces a real diagnosis when Google rejects a key, naming every model that was tried and pointing at AI Studio for project-level enablement.',
+        steps: [
+          { text: 'Click your avatar in the header to find GitHub plus the dark-mode toggle in one place.' },
+          { text: 'Drop a PDF onto the prompt textarea to use it as a style reference, same flow as image drops.' },
+          { text: 'If a Gemini image fails on Nano Banana 2, the app retries on Nano Banana Pro automatically.', icon: 'Sparkles' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'v0.16.1-gallery-polish',
+    title: 'Bulk move shows progress now',
+    summary:
+      'A spinner banner and dimmed tiles make it obvious when a folder move is still in flight.',
+    blurb:
+      "Moving fifty tiles to another folder used to look like the gallery had frozen for a few seconds — Firestore writes them one at a time, but nothing on screen said so. Now a sticky banner with a spinner tracks the operation and the affected tiles dim and pulse until every write lands. Plus a few smaller fixes: the What's New spotlight no longer flashes on reload, the info button on the main preview tucks itself away when the info card is open, and refinement-panel tooltips only appear on hover the way tooltips should.",
+    publishedAt: Date.parse('2026-05-15T12:00:00Z'),
+    version: '0.16.1',
+    image: '/whats-new/whatsnew-v0.16.1.png',
+    sections: [
+      {
+        heading: 'Watch the bulk move',
+        body: 'When you pick a destination folder during selection mode, a banner appears at the bottom of the gallery the instant the move starts and stays until every tile has finished writing.',
+        steps: [
+          {
+            text: 'Enter selection mode and check the tiles you want to relocate.',
+            icon: 'Check',
+          },
+          {
+            text: 'Open the "Move to folder" picker and pick a destination.',
+            icon: 'Layers',
+          },
+          {
+            text: 'Watch the banner — affected tiles dim and pulse until the move lands, then a confirmation toast wraps things up.',
+            icon: 'Sparkles',
+          },
+        ],
+      },
+      {
+        heading: 'Quieter loading and tooltips',
+        body: "A handful of supporting fixes shipped alongside the progress banner — small things that returning users will feel even if they never read this page.",
+        steps: [
+          {
+            text: "No more spotlight flash on reload for users who've already dismissed the latest announcement.",
+          },
+          {
+            text: "The info card on the main preview tucks to the bottom-right, and the toggle button hides itself while the card is open.",
+          },
+          {
+            text: "Refinement-panel tooltips only appear when you actually hover the button — they were leaking through a Tailwind class collision before.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: 'v0.16.0-whats-new',
     title: "Meet the What's New panel",
     summary: 'Every release highlight now lives behind a bell in the header.',

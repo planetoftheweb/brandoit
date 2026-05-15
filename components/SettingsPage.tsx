@@ -5,7 +5,6 @@ import { uploadProfileImage } from '../services/imageService';
 import { buildProfileImageCacheKey } from '../services/imageCache';
 import { CachedImage } from './CachedImage';
 import { teamService } from '../services/teamService';
-import { authService } from '../services/authService';
 import { SUPPORTED_MODELS, MODEL_GROUP_ORDER } from '../constants';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel } from '../services/aspectRatioService';
 import { RichSelect } from './RichSelect';
@@ -20,7 +19,7 @@ interface SettingsPageProps {
     systemPrompt?: string,
     selectedModel?: string,
     apiKeys?: { [modelId: string]: string }
-  ) => void;
+  ) => void | Promise<void>;
   graphicTypes: GraphicType[];
   visualStyles: VisualStyle[];
   brandColors: BrandColor[];
@@ -234,15 +233,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       // source-of-truth write. Previously this component wrote directly to Firestore and
       // then the parent wrote again using stale state, which caused API key changes to be
       // reverted (see GitHub issue #1).
-      const geminiApiKey = apiKeys['gemini'] ?? '';
-      onSave(
-        localSettings,
-        { name, username, photoURL },
-        geminiApiKey,
-        systemPrompt,
-        selectedModel,
-        apiKeys
-      );
+      await persistPreferences();
 
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -262,14 +253,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     delete next[modelId];
     setApiKeys(next);
     try {
-      await authService.updateUserPreferences(user.id, {
-        ...user.preferences,
-        apiKeys: next,
-        selectedModel,
-        geminiApiKey: next['gemini'] ?? '',
-        systemPrompt,
-        settings: localSettings
-      });
+      await persistPreferences(next);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
@@ -277,18 +261,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
   };
 
-  const persistPreferences = async () => {
+  const persistPreferences = async (nextApiKeys = apiKeys) => {
     // Use local state as the source of truth; pass apiKeys['gemini'] directly (no `||`
     // fallback) so clearing the Nano Banana key is actually persisted. sanitizePreferences
     // in authService strips empty-string entries.
-    await authService.updateUserPreferences(user.id, {
-      ...user.preferences,
-      apiKeys,
-      selectedModel,
-      geminiApiKey: apiKeys['gemini'] ?? '',
+    await onSave(
+      localSettings,
+      { name, username, photoURL },
+      nextApiKeys['gemini'] ?? '',
       systemPrompt,
-      settings: localSettings
-    });
+      selectedModel,
+      nextApiKeys
+    );
   };
 
   const handleApiKeyBlur = async (_modelId: string) => {

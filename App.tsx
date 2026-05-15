@@ -20,7 +20,7 @@ import {
   expandPrompt
 } from './services/geminiService';
 import { generateOpenAIImage, analyzeImageForCorrectionPromptOpenAI, expandPromptOpenAI } from './services/openaiService';
-import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser } from './services/correctionAnalysisRouter';
+import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser, getGeminiApiKeyForAnalysis } from './services/correctionAnalysisRouter';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
 import { authService } from './services/authService';
@@ -599,6 +599,12 @@ const App: React.FC = () => {
   // Firestore on the next tick.
   const whatsNew = useWhatsNew({
     user,
+    // Don't surface anything (spotlight, bell badge) until Firebase has
+    // reported in at least once. Otherwise signed-in users who already
+    // dismissed the latest spotlight or read the newest entry see a
+    // flash of the modal/badge on every reload while their preferences
+    // are still being hydrated from Firestore.
+    isAuthResolved,
     onPersistSignedIn: (patch) => {
       setUser((prev) =>
         prev ? { ...prev, preferences: { ...prev.preferences, ...patch } } : prev
@@ -1034,8 +1040,11 @@ const App: React.FC = () => {
     try {
       let imageDescription = '';
       try {
-        const { base64, mime } = await fetchImageAsBase64(version.imageUrl);
-        imageDescription = await describeImagePrompt(base64, mime, getActiveApiKey());
+        const geminiKey = getGeminiApiKeyForAnalysis(user);
+        if (geminiKey) {
+          const { base64, mime } = await fetchImageAsBase64(version.imageUrl);
+          imageDescription = await describeImagePrompt(base64, mime, geminiKey);
+        }
       } catch (err) {
         console.warn('Image describe fallback (main image):', err);
       }
@@ -2128,10 +2137,10 @@ const App: React.FC = () => {
         throw new Error('Create a free account and add your API key in Settings before analyzing brand guidelines.');
       }
 
-      const customKey = getActiveApiKey();
+      const customKey = getGeminiApiKeyForAnalysis(user);
       if (!customKey) {
         setSettingsMode(true);
-        throw new Error('Add your API key in Settings before analyzing brand guidelines. Free accounts use BYOK keys.');
+        throw new Error('Add a Gemini API key in Settings before analyzing brand guidelines.');
       }
 
       const result = await analyzeBrandGuidelines(file, customKey, user?.preferences.systemPrompt);

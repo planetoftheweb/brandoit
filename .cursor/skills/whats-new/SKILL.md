@@ -1,6 +1,6 @@
 ---
 name: whats-new
-description: Author and ship a What's New entry for BranDoIt — the user-facing release surface that drives the header bell dropdown, the spotlight modal, the discovery page, and per-release detail guides. Use when adding a user-visible feature, bumping the minor or major version, or when `npm run build` fails the `whats-new:check` prebuild gate. The companion script `scripts/whats-new.mjs` does the heavy lifting; this skill explains the conventions, fields, image rules, and verify checklist around it so the result lands consistently.
+description: Author and ship a What's New entry for BranDoIt — the user-facing release surface that drives the header bell dropdown, the spotlight modal, the discovery page, and per-release detail guides. Use when adding a user-visible feature, bumping the minor or major version, or when `npm run build` fails the `whats-new:check` prebuild gate. The companion script `scripts/whats-new.mjs` scaffolds the entry; this skill explains the conventions, fields, and verify checklist around it. The agent is responsible for generating the brand-matched 16:9 hero image via `GenerateImage` and saving it at `public/whats-new/whatsnew-v<version>.png` — do not punt this step to the user.
 ---
 
 # Skill: Author a What's New entry
@@ -109,7 +109,12 @@ array in `data/whatsNew.ts` (entries are newest-first). Use this shape:
 - **`sections`** — optional. If present, the detail page renders them.
   Section bodies are paragraphs; steps are numbered. Icons in steps must
   be names allowlisted in `WhatsNewPage.tsx`'s `ICON_MAP` (a small set of
-  Lucide icons); unknown names fall back to a neutral help glyph.
+  Lucide icons); unknown names fall back to a neutral `HelpCircle` glyph,
+  which looks broken next to the step. If a release theme genuinely needs
+  an icon outside the current allowlist (e.g. `Trash2` for a release
+  centered on safer deletes), **extend `ICON_MAP` and its imports** rather
+  than substituting a less-fitting icon. Keep the allowlist narrow but not
+  artificially constrained.
 - **`kbd`** on a step renders as a styled keycap chip (e.g. `Cmd+K`,
   `Esc`). Use `+` separators, no spaces.
 
@@ -123,8 +128,56 @@ array in `data/whatsNew.ts` (entries are newest-first). Use this shape:
 - Location: `public/whats-new/whatsnew-v<version>.png` (or `.jpg` /
   `.webp`). Path in the entry starts with `/whats-new/...` because Vite
   serves `public/` from the site root.
-- Style: keep them on-brand (brand teal / orange / red palette, optional
-  artwork) and avoid embedded text that won't scale at thumbnail size.
+- Style: keep them on-brand (brand teal `#00A9A5`, orange `#FF7F50`,
+  red `#B93135`, dark navy accent) and avoid embedded text that won't
+  scale at thumbnail size.
+
+### Generate the image yourself — don't punt to the user
+
+**The agent producing the entry is also responsible for producing the
+image.** Earlier sessions repeatedly skipped this step and asked the user
+to "drop one in later," which left the bell rendering the Sparkles
+fallback in production. That isn't acceptable — every other 0.x release
+shipped with brand-matched art, and so should yours.
+
+Workflow when authoring an entry:
+
+1. **Read an existing image first** to anchor the style. The skill agent
+   should call `Read` on `public/whats-new/whatsnew-panel.png` (or any
+   other recent entry) so the next generation matches the established
+   look — soft horizontal teal→orange-cream gradient, flat 2D vector
+   illustration, slight drop shadow, scattered sparkle stars and motion
+   lines, no text.
+2. **Generate via `GenerateImage`** with these required prompt traits:
+   - 16:9 aspect ratio, ~1024×576
+   - Soft horizontal gradient: brand teal on the left, warm orange-cream
+     on the right
+   - Flat vector illustration with soft drop shadows
+   - Brand palette only — teal `#00A9A5`, orange `#FF7F50`,
+     red `#B93135`, dark navy for accents
+   - Subject reflects the entry's headline noun (a folder for folder
+     work, a magnifier for search, a key for BYOK, etc.)
+   - Decorative sparkles, dots, and motion-line dashes scattered around
+   - **No embedded text or words anywhere** — the thumbnail is rendered
+     as small as 144×80 and any baked-in text becomes illegible noise
+   - Pass the existing `whatsnew-panel.png` (or another existing entry)
+     as a `reference_image_paths` so the model has a concrete style
+     anchor.
+3. **Save the file at the canonical path** so the entry's `image` field
+   resolves on first load:
+   ```bash
+   cp "<generated-path>" "public/whats-new/whatsnew-v<version>.png"
+   ```
+   `GenerateImage` writes to a `~/.cursor` assets dir, not the workspace,
+   so the copy is mandatory.
+4. **Verify it loads** in `npm run dev` — the bell row should show your
+   art, not the Sparkles fallback. If it shows Sparkles, the path in
+   `data/whatsNew.ts` doesn't match the file on disk.
+
+The deploy gate validates the *entry exists*, not that the image is
+present, so missing art will silently ship to production. Don't rely on
+the gate to catch this — generate the image as part of authoring or the
+work isn't done.
 
 ## How the deploy gate works
 
@@ -144,6 +197,10 @@ hotfix on an old branch), set `SKIP_WHATS_NEW_CHECK=1` for that build.
 Before considering the entry "done":
 
 - [ ] `npm run build` passes (gate + bundle).
+- [ ] **Hero image generated and saved** at
+      `public/whats-new/whatsnew-v<version>.png` — see "Generate the
+      image yourself" above. The deploy gate does NOT catch a missing
+      image, so this is a manual step you can't skip.
 - [ ] In `npm run dev`, the bell shows the new row at the top with the
       thumbnail rendered (not the Sparkles fallback).
 - [ ] Hovering the new row floats the larger preview to the left of the
