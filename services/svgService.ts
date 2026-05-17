@@ -280,7 +280,8 @@ export const refineSvg = async (
   const parts = [
     systemPrompt?.trim() ? `System Instruction: ${systemPrompt.trim()}\n` : '',
     `Here is the current SVG:\n${currentSvgCode}\n`,
-    `Please modify it: ${refinementPrompt}`,
+    `Apply this change with minimal edits — preserve structure, ids, groups, and geometry unless the request requires replacing them. Do not rewrite the whole document.`,
+    `Modification request: ${refinementPrompt}`,
     colors ? `Color Palette: Keep using these colors: ${colors}` : '',
     `Output ONLY the modified SVG code. No explanation, no markdown fences.`,
   ];

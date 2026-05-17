@@ -9,6 +9,42 @@ import {
   type ExpandPromptContext,
 } from './correctionAnalysisShared';
 
+const base64ToImageBlob = (base64Data: string, mimeType: string): Blob => {
+  const normalized = base64Data.replace(/\s+/g, '');
+  const binary = atob(normalized);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType || 'image/png' });
+};
+
+const buildOpenAiRefineEditPrompt = (
+  refinementText: string,
+  config: GenerationConfig,
+  context: CorrectionAnalysisContext
+): string => {
+  const colorScheme = context.brandColors.find((c) => c.id === config.colorSchemeId);
+  const style = context.visualStyles.find((s) => s.id === config.visualStyleId);
+  const colors = colorScheme ? colorScheme.colors.join(', ') : '';
+  const styleDesc = style
+    ? `${style.name}${style.description ? ` — ${style.description}` : ''}`
+    : '';
+
+  return `
+Edit the input image with minimal, localized changes. The output should read as the same picture after a focused revision — not a brand-new image or scene.
+
+Preserve unless the user explicitly asks to change them: composition, framing, subjects, poses, recognizable identity, layout, logos, lighting, rendering style, and all on-image text (same wording, language, spelling, and placement).
+
+Apply only what this request requires. Do not redraw, "improve", or restyle unrelated areas.
+
+User request: ${refinementText}
+
+For any pixels you must alter, stay coherent with:
+${styleDesc ? `- Visual style: ${styleDesc}` : '- Visual style: match the source image exactly'}
+${colors ? `- Brand palette (hex): ${colors}` : ''}
+`.trim();
+};
+
 export type OpenAIImageQuality = 'low' | 'medium' | 'high' | 'auto';
 
 /**
@@ -246,6 +282,115 @@ export const generateOpenAIImage = async (
     mimeType = fetched.mime;
   } else {
     throw new Error('OpenAI image generation returned neither b64_json nor url');
+  }
+
+  const imageUrl = `data:${mimeType};base64,${base64Data}`;
+
+  return {
+    imageUrl,
+    base64Data: base64Data!,
+    mimeType
+  };
+};
+
+/**
+ * Refine an existing raster using OpenAI's image edits endpoint so the model receives the source pixels
+ * (text-only /generations refinement tends to produce unrelated new images).
+ */
+export const refineOpenAIImage = async (
+  currentImage: GeneratedImage,
+  refinementText: string,
+  config: GenerationConfig,
+  context: CorrectionAnalysisContext,
+  apiKey: string,
+  options: OpenAIGenerateOptions = {}
+): Promise<GeneratedImage> => {
+  const apiModel = resolveApiModel(options.modelId);
+
+  if (!apiKey?.trim()) {
+    throw new Error(`OpenAI API key is required for ${apiModel}`);
+  }
+
+  const sourceImage = await resolveImageInputForRefinement(currentImage);
+  const size = aspectToSize(apiModel, config.aspectRatio);
+  const quality: OpenAIImageQuality = options.quality || 'auto';
+  const systemPrompt = options.systemPrompt?.trim();
+
+  const editInstructions = buildOpenAiRefineEditPrompt(refinementText, config, context);
+  const prompt =
+    systemPrompt && systemPrompt.length > 0
+      ? `${systemPrompt}\n\n${editInstructions}`
+      : editInstructions;
+
+  const formData = new FormData();
+  formData.append('model', apiModel);
+  formData.append('prompt', prompt);
+  formData.append('size', size);
+  formData.append('n', '1');
+
+  if (apiModel !== 'gpt-image-1.5' && quality !== 'auto') {
+    formData.append('quality', quality);
+  }
+
+  if (apiModel === 'gpt-image-1.5' || apiModel === 'gpt-image-1-mini') {
+    formData.append('input_fidelity', 'high');
+  }
+
+  const blob = base64ToImageBlob(sourceImage.base64Data, sourceImage.mimeType);
+  const ext =
+    sourceImage.mimeType.includes('jpeg') || sourceImage.mimeType.includes('jpg')
+      ? 'jpg'
+      : 'png';
+  formData.append('image[]', blob, `source.${ext}`);
+
+  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let code: string | undefined;
+    let errorType: string | undefined;
+    let rawMessage = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      const errObj = parsed?.error || parsed;
+      code = errObj?.code || undefined;
+      errorType = errObj?.type || undefined;
+      rawMessage = errObj?.message || errText;
+    } catch {
+      // keep errText
+    }
+    const { message, fatal } = describeOpenAIError(response.status, code, errorType, rawMessage);
+    throw new OpenAIGenerationError({
+      message,
+      status: response.status,
+      code,
+      errorType,
+      fatal
+    });
+  }
+
+  const json = await response.json();
+  const data = json?.data?.[0];
+  if (!data) {
+    throw new Error('OpenAI image edit returned no image data');
+  }
+
+  let base64Data: string | undefined;
+  let mimeType = 'image/png';
+  if (data.b64_json) {
+    base64Data = data.b64_json;
+  } else if (data.url) {
+    const fetched = await fetchToBase64(data.url);
+    base64Data = fetched.base64;
+    mimeType = fetched.mime;
+  } else {
+    throw new Error('OpenAI image edit returned neither b64_json nor url');
   }
 
   const imageUrl = `data:${mimeType};base64,${base64Data}`;

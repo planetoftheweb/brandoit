@@ -308,8 +308,11 @@ export const refineGraphic = async (
     Keep the same central subject scale and placement logic from the original composition.
   `.trim()
     : `
-    Preserve the existing composition, visual style, and palette unless explicitly changed.
-    Keep existing text and labels stable unless the request explicitly asks to rewrite them.
+    Treat the attached raster as the only source of truth — edit it in place, do not re-imagine or replace the whole piece.
+    Apply the smallest change that satisfies the request; prefer local adjustments only where needed.
+    Preserve composition, framing, subjects, poses, facial identity, layout, logos, icons, lighting, and the established art style unless the request explicitly changes them.
+    Keep all on-image text: same wording, language, spelling, and relative placement unless the user explicitly asks to change or remove text.
+    Do not "upgrade", beautify, or redraw unrelated regions; do not change genre or start a new scene.
   `.trim();
 
   const fillCanvasDirective = options?.forceFillCanvas
@@ -321,9 +324,9 @@ export const refineGraphic = async (
     : '';
 
   const fullRefinementPrompt = `
-    Edit this exact image with minimal necessary changes.
-    Request: ${refinementPrompt}.
-    Maintain the existing style (${styleDesc}) and color palette (${colors}).
+    Refine this exact image — same picture after a focused edit, not a new image.
+    User request: ${refinementPrompt}
+    For any new or adjusted pixels, stay coherent with the existing style (${styleDesc}) and palette (${colors}).
     ${ratioDirective}
     ${strictPreservationDirective}
     ${fillCanvasDirective}

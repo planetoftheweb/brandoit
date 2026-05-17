@@ -19,7 +19,12 @@ import {
   analyzeImageForCorrectionPrompt,
   expandPrompt
 } from './services/geminiService';
-import { generateOpenAIImage, analyzeImageForCorrectionPromptOpenAI, expandPromptOpenAI } from './services/openaiService';
+import {
+  generateOpenAIImage,
+  refineOpenAIImage,
+  analyzeImageForCorrectionPromptOpenAI,
+  expandPromptOpenAI,
+} from './services/openaiService';
 import { resolveAuxiliaryByokProvider, getApiKeyForModelFromUser, getGeminiApiKeyForAnalysis } from './services/correctionAnalysisRouter';
 import { generateSvg, refineSvg } from './services/svgService';
 import { getAspectRatiosForModel, getSafeAspectRatioForModel, extractAspectRatioFromText, normalizeAspectRatio } from './services/aspectRatioService';
@@ -1631,8 +1636,6 @@ const App: React.FC = () => {
       if (safeAspectRatio !== config.aspectRatio) {
         setConfig(prev => ({ ...prev, aspectRatio: safeAspectRatio }));
       }
-      const structuredPrompt = buildStructuredPrompt(safeConfig);
-
       const currentImage: GeneratedImage = {
         imageUrl: currentVersion.imageUrl,
         base64Data: currentVersion.imageData,
@@ -1649,12 +1652,18 @@ const App: React.FC = () => {
         selectedModel === 'openai-mini'
       ) {
         if (!customKey) throw new Error('OpenAI API key is required for image generation.');
-        const refinementRequest = `${structuredPrompt}\nRefinement: ${refinementText}`;
-        result = await generateOpenAIImage(refinementRequest, safeConfig, customKey, {
-          modelId: selectedModel,
-          quality: user?.preferences.settings?.openaiImageQuality || 'auto',
-          systemPrompt: user?.preferences.systemPrompt
-        });
+        result = await refineOpenAIImage(
+          currentImage,
+          refinementText,
+          safeConfig,
+          context,
+          customKey,
+          {
+            modelId: selectedModel,
+            quality: user?.preferences.settings?.openaiImageQuality || 'auto',
+            systemPrompt: user?.preferences.systemPrompt,
+          }
+        );
       } else {
         result = await refineGraphic(
           currentImage,
