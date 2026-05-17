@@ -2452,6 +2452,20 @@ const App: React.FC = () => {
     const result = await folderService.createFolder(user || null, name, folders);
     setFolders(result.folders);
     setActiveFolderId(result.activeFolderId);
+    if (user) {
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              preferences: {
+                ...prev.preferences,
+                folders: result.folders,
+                activeFolderId: result.activeFolderId,
+              },
+            }
+          : prev
+      );
+    }
     return result.folder;
   };
 
@@ -2464,6 +2478,11 @@ const App: React.FC = () => {
       nextName
     );
     setFolders(nextFolders);
+    if (user) {
+      setUser((prev) =>
+        prev ? { ...prev, preferences: { ...prev.preferences, folders: nextFolders } } : prev
+      );
+    }
   };
 
   const handleDeleteFolder = async (folderId: string) => {
@@ -2494,11 +2513,38 @@ const App: React.FC = () => {
     );
     setFolders(result.folders);
     setActiveFolderId(result.activeFolderId);
+    if (user) {
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              preferences: {
+                ...prev.preferences,
+                folders: result.folders,
+                activeFolderId: result.activeFolderId,
+              },
+            }
+          : prev
+      );
+    }
   };
 
   const handleSetActiveFolder = async (folderId: string | null) => {
     const next = await folderService.setActiveFolder(user || null, folders, folderId);
     setActiveFolderId(next);
+    if (user) {
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              preferences: {
+                ...prev.preferences,
+                activeFolderId: next,
+              },
+            }
+          : prev
+      );
+    }
   };
 
   const handleGalleryViewFolderChange = async (folderId: string) => {
