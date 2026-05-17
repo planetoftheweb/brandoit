@@ -37,7 +37,10 @@ interface ImageDisplayProps {
   /** AI-expand the refine draft (or the tile's original prompt when the draft is empty). */
   onExpandRefinementPrompt: (draft: string) => Promise<string>;
   onResizeCanvasRefine: (targetAspectRatio: string) => Promise<void>;
+  /** True while refine / recompose preview work is in flight (serialized queue). */
   isRefining: boolean;
+  /** True while a fresh batch generation is starting and no tile is on the canvas yet. */
+  isBatchStarting?: boolean;
   onCopy?: () => void;
   onDelete?: () => void;
   onVersionChange: (index: number) => void;
@@ -71,6 +74,14 @@ interface ImageDisplayProps {
   onNavigateToGeneration?: (gen: Generation) => void;
 }
 
+/** Keydown targets where cursor/preview idle auto-hide should pause while the user types. */
+const isTypingInteractionTarget = (t: EventTarget | null): boolean => {
+  const el = t as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+};
+
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
   generation,
   onRefine,
@@ -78,6 +89,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onExpandRefinementPrompt,
   onResizeCanvasRefine,
   isRefining,
+  isBatchStarting = false,
   onCopy,
   onDelete,
   onVersionChange,
@@ -192,7 +204,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [resizeAspectRatio, setResizeAspectRatio] = useState('');
   /** True while refine / analysis / expand / recompose is in flight. */
   const refinementControlsLocked =
-    isRefining || isAnalyzingRefinePrompt || isResizingCanvas || isExpandingRefinement;
+    isAnalyzingRefinePrompt || isResizingCanvas || isExpandingRefinement;
   // True while the user is actively dragging the JuxtaposeSlider divider.
   // Used to mute the in-image overlays (rail, version chip, action buttons,
   // compare overlay, etc.) so the user gets a clean before/after read while
@@ -554,8 +566,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     };
 
     // Navigation-style keys: arrows walk the slideshow, H toggles chrome.
-    // Anything else (modifiers alone, typing into a focused input that
-    // somehow bubbled, etc.) leaves the cursor state untouched.
+    // Typing in any text control clears the idle hide — otherwise the cursor
+    // vanishes mid-keystroke when the pointer happened to stay still.
     const NAV_KEYS = new Set([
       'ArrowLeft',
       'ArrowRight',
@@ -565,6 +577,14 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
       'H',
     ]);
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isTypingInteractionTarget(e.target)) {
+        setIsFullscreenCursorVisible(true);
+        if (hideTimer !== null) {
+          window.clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+        return;
+      }
       if (!NAV_KEYS.has(e.key)) return;
       setIsFullscreenCursorVisible(false);
       if (hideTimer !== null) {
@@ -600,6 +620,8 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   // and a hovering chrome layer are just visual noise. We skip the
   // suppression when the keydown originates from a form control so typing
   // in a refine textarea (Arrow keys move the caret) doesn't blank the UI.
+  // Any typing in a text control also cancels the idle timer so the canvas
+  // chrome does not auto-hide while the prompt still has focus.
   //
   // Effect bails out entirely while the fullscreen overlay is up — that
   // layer has its own cursor effect and the preview is occluded anyway.
@@ -651,16 +673,12 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
 
     const NAV_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!NAV_KEYS.has(e.key)) return;
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
+      if (isTypingInteractionTarget(e.target)) {
+        setIsPreviewMouseIdle(false);
+        clearHideTimer();
         return;
       }
+      if (!NAV_KEYS.has(e.key)) return;
       setIsPreviewMouseIdle(true);
       clearHideTimer();
     };
@@ -1338,12 +1356,9 @@ ${version.svgCode}
   }, [generation?.id, generation?.config.aspectRatio, version?.id, version?.aspectRatio, resizeAspectRatios]);
 
   if (!generation || !version) {
-    // When a brand-new batch is starting (`isRefining`), show a clear
-    // "Generating…" state instead of the static "Ready to Create"
-    // placeholder. Without this, users couldn't tell whether their click
-    // had registered, because the previous result had already been
-    // cleared from the canvas but no first result has come back yet.
-    if (isRefining) {
+    // When a brand-new batch is starting (`isBatchStarting`) or preview pipelines
+    // are busy before the first tile mounts, show "Generating…" instead of "Ready".
+    if (isBatchStarting || isRefining) {
       return (
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center h-full min-h-[60vh] text-slate-900 dark:text-white">
           <div className="w-24 h-24 rounded-3xl bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] flex items-center justify-center mb-6 shadow-xl shadow-slate-200 dark:shadow-black/50">

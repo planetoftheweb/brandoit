@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { RecentGenerations } from './components/RecentGenerations';
@@ -354,13 +354,34 @@ const App: React.FC = () => {
   const [activeFolderId, setActiveFolderId] = useState<string | undefined>(undefined);
   /** Recents gallery folder tab; persisted (Firestore / guest localStorage). */
   const [galleryViewFolderId, setGalleryViewFolderId] = useState<string>(INBOX_FOLDER_ID);
-  const [isGenerating, setIsGenerating] = useState(false);
+  /** Refine / recompose jobs: depth > 0 drives in-flight spinners; work is serialized to avoid version races. */
+  const [previewPipelineDepth, setPreviewPipelineDepth] = useState(0);
+  const previewWorkChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const currentGenerationRef = useRef<Generation | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeGenerationJobs, setActiveGenerationJobs] = useState<ActiveGenerationJob[]>([]);
   const hasRunningGenerationJobs = activeGenerationJobs.some((job) =>
     job.status === 'running' || job.status === 'stopping'
   );
+
+  useEffect(() => {
+    currentGenerationRef.current = currentGeneration;
+  }, [currentGeneration]);
+
+  const enqueuePreviewWork = useCallback((work: () => Promise<void>) => {
+    setPreviewPipelineDepth((n) => n + 1);
+    const next = previewWorkChainRef.current.then(() => work());
+    previewWorkChainRef.current = next.catch((err: unknown) => {
+      const msg =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Operation failed';
+      setError(msg);
+    });
+    void next.finally(() => {
+      setPreviewPipelineDepth((n) => Math.max(0, n - 1));
+    });
+    return next;
+  }, []);
   // Active Generations panel can be docked to a small floating pill so it
   // doesn't cover the main preview while batches run.
   const [isGenerationsPanelCollapsed, setIsGenerationsPanelCollapsed] = useState(false);
@@ -1609,24 +1630,25 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRefine = async (refinementText: string) => {
-    if (!currentGeneration) return;
+  const handleRefine = (refinementText: string) => {
+    void enqueuePreviewWork(async () => {
+      const currentGeneration = currentGenerationRef.current;
+      if (!currentGeneration) return;
 
-    setIsGenerating(true);
-    setError(null);
-    try {
-      if (!user) {
-        openAuthModal('signup');
-        throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to refine images.');
-      }
+      setError(null);
+      try {
+        if (!user) {
+          openAuthModal('signup');
+          throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to refine images.');
+        }
 
-      const customKey = getActiveApiKey();
-      if (!customKey) {
-        setSettingsMode(true);
-        throw new Error('Add your API key in Settings before refining. Free accounts use BYOK keys.');
-      }
+        const customKey = getActiveApiKey();
+        if (!customKey) {
+          setSettingsMode(true);
+          throw new Error('Add your API key in Settings before refining. Free accounts use BYOK keys.');
+        }
 
-      const currentVersion = getCurrentVersion(currentGeneration);
+        const currentVersion = getCurrentVersion(currentGeneration);
       const requestedAspectRatio = extractAspectRatioFromText(refinementText, selectedModel, aspectRatios);
       const currentVersionAspectRatio =
         normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
@@ -1685,16 +1707,16 @@ const App: React.FC = () => {
         safeAspectRatio
       );
       setCurrentGeneration(updatedGeneration);
+      currentGenerationRef.current = updatedGeneration;
 
       await historyService.updateGeneration(user, updatedGeneration);
       const updatedHistory = await historyService.getHistory(user);
       setHistory(updatedHistory);
 
-    } catch (err: any) {
-      setError(err.message || 'Failed to refine image.');
-    } finally {
-      setIsGenerating(false);
-    }
+      } catch (err: any) {
+        setError(err.message || 'Failed to refine image.');
+      }
+    });
   };
 
   const handleAnalyzeRefinePrompt = async (): Promise<string> => {
@@ -1845,161 +1867,162 @@ const App: React.FC = () => {
   };
 
   const handleResizeCanvasRefine = async (targetAspectRatioInput: string): Promise<void> => {
-    if (!currentGeneration) {
-      throw new Error('Restore or generate an image first.');
-    }
-
-    if (!user) {
-      openAuthModal('signup');
-      throw new Error('Create a free account and add your API key in Settings before resizing canvas.');
-    }
-
-    const targetModel =
-      selectedModel === 'gemini' || selectedModel === 'gemini-3.1-flash-image-preview'
-        ? selectedModel
-        : 'gemini';
-    const customKey = getApiKeyForModel(targetModel);
-    if (!customKey) {
-      setSettingsMode(true);
-      throw new Error('Add a Gemini API key in Settings to run canvas resize.');
-    }
-
-    const currentVersion = getCurrentVersion(currentGeneration);
-    if (currentVersion.mimeType === 'image/svg+xml') {
-      throw new Error('Resize Canvas is currently optimized for raster images.');
-    }
-
-    const targetAspectRatio = getSafeAspectRatioForModel(targetModel, targetAspectRatioInput, aspectRatios);
-    const sourceAspectRatio = normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
-    const normalizedTarget = normalizeAspectRatio(targetAspectRatio);
-
-    if (!normalizedTarget) {
-      throw new Error('Choose a valid target Size before resizing.');
-    }
-
-    if (sourceAspectRatio === normalizedTarget) {
-      throw new Error(`Target size is already ${normalizedTarget}. Choose a different Size first.`);
-    }
-
-    if (selectedModel !== targetModel) {
-      handleModelChange(targetModel);
-    }
-
-    setIsGenerating(true);
-    setError(null);
-    try {
-      const currentImage: GeneratedImage = {
-        imageUrl: currentVersion.imageUrl,
-        base64Data: currentVersion.imageData,
-        mimeType: currentVersion.mimeType,
-      };
-
-      const resizeConfig: GenerationConfig = {
-        ...config,
-        aspectRatio: targetAspectRatio
-      };
-
-      const colorScheme = context.brandColors.find(c => c.id === resizeConfig.colorSchemeId);
-      const style = context.visualStyles.find(s => s.id === resizeConfig.visualStyleId);
-      const type = context.graphicTypes.find(t => t.id === resizeConfig.graphicTypeId);
-      const lockedResizePrompt = [
-        `Aspect-ratio recomposition only: ${sourceAspectRatio || 'current'} -> ${normalizedTarget}.`,
-        `Output must fully use the ${normalizedTarget} canvas without blank margins, color bars, or simple padded background extension.`,
-        `Treat the source image as authoritative. Keep the same subject, illustration style, typography style, color palette, and overall design language (${type?.name || 'infographic'} / ${style?.name || 'current style'} / ${colorScheme ? `${colorScheme.name} (${colorScheme.colors.join(', ')})` : 'source palette'}).`,
-        'Preserve existing text and labels verbatim unless there is an obvious typo; do not invent unrelated copy or random detached icons.',
-        'Recompose layout for the new ratio by repositioning/expanding existing callouts and decorative structure so the result feels intentionally designed for this canvas.',
-        'Keep the central figure and core information hierarchy intact, avoid major redraws, and avoid style drift or photorealism.'
-      ].join(' ');
-
-      const firstPassResult = await refineGraphic(
-        currentImage,
-        lockedResizePrompt,
-        resizeConfig,
-        context,
-        customKey,
-        user?.preferences.systemPrompt,
-        targetModel,
-        sourceAspectRatio || currentGeneration.config.aspectRatio,
-        {
-          forceAspectOnlyEdit: true,
-          forceFillCanvas: true
-        }
-      );
-
-      let result = firstPassResult;
-      try {
-        let looksPadded = await detectLikelyCanvasPadding(firstPassResult);
-        if (looksPadded) {
-          const secondPassPrompt = [
-            `Second pass correction for ${normalizedTarget}: remove any empty side/top/bottom margins, border framing, or padded background from the previous output.`,
-            'Rebuild layout so designed content fills almost the entire canvas while keeping the same subject, style, text, and palette.',
-            'Do not produce a centered poster look; preserve the original visual identity and information hierarchy.'
-          ].join(' ');
-
-          result = await refineGraphic(
-            firstPassResult,
-            secondPassPrompt,
-            resizeConfig,
-            context,
-            customKey,
-            user?.preferences.systemPrompt,
-            targetModel,
-            normalizedTarget,
-            {
-              forceAspectOnlyEdit: true,
-              forceFillCanvas: true
-            }
-          );
-          looksPadded = await detectLikelyCanvasPadding(result);
-        }
-
-        if (looksPadded) {
-          const conceptBrief = await describeImagePrompt(
-            currentVersion.imageData,
-            currentVersion.mimeType,
-            customKey
-          );
-          const styleReferencePrompt = [
-            `Rebuild this as a new composition at ${normalizedTarget}.`,
-            'Use the original image as style reference only, not as a layout template.',
-            'Keep the same subject matter and information intent, but redesign layout for this canvas.',
-            `Concept brief: ${conceptBrief}`,
-            'Prioritize clean typography, coherent callout placement, and full-canvas composition with no side padding.'
-          ].join(' ');
-
-          result = await generateGraphicWithStyleReference(
-            currentImage,
-            styleReferencePrompt,
-            resizeConfig,
-            context,
-            customKey,
-            user?.preferences.systemPrompt,
-            targetModel
-          );
-        }
-      } catch (qualityCheckError) {
-        console.warn('Resize quality check failed; keeping first pass result.', qualityCheckError);
+    return enqueuePreviewWork(async () => {
+      const currentGeneration = currentGenerationRef.current;
+      if (!currentGeneration) {
+        throw new Error('Restore or generate an image first.');
       }
 
-      const updatedGeneration = await addRefinementVersion(
-        currentGeneration,
-        result,
-        `Recompose resize to ${normalizedTarget} (same style)`,
-        targetModel,
-        targetAspectRatio
-      );
-      setCurrentGeneration(updatedGeneration);
-      setConfig(prev => ({ ...prev, aspectRatio: targetAspectRatio }));
+      if (!user) {
+        openAuthModal('signup');
+        throw new Error('Create a free account and add your API key in Settings before resizing canvas.');
+      }
 
-      await historyService.updateGeneration(user, updatedGeneration);
-      const updatedHistory = await historyService.getHistory(user);
-      setHistory(updatedHistory);
-    } catch (err: any) {
-      setError(err.message || 'Failed to resize canvas.');
-      throw err;
-    } finally {
-      setIsGenerating(false);
-    }
+      const targetModel =
+        selectedModel === 'gemini' || selectedModel === 'gemini-3.1-flash-image-preview'
+          ? selectedModel
+          : 'gemini';
+      const customKey = getApiKeyForModel(targetModel);
+      if (!customKey) {
+        setSettingsMode(true);
+        throw new Error('Add a Gemini API key in Settings to run canvas resize.');
+      }
+
+      const currentVersion = getCurrentVersion(currentGeneration);
+      if (currentVersion.mimeType === 'image/svg+xml') {
+        throw new Error('Resize Canvas is currently optimized for raster images.');
+      }
+
+      const targetAspectRatio = getSafeAspectRatioForModel(targetModel, targetAspectRatioInput, aspectRatios);
+      const sourceAspectRatio = normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
+      const normalizedTarget = normalizeAspectRatio(targetAspectRatio);
+
+      if (!normalizedTarget) {
+        throw new Error('Choose a valid target Size before resizing.');
+      }
+
+      if (sourceAspectRatio === normalizedTarget) {
+        throw new Error(`Target size is already ${normalizedTarget}. Choose a different Size first.`);
+      }
+
+      if (selectedModel !== targetModel) {
+        handleModelChange(targetModel);
+      }
+
+      setError(null);
+      try {
+        const currentImage: GeneratedImage = {
+          imageUrl: currentVersion.imageUrl,
+          base64Data: currentVersion.imageData,
+          mimeType: currentVersion.mimeType,
+        };
+
+        const resizeConfig: GenerationConfig = {
+          ...config,
+          aspectRatio: targetAspectRatio
+        };
+
+        const colorScheme = context.brandColors.find(c => c.id === resizeConfig.colorSchemeId);
+        const style = context.visualStyles.find(s => s.id === resizeConfig.visualStyleId);
+        const type = context.graphicTypes.find(t => t.id === resizeConfig.graphicTypeId);
+        const lockedResizePrompt = [
+          `Aspect-ratio recomposition only: ${sourceAspectRatio || 'current'} -> ${normalizedTarget}.`,
+          `Output must fully use the ${normalizedTarget} canvas without blank margins, color bars, or simple padded background extension.`,
+          `Treat the source image as authoritative. Keep the same subject, illustration style, typography style, color palette, and overall design language (${type?.name || 'infographic'} / ${style?.name || 'current style'} / ${colorScheme ? `${colorScheme.name} (${colorScheme.colors.join(', ')})` : 'source palette'}).`,
+          'Preserve existing text and labels verbatim unless there is an obvious typo; do not invent unrelated copy or random detached icons.',
+          'Recompose layout for the new ratio by repositioning/expanding existing callouts and decorative structure so the result feels intentionally designed for this canvas.',
+          'Keep the central figure and core information hierarchy intact, avoid major redraws, and avoid style drift or photorealism.'
+        ].join(' ');
+
+        const firstPassResult = await refineGraphic(
+          currentImage,
+          lockedResizePrompt,
+          resizeConfig,
+          context,
+          customKey,
+          user?.preferences.systemPrompt,
+          targetModel,
+          sourceAspectRatio || currentGeneration.config.aspectRatio,
+          {
+            forceAspectOnlyEdit: true,
+            forceFillCanvas: true
+          }
+        );
+
+        let result = firstPassResult;
+        try {
+          let looksPadded = await detectLikelyCanvasPadding(firstPassResult);
+          if (looksPadded) {
+            const secondPassPrompt = [
+              `Second pass correction for ${normalizedTarget}: remove any empty side/top/bottom margins, border framing, or padded background from the previous output.`,
+              'Rebuild layout so designed content fills almost the entire canvas while keeping the same subject, style, text, and palette.',
+              'Do not produce a centered poster look; preserve the original visual identity and information hierarchy.'
+            ].join(' ');
+
+            result = await refineGraphic(
+              firstPassResult,
+              secondPassPrompt,
+              resizeConfig,
+              context,
+              customKey,
+              user?.preferences.systemPrompt,
+              targetModel,
+              normalizedTarget,
+              {
+                forceAspectOnlyEdit: true,
+                forceFillCanvas: true
+              }
+            );
+            looksPadded = await detectLikelyCanvasPadding(result);
+          }
+
+          if (looksPadded) {
+            const conceptBrief = await describeImagePrompt(
+              currentVersion.imageData,
+              currentVersion.mimeType,
+              customKey
+            );
+            const styleReferencePrompt = [
+              `Rebuild this as a new composition at ${normalizedTarget}.`,
+              'Use the original image as style reference only, not as a layout template.',
+              'Keep the same subject matter and information intent, but redesign layout for this canvas.',
+              `Concept brief: ${conceptBrief}`,
+              'Prioritize clean typography, coherent callout placement, and full-canvas composition with no side padding.'
+            ].join(' ');
+
+            result = await generateGraphicWithStyleReference(
+              currentImage,
+              styleReferencePrompt,
+              resizeConfig,
+              context,
+              customKey,
+              user?.preferences.systemPrompt,
+              targetModel
+            );
+          }
+        } catch (qualityCheckError) {
+          console.warn('Resize quality check failed; keeping first pass result.', qualityCheckError);
+        }
+
+        const updatedGeneration = await addRefinementVersion(
+          currentGeneration,
+          result,
+          `Recompose resize to ${normalizedTarget} (same style)`,
+          targetModel,
+          targetAspectRatio
+        );
+        setCurrentGeneration(updatedGeneration);
+        currentGenerationRef.current = updatedGeneration;
+        setConfig(prev => ({ ...prev, aspectRatio: targetAspectRatio }));
+
+        await historyService.updateGeneration(user, updatedGeneration);
+        const updatedHistory = await historyService.getHistory(user);
+        setHistory(updatedHistory);
+      } catch (err: any) {
+        setError(err.message || 'Failed to resize canvas.');
+        throw err;
+      }
+    });
   };
 
   const handleRestoreFromHistory = async (gen: Generation) => {
@@ -3276,7 +3299,8 @@ const App: React.FC = () => {
                 onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
                 onExpandRefinementPrompt={handleExpandRefinementPrompt}
                 onResizeCanvasRefine={handleResizeCanvasRefine}
-                isRefining={isGenerating}
+                isBatchStarting={hasRunningGenerationJobs}
+                isRefining={previewPipelineDepth > 0}
                 onCopy={handleCopyCurrent}
                 onDelete={() => {
                   // The ImageDisplay delete button now self-confirms via a
