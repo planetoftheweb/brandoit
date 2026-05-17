@@ -1,4 +1,5 @@
 import { Generation, GenerationVersion } from "../types";
+import { getLatestVersion } from "./historyService";
 import { buildExportFilename } from "./versionUtils";
 import { webpToPngBlob, makeImageUrl } from "./imageConversionService";
 import { getBlobFromImageSource } from "./imageSourceService";
@@ -264,11 +265,34 @@ export const singleDownloadOptions = (
 };
 
 /**
- * Format options for batch ZIP output. SVGs always stay SVG inside the ZIP;
- * this list only affects raster items.
+ * True when a tile batch ZIP would include at least one SVG mark (same version
+ * sweep as `batchExportService.buildGenerationsZipBlob`).
  */
-export const batchFormatOptions: FormatOption[] = [
-  { id: "original", label: "Original (WebP + SVG)", description: "No re-encoding" },
-  { id: "png", label: "PNG (+ SVG kept)", description: "Re-encode rasters to PNG" },
-  { id: "webp", label: "WebP (+ SVG kept)", description: "Re-encode rasters to WebP" },
-];
+export const tileBatchIncludesSvg = (generations: Generation[]): boolean => {
+  for (const gen of generations) {
+    const generationVersions = gen.versions.filter((v) => v.type === "generation");
+    const versionsToCheck =
+      generationVersions.length > 0 ? generationVersions : [getLatestVersion(gen)];
+    for (const v of versionsToCheck) {
+      if (isSvgVersion(v)) return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Labels for batch ZIP — mention SVG only when the tile actually has vector marks.
+ * Raster-only tiles get plain Original / PNG / WebP copy.
+ */
+export const batchFormatOptionsForTile = (includesSvg: boolean): FormatOption[] =>
+  includesSvg
+    ? [
+        { id: "original", label: "Original (WebP + SVG)", description: "No re-encoding" },
+        { id: "png", label: "PNG (+ SVG kept)", description: "Re-encode rasters to PNG" },
+        { id: "webp", label: "WebP (+ SVG kept)", description: "Re-encode rasters to WebP" },
+      ]
+    : [
+        { id: "original", label: "Original", description: "No re-encoding" },
+        { id: "png", label: "PNG", description: "Re-encode to PNG" },
+        { id: "webp", label: "WebP", description: "Re-encode to WebP" },
+      ];

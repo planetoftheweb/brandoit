@@ -2452,6 +2452,7 @@ const App: React.FC = () => {
     const result = await folderService.createFolder(user || null, name, folders);
     setFolders(result.folders);
     setActiveFolderId(result.activeFolderId);
+    setGalleryViewFolderId(result.folder.id);
     if (user) {
       setUser((prev) =>
         prev
@@ -2461,6 +2462,7 @@ const App: React.FC = () => {
                 ...prev.preferences,
                 folders: result.folders,
                 activeFolderId: result.activeFolderId,
+                galleryViewFolderId: result.folder.id,
               },
             }
           : prev
@@ -2548,7 +2550,6 @@ const App: React.FC = () => {
   };
 
   const handleGalleryViewFolderChange = async (folderId: string) => {
-    if (!folders.some((f) => f.id === folderId)) return;
     setGalleryViewFolderId(folderId);
     try {
       await folderService.setGalleryViewFolder(user || null, folderId);

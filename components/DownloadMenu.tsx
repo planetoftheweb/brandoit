@@ -14,7 +14,8 @@ import {
   buildVersionDownload,
   downloadBlob,
   singleDownloadOptions,
-  batchFormatOptions,
+  batchFormatOptionsForTile,
+  tileBatchIncludesSvg,
 } from "../services/imageFormatService";
 import {
   buildGenerationsZipBlob,
@@ -90,6 +91,8 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
   const version = currentGeneration ? getCurrentVersion(currentGeneration) : null;
   const thisFormats = singleDownloadOptions(version);
   const allCount = allGenerations?.length ?? 0;
+  const batchIncludesSvg = allGenerations && allCount > 0 ? tileBatchIncludesSvg(allGenerations) : false;
+  const batchOptions = batchFormatOptionsForTile(batchIncludesSvg);
 
   const notify = (message: string) => {
     onNotify?.(message);
@@ -222,7 +225,7 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
               <div className="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 {allLabel || `Download all (${allCount})`}
               </div>
-              {batchFormatOptions.map((opt) => (
+              {batchOptions.map((opt) => (
                 <button
                   key={opt.id}
                   type="button"

@@ -850,7 +850,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     const created = await onCreateFolder(next);
                     setIsCreatingFolder(false);
                     setNewFolderDraft('');
-                    await onGalleryViewFolderChange(created.id);
                     setIsFolderPickerOpen(false);
                     showToast(`Created ${created.name}`);
                   } catch (err) {

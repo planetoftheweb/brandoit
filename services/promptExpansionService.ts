@@ -11,6 +11,10 @@
  * Notes:
  *   - Multiple top-level prompt tiles use a valid JSON array of strings. JSON
  *     owns escaping for commas, quotes, and square brackets inside list items.
+ *   - A single brace group whose comma-separated options each look like
+ *     `"Short title" paragraph...` (quoted title + body) are treated as
+ *     separate tiles, not as one tile with multiple marks — e.g. OpenClaw-style
+ *     stanzas: {"A" ... long text..., "B" ... long text...}
  *   - Literal braces are escaped with a backslash: "\\{" and "\\}".
  *   - Option values are trimmed individually. Consecutive whitespace (including
  *     newlines) inside the literal/option text is collapsed to single spaces so
@@ -136,6 +140,37 @@ const expandOnePrompt = (prompt: string) => {
   };
 };
 
+/** Each option begins with a quoted title then more copy (not Midjourney `{a,b}` chips). */
+const QUOTED_TITLE_STANZA = /^\s*"[^"]+"\s+\S/;
+const MIN_STANZA_LENGTH = 80;
+
+type PromptEntry = {
+  source: string;
+  prompts: string[];
+  hasBraces: boolean;
+};
+
+const shouldSplitQuotedTitleStanzas = (entry: PromptEntry): boolean => {
+  if (!entry.hasBraces || entry.prompts.length <= 1) return false;
+  return entry.prompts.every(
+    (p) => p.length >= MIN_STANZA_LENGTH && QUOTED_TITLE_STANZA.test(p)
+  );
+};
+
+/**
+ * Comma-separated options inside `{...}` normally become multiple *marks* in
+ * one tile. When every option looks like `"Title" long body...`, treat them as
+ * separate *tiles* instead (stanzas separated by `, "Next Title"`).
+ */
+const splitQuotedTitleStanzaEntries = (entry: PromptEntry): PromptEntry[] => {
+  if (!shouldSplitQuotedTitleStanzas(entry)) return [entry];
+  return entry.prompts.map((p) => ({
+    source: p,
+    prompts: [p],
+    hasBraces: false,
+  }));
+};
+
 const parsePromptList = (prompt: string): string[] | null => {
   const trimmed = prompt.trim();
   if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
@@ -169,7 +204,8 @@ export const expandPromptPermutations = (prompt: string): ExpansionResult => {
   }
 
   const promptList = parsePromptList(prompt);
-  const entries = (promptList && promptList.length > 0 ? promptList : [prompt]).map(expandOnePrompt);
+  const entriesRaw = (promptList && promptList.length > 0 ? promptList : [prompt]).map(expandOnePrompt);
+  const entries = entriesRaw.flatMap(splitQuotedTitleStanzaEntries);
   const prompts = entries.flatMap((entry) => entry.prompts);
   const hasBraces = entries.some((entry) => entry.hasBraces);
 

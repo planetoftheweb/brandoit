@@ -127,12 +127,19 @@ const resolveGalleryViewFolderId = (
 const buildNextPreferences = (
   user: User,
   nextFolders: Folder[],
-  nextActiveFolderId: string | undefined
-): UserPreferences => ({
-  ...user.preferences,
-  folders: nextFolders,
-  activeFolderId: nextActiveFolderId
-});
+  nextActiveFolderId: string | undefined,
+  nextGalleryViewFolderId?: string
+): UserPreferences => {
+  const next: UserPreferences = {
+    ...user.preferences,
+    folders: nextFolders,
+    activeFolderId: nextActiveFolderId
+  };
+  if (nextGalleryViewFolderId !== undefined) {
+    next.galleryViewFolderId = nextGalleryViewFolderId;
+  }
+  return next;
+};
 
 /**
  * Persist a folder list (and the optional sticky active folder) for the
@@ -142,16 +149,20 @@ const buildNextPreferences = (
 const persistFolders = async (
   user: User | null,
   folders: Folder[],
-  activeFolderId: string | undefined
+  activeFolderId: string | undefined,
+  galleryViewFolderId?: string
 ): Promise<void> => {
   if (user) {
     await authService.updateUserPreferences(
       user.id,
-      buildNextPreferences(user, folders, activeFolderId)
+      buildNextPreferences(user, folders, activeFolderId, galleryViewFolderId)
     );
   } else {
     writeLocalFolders(folders);
     writeLocalActiveFolderId(activeFolderId);
+    if (galleryViewFolderId !== undefined && galleryViewFolderId.length > 0) {
+      writeLocalGalleryViewFolderId(galleryViewFolderId);
+    }
   }
 };
 
@@ -276,7 +287,9 @@ export const folderService = {
       createdAt: Date.now()
     };
     const folders = ensureInbox([...currentFolders, folder]);
-    await persistFolders(user, folders, folder.id);
+    // Persist gallery target in the same write so a refresh keeps the new tab;
+    // also switch guests' localStorage gallery key immediately.
+    await persistFolders(user, folders, folder.id, folder.id);
     return { folder, folders, activeFolderId: folder.id };
   },
 
