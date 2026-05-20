@@ -1,7 +1,14 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, GripVertical } from 'lucide-react';
+import {
+  buildFolderTree,
+  flattenFolderTree,
+  getChildFolders,
+  getDescendantFolderIds,
+  getEffectiveFolderInstructions,
+} from '../services/folderTreeUtils';
 import { sanitizeSvg } from '../services/svgService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlobUrl } from '../services/imageCache';
@@ -74,14 +81,17 @@ interface RecentGenerationsProps {
   galleryViewFolderId: string;
   /** Persist the user's gallery folder tab (Firestore or guest localStorage). */
   onGalleryViewFolderChange: (folderId: string) => void | Promise<void>;
-  /** Create a new folder; returns the created folder so the gallery can switch view to it. */
-  onCreateFolder: (name: string) => Promise<Folder>;
+  /** Create a folder; optional `parentId` nests it as a subfolder. */
+  onCreateFolder: (name: string, parentId?: string) => Promise<Folder>;
   onRenameFolder: (folderId: string, nextName: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
   /** Pin or clear (`null`) the sticky folder for new generations. */
   onSetActiveFolder: (folderId: string | null) => Promise<void>;
   /** Bulk-move a list of tiles into a folder (used by selection-mode action). */
   onMoveToFolder: (generationIds: string[], folderId: string) => Promise<void>;
+  /** Reparent a folder (drop onto another folder). Pass `null` for top level. */
+  onMoveFolder: (folderId: string, parentId: string | null) => Promise<void>;
+  onSetFolderInstructions: (folderId: string, customInstructions: string) => Promise<void>;
   /**
    * ID of the generation currently rendered in the main `ImageDisplay`. The
    * matching tile in the grid below gets a brand-red ring so the user can
@@ -108,6 +118,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   onDeleteFolder,
   onSetActiveFolder,
   onMoveToFolder,
+  onMoveFolder,
+  onSetFolderInstructions,
   activeGenerationId,
 }) => {
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
@@ -126,8 +138,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [isFolderPickerOpen, setIsFolderPickerOpen] = React.useState(false);
   const folderPickerRef = React.useRef<HTMLDivElement>(null);
   const [isCreatingFolder, setIsCreatingFolder] = React.useState(false);
+  const [createFolderParentId, setCreateFolderParentId] = React.useState<string | undefined>(undefined);
   const [newFolderDraft, setNewFolderDraft] = React.useState('');
   const [folderBusy, setFolderBusy] = React.useState(false);
+  const [instructionsFolderId, setInstructionsFolderId] = React.useState<string | null>(null);
+  const [instructionsDraft, setInstructionsDraft] = React.useState('');
+  const [draggingTileId, setDraggingTileId] = React.useState<string | null>(null);
+  const [draggingFolderId, setDraggingFolderId] = React.useState<string | null>(null);
+  const [dropTargetFolderId, setDropTargetFolderId] = React.useState<string | null>(null);
   const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
   // In-flight move-to-folder progress. `moveProgress` drives a sticky
   // "Moving N items to <folder>…" banner with a spinner so the user sees
@@ -390,6 +408,80 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
     return counts;
   }, [history, folders]);
+
+  const flatFolderRows = React.useMemo(
+    () => flattenFolderTree(buildFolderTree(folders)),
+    [folders]
+  );
+
+  const childFoldersInView = React.useMemo(
+    () => getChildFolders(folders, viewFolderId),
+    [folders, viewFolderId]
+  );
+
+  const viewFolderEffectiveInstructions = React.useMemo(
+    () => getEffectiveFolderInstructions(folders, viewFolderId),
+    [folders, viewFolderId]
+  );
+
+  const applyFolderDrop = async (targetFolderId: string) => {
+    if (draggingTileId) {
+      const ids = selectedIds.includes(draggingTileId) && selectedIds.length > 0
+        ? selectedIds
+        : [draggingTileId];
+      const folder = folders.find((f) => f.id === targetFolderId);
+      if (!folder) return;
+      setMoveProgress({
+        ids: new Set(ids),
+        folderName: folder.name,
+        total: ids.length,
+      });
+      try {
+        setFolderBusy(true);
+        await onMoveToFolder(ids, targetFolderId);
+        showToast(`Moved ${ids.length} item${ids.length === 1 ? '' : 's'} to ${folder.name}`);
+        if (selectionMode) setSelectedIds([]);
+      } catch (err) {
+        console.error('Drag move to folder failed:', err);
+        showToast('Move failed');
+      } finally {
+        setFolderBusy(false);
+        setMoveProgress(null);
+      }
+      return;
+    }
+    if (draggingFolderId && draggingFolderId !== targetFolderId) {
+      try {
+        setFolderBusy(true);
+        await onMoveFolder(draggingFolderId, targetFolderId);
+        showToast('Folder moved');
+      } catch (err) {
+        console.error('Move folder failed:', err);
+        showToast(err instanceof Error ? err.message : 'Could not move folder');
+      } finally {
+        setFolderBusy(false);
+      }
+    }
+  };
+
+  const folderDropHandlers = (targetFolderId: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!draggingTileId && !draggingFolderId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = draggingFolderId === targetFolderId ? 'none' : 'move';
+      setDropTargetFolderId(targetFolderId);
+    },
+    onDragLeave: () => {
+      setDropTargetFolderId((prev) => (prev === targetFolderId ? null : prev));
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setDropTargetFolderId(null);
+      setDraggingTileId(null);
+      setDraggingFolderId(null);
+      void applyFolderDrop(targetFolderId);
+    },
+  });
 
   // Items that the "download all" menu operates on: selected items when the
   // user has made a selection; otherwise the visible folder's history.
@@ -666,12 +758,15 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
               Folders
             </div>
-            {folders.map((folder) => {
+            {flatFolderRows.map(({ folder, depth }) => {
               const isViewing = folder.id === viewFolderId;
               const isPinned = folder.id === activeFolderId;
               const isInbox = folder.id === INBOX_FOLDER_ID;
               const count = folderCounts.get(folder.id) || 0;
               const isRenaming = renamingFolderId === folder.id;
+              const isDropTarget = dropTargetFolderId === folder.id;
+              const hasInstructions = Boolean(folder.customInstructions?.trim());
+              const canDragFolder = !isInbox;
 
               if (isRenaming) {
                 return (
@@ -743,24 +838,49 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               return (
                 <div
                   key={folder.id}
+                  {...folderDropHandlers(folder.id)}
                   className={`group flex items-center gap-1 rounded-md px-1 py-0.5 ${
-                    isViewing
-                      ? 'bg-brand-teal/10'
-                      : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
+                    isDropTarget
+                      ? 'ring-2 ring-brand-teal/60 bg-brand-teal/5'
+                      : isViewing
+                        ? 'bg-brand-teal/10'
+                        : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
                   }`}
                 >
+                  {canDragFolder ? (
+                    <span
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation();
+                        setDraggingFolderId(folder.id);
+                        e.dataTransfer.setData('text/plain', `folder:${folder.id}`);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={() => {
+                        setDraggingFolderId(null);
+                        setDropTargetFolderId(null);
+                      }}
+                      className="inline-flex items-center justify-center h-8 w-6 shrink-0 cursor-grab text-slate-400 hover:text-brand-teal"
+                      aria-label={`Drag ${folder.name} into another folder`}
+                    >
+                      <GripVertical size={14} aria-hidden />
+                    </span>
+                  ) : (
+                    <span className="w-6 shrink-0" aria-hidden />
+                  )}
                   <button
                     type="button"
                     role="option"
                     aria-selected={isViewing}
                     onClick={() => handleSelectFolder(folder.id)}
-                    className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left px-2 py-1.5 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
+                    style={{ paddingLeft: `${8 + depth * 12}px` }}
+                    className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left pr-2 py-1.5 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
                       isViewing
                         ? 'text-brand-teal'
                         : 'text-slate-700 dark:text-slate-200'
                     }`}
                   >
-                    <FolderIcon size={14} aria-hidden />
+                    <FolderIcon size={14} aria-hidden className="shrink-0" />
                     <span className="truncate flex-1">{folder.name}</span>
                     <span
                       className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums ${
@@ -798,6 +918,27 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     ) : (
                       <PinOff size={14} />
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInstructionsFolderId(folder.id);
+                      setInstructionsDraft(folder.customInstructions || '');
+                      setIsFolderPickerOpen(false);
+                    }}
+                    title={
+                      hasInstructions
+                        ? `Edit instructions for ${folder.name}`
+                        : `Add instructions for ${folder.name}`
+                    }
+                    aria-label={`Folder instructions for ${folder.name}`}
+                    className={`inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md transition ${
+                      hasInstructions
+                        ? 'text-brand-teal hover:bg-brand-teal/10'
+                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                    }`}
+                  >
+                    <FileText size={13} />
                   </button>
                   <button
                     type="button"
@@ -847,8 +988,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   if (!next) return;
                   try {
                     setFolderBusy(true);
-                    const created = await onCreateFolder(next);
+                    const created = await onCreateFolder(next, createFolderParentId);
                     setIsCreatingFolder(false);
+                    setCreateFolderParentId(undefined);
                     setNewFolderDraft('');
                     setIsFolderPickerOpen(false);
                     showToast(`Created ${created.name}`);
@@ -893,6 +1035,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   type="button"
                   onClick={() => {
                     setIsCreatingFolder(false);
+                    setCreateFolderParentId(undefined);
                     setNewFolderDraft('');
                   }}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-md text-slate-500 hover:bg-gray-100 dark:hover:bg-[#21262d]"
@@ -902,17 +1045,32 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </button>
               </form>
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCreatingFolder(true);
-                  setNewFolderDraft('');
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-teal rounded-md hover:bg-brand-teal/10 transition"
-              >
-                <FolderPlus size={14} aria-hidden />
-                New folder
-              </button>
+              <div className="flex flex-col gap-0.5 px-1 py-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateFolderParentId(undefined);
+                    setIsCreatingFolder(true);
+                    setNewFolderDraft('');
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-teal rounded-md hover:bg-brand-teal/10 transition"
+                >
+                  <FolderPlus size={14} aria-hidden />
+                  New folder
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateFolderParentId(viewFolderId);
+                    setIsCreatingFolder(true);
+                    setNewFolderDraft('');
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 rounded-md hover:bg-gray-50 dark:hover:bg-[#21262d] transition"
+                >
+                  <FolderPlus size={14} aria-hidden />
+                  New subfolder here
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -1208,13 +1366,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     role="menu"
                     className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
                   >
-                    {folders.map((folder) => {
+                    {flatFolderRows.map(({ folder, depth }) => {
                       const isHighlighted = folder.id === (activeFolderId || INBOX_FOLDER_ID);
                       return (
                         <button
                           key={folder.id}
                           type="button"
                           role="menuitem"
+                          {...folderDropHandlers(folder.id)}
                           onClick={async () => {
                             setMoveMenuOpen(false);
                             if (selectedIds.length === 0) return;
@@ -1244,11 +1403,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                               setMoveProgress(null);
                             }
                           }}
-                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs rounded-md transition ${
-                            isHighlighted
-                              ? 'bg-brand-teal/10 text-brand-teal font-semibold'
-                              : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                          className={`w-full flex items-center gap-2 py-2 text-left text-xs rounded-md transition ${
+                            dropTargetFolderId === folder.id
+                              ? 'ring-2 ring-brand-teal/50 bg-brand-teal/5'
+                              : isHighlighted
+                                ? 'bg-brand-teal/10 text-brand-teal font-semibold'
+                                : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
                           }`}
+                          style={{ paddingLeft: `${12 + depth * 12}px`, paddingRight: '12px' }}
                         >
                           <FolderIcon size={14} aria-hidden />
                           <span className="truncate flex-1">{folder.name}</span>
@@ -1414,7 +1576,56 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           was dropped because the page-nav controls themselves make the
           behavior self-evident. */}
 
-      {visibleHistory.length === 0 && (
+      {viewFolderEffectiveInstructions.length > 0 && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 mb-3 px-1 leading-relaxed">
+          <span className="font-semibold text-slate-600 dark:text-slate-300">Folder instructions</span>
+          {' '}(applied to generations and refinements in this folder):{' '}
+          <span className="italic">{viewFolderEffectiveInstructions.slice(0, 160)}{viewFolderEffectiveInstructions.length > 160 ? '…' : ''}</span>
+        </p>
+      )}
+
+      {childFoldersInView.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-4">
+          {childFoldersInView.map((sub) => {
+            const subCount = folderCounts.get(sub.id) || 0;
+            const isSubDrop = dropTargetFolderId === sub.id;
+            return (
+              <button
+                key={sub.id}
+                type="button"
+                {...folderDropHandlers(sub.id)}
+                draggable={sub.id !== INBOX_FOLDER_ID}
+                onDragStart={(e) => {
+                  if (sub.id === INBOX_FOLDER_ID) return;
+                  e.stopPropagation();
+                  setDraggingFolderId(sub.id);
+                  e.dataTransfer.setData('text/plain', `folder:${sub.id}`);
+                }}
+                onDragEnd={() => {
+                  setDraggingFolderId(null);
+                  setDropTargetFolderId(null);
+                }}
+                onClick={() => void onGalleryViewFolderChange(sub.id)}
+                className={`flex items-center gap-2 p-3 min-h-11 rounded-xl border text-left transition ${
+                  isSubDrop
+                    ? 'border-brand-teal ring-2 ring-brand-teal/40 bg-brand-teal/5'
+                    : 'border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] hover:border-brand-teal'
+                }`}
+              >
+                <FolderIcon size={18} className="text-brand-teal shrink-0" aria-hidden />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                    {sub.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400">{subCount} item{subCount === 1 ? '' : 's'}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {visibleHistory.length === 0 && childFoldersInView.length === 0 && (
         <div className="text-center py-12 text-sm text-slate-500 dark:text-slate-400 border border-dashed border-gray-300 dark:border-[#30363d] rounded-xl mb-4">
           This folder is empty.
           {activeFolderId === viewFolderId
@@ -1462,7 +1673,15 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
 
           return (
             <div 
-              key={gen.id} 
+              key={gen.id}
+              draggable={!selectionMode && !isComparePicking}
+              onDragStart={(e) => {
+                if (selectionMode || isComparePicking) return;
+                setDraggingTileId(gen.id);
+                e.dataTransfer.setData('text/plain', `tile:${gen.id}`);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+              onDragEnd={() => setDraggingTileId(null)}
               className={`group relative bg-white dark:bg-[#161b22] border rounded-xl overflow-visible shadow-sm hover:shadow-lg transition-all ${
                 isPickedSide
                   ? 'border-amber-400 ring-2 ring-amber-400/40'
@@ -1632,13 +1851,89 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         })}
       </div>
 
+      {instructionsFolderId && (() => {
+        const target = folders.find((f) => f.id === instructionsFolderId);
+        if (!target) return null;
+        const inherited = getEffectiveFolderInstructions(folders, target.id);
+        const own = (target.customInstructions || '').trim();
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="folder-instructions-title"
+              className="bg-white dark:bg-[#161b22] rounded-xl border border-gray-200 dark:border-[#30363d] shadow-2xl max-w-lg w-full p-5"
+            >
+              <h2 id="folder-instructions-title" className="text-base font-bold text-slate-900 dark:text-slate-100">
+                Instructions — {target.name}
+              </h2>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Merged with parent folder instructions, then applied to every generation and refinement in this folder.
+              </p>
+              {inherited && inherited !== own && (
+                <p className="mt-2 text-xs text-slate-600 dark:text-slate-300 bg-gray-50 dark:bg-[#21262d] rounded-lg p-2">
+                  <span className="font-semibold">Effective preview:</span> {inherited.slice(0, 280)}
+                  {inherited.length > 280 ? '…' : ''}
+                </p>
+              )}
+              <textarea
+                value={instructionsDraft}
+                onChange={(e) => setInstructionsDraft(e.target.value)}
+                rows={6}
+                maxLength={4000}
+                placeholder="e.g. Always use brand teal, flat vector style, no photorealism…"
+                className="mt-3 w-full text-sm rounded-lg border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#0d1117] px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-teal/50"
+              />
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInstructionsFolderId(null);
+                    setInstructionsDraft('');
+                  }}
+                  className="px-3 py-2 min-h-11 text-sm font-semibold rounded-lg border border-gray-300 dark:border-[#30363d] text-slate-700 dark:text-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={folderBusy}
+                  onClick={async () => {
+                    try {
+                      setFolderBusy(true);
+                      await onSetFolderInstructions(instructionsFolderId, instructionsDraft);
+                      setInstructionsFolderId(null);
+                      setInstructionsDraft('');
+                      showToast('Folder instructions saved');
+                    } catch (err) {
+                      console.error('Save folder instructions failed:', err);
+                      showToast('Could not save instructions');
+                    } finally {
+                      setFolderBusy(false);
+                    }
+                  }}
+                  className="px-3 py-2 min-h-11 text-sm font-semibold rounded-lg bg-brand-teal text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Folder delete confirmation. Tiles inside the deleted folder are
           swept into Inbox by App.handleDeleteFolder before the folder
           itself is removed, so deletion never strands content. */}
       {pendingDeleteFolderId && (() => {
         const target = folders.find((f) => f.id === pendingDeleteFolderId);
         if (!target) return null;
-        const tilesInFolder = folderCounts.get(target.id) || 0;
+        const subtree = getDescendantFolderIds(folders, pendingDeleteFolderId);
+        subtree.add(pendingDeleteFolderId);
+        const tilesInSubtree = history.filter((g) =>
+          subtree.has(g.folderId || INBOX_FOLDER_ID)
+        ).length;
+        const directSubfolders = getChildFolders(folders, pendingDeleteFolderId).length;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
             <div role="dialog" aria-modal="true" aria-labelledby="delete-folder-title" className="bg-white dark:bg-[#161b22] rounded-xl border border-gray-200 dark:border-[#30363d] shadow-2xl max-w-sm w-full p-5">
@@ -1646,9 +1941,12 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 Delete "{target.name}"?
               </h2>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                {tilesInFolder > 0
-                  ? `${tilesInFolder} tile${tilesInFolder === 1 ? '' : 's'} will move to Inbox.`
-                  : 'This folder is empty.'}
+                {tilesInSubtree > 0
+                  ? `${tilesInSubtree} tile${tilesInSubtree === 1 ? '' : 's'} in this folder and subfolders will move to Inbox.`
+                  : 'No tiles in this folder tree.'}
+                {directSubfolders > 0
+                  ? ` ${directSubfolders} subfolder${directSubfolders === 1 ? '' : 's'} will move up one level.`
+                  : ''}
               </p>
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button

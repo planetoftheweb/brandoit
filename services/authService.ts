@@ -104,13 +104,33 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
   }
 
   if (Array.isArray(prefs.folders) && prefs.folders.length > 0) {
+    const idSet = new Set(
+      prefs.folders
+        .filter((folder) => folder && typeof folder.id === 'string')
+        .map((folder) => folder.id as string)
+    );
     clean.folders = prefs.folders
-      .filter(folder => folder && typeof folder.id === 'string' && typeof folder.name === 'string')
-      .map(folder => ({
-        id: folder.id,
-        name: folder.name,
-        createdAt: typeof folder.createdAt === 'number' ? folder.createdAt : Date.now()
-      }));
+      .filter((folder) => folder && typeof folder.id === 'string' && typeof folder.name === 'string')
+      .map((folder) => {
+        const entry: Folder = {
+          id: folder.id,
+          name: folder.name,
+          createdAt: typeof folder.createdAt === 'number' ? folder.createdAt : Date.now(),
+        };
+        if (
+          typeof folder.parentId === 'string' &&
+          folder.parentId.length > 0 &&
+          folder.parentId !== folder.id &&
+          idSet.has(folder.parentId)
+        ) {
+          entry.parentId = folder.parentId;
+        }
+        if (typeof folder.customInstructions === 'string') {
+          const trimmed = folder.customInstructions.trim();
+          if (trimmed.length > 0) entry.customInstructions = trimmed.slice(0, 4000);
+        }
+        return entry;
+      });
   }
 
   if (typeof prefs.activeFolderId === 'string' && prefs.activeFolderId.length > 0) {
@@ -180,13 +200,32 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
       ? (savedPrefs.presets as any[]).filter(p => p && typeof p.id === 'string' && typeof p.name === 'string') as ToolbarPreset[]
       : [],
     folders: Array.isArray(savedPrefs.folders)
-      ? (savedPrefs.folders as any[])
-          .filter(f => f && typeof f.id === 'string' && typeof f.name === 'string')
-          .map(f => ({
-            id: f.id,
-            name: f.name,
-            createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now()
-          })) as Folder[]
+      ? (() => {
+          const raw = (savedPrefs.folders as any[]).filter(
+            (f) => f && typeof f.id === 'string' && typeof f.name === 'string'
+          );
+          const idSet = new Set(raw.map((f) => f.id as string));
+          return raw.map((f) => {
+            const entry: Folder = {
+              id: f.id,
+              name: f.name,
+              createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now(),
+            };
+            if (
+              typeof f.parentId === 'string' &&
+              f.parentId.length > 0 &&
+              f.parentId !== f.id &&
+              idSet.has(f.parentId)
+            ) {
+              entry.parentId = f.parentId;
+            }
+            if (typeof f.customInstructions === 'string') {
+              const trimmed = f.customInstructions.trim();
+              if (trimmed.length > 0) entry.customInstructions = trimmed.slice(0, 4000);
+            }
+            return entry;
+          }) as Folder[];
+        })()
       : [],
     activeFolderId:
       typeof savedPrefs.activeFolderId === 'string' && savedPrefs.activeFolderId.length > 0

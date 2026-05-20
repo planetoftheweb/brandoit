@@ -1,5 +1,11 @@
 import { Folder, INBOX_FOLDER_ID, User, UserPreferences } from "../types";
 import { authService } from "./authService";
+import {
+  getChildFolders,
+  getDescendantFolderIds,
+  sanitizeFolderParentId,
+  wouldCreateFolderCycle,
+} from "./folderTreeUtils";
 
 /**
  * Manages user-owned folders that group generation tiles. Folders persist
@@ -43,15 +49,53 @@ const ensureInbox = (folders: Folder[]): Folder[] => {
   return [buildInbox(), ...folders];
 };
 
-const sanitizeFolder = (raw: any): Folder | null => {
+const MAX_FOLDER_INSTRUCTIONS = 4000;
+
+const sanitizeFolder = (raw: any, allIds?: Set<string>): Folder | null => {
   if (!raw || typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
   const trimmedName = raw.name.trim();
   if (!trimmedName) return null;
-  return {
+  let parentId: string | undefined;
+  if (typeof raw.parentId === 'string' && raw.parentId.length > 0 && raw.parentId !== raw.id) {
+    if (!allIds || allIds.has(raw.parentId)) {
+      parentId = raw.parentId;
+    }
+  }
+  let customInstructions: string | undefined;
+  if (typeof raw.customInstructions === 'string') {
+    const trimmed = raw.customInstructions.trim();
+    if (trimmed.length > 0) {
+      customInstructions = trimmed.slice(0, MAX_FOLDER_INSTRUCTIONS);
+    }
+  }
+  const folder: Folder = {
     id: raw.id,
     name: trimmedName,
-    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now()
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
   };
+  if (parentId) folder.parentId = parentId;
+  if (customInstructions) folder.customInstructions = customInstructions;
+  return folder;
+};
+
+const sanitizeFolderList = (rawList: unknown[]): Folder[] => {
+  const pass1 = rawList
+    .filter((raw) => raw && typeof (raw as Folder).id === 'string')
+    .map((raw) => ({
+      id: (raw as Folder).id,
+      name: typeof (raw as any).name === 'string' ? (raw as any).name.trim() : '',
+      createdAt: typeof (raw as any).createdAt === 'number' ? (raw as any).createdAt : Date.now(),
+      parentId: typeof (raw as any).parentId === 'string' ? (raw as any).parentId : undefined,
+      customInstructions:
+        typeof (raw as any).customInstructions === 'string'
+          ? (raw as any).customInstructions
+          : undefined,
+    }))
+    .filter((f) => f.name.length > 0);
+  const idSet = new Set(pass1.map((f) => f.id));
+  return pass1
+    .map((f) => sanitizeFolder(f, idSet))
+    .filter((f): f is Folder => f !== null);
 };
 
 const readLocalFolders = (): Folder[] => {
@@ -60,9 +104,7 @@ const readLocalFolders = (): Folder[] => {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(sanitizeFolder)
-      .filter((f): f is Folder => f !== null);
+    return sanitizeFolderList(parsed);
   } catch {
     return [];
   }
@@ -182,9 +224,7 @@ export const folderService = {
   loadFolders: async (user: User | null): Promise<FolderState> => {
     if (user) {
       const stored = Array.isArray(user.preferences.folders)
-        ? user.preferences.folders
-            .map(sanitizeFolder)
-            .filter((f): f is Folder => f !== null)
+        ? sanitizeFolderList(user.preferences.folders)
         : [];
       const folders = ensureInbox(stored);
       const activeFolderId =
@@ -276,15 +316,24 @@ export const folderService = {
   createFolder: async (
     user: User | null,
     name: string,
-    currentFolders: Folder[]
+    currentFolders: Folder[],
+    parentId?: string
   ): Promise<{ folder: Folder; folders: Folder[]; activeFolderId: string }> => {
     const trimmed = name.trim();
     if (!trimmed) throw new Error('Folder name is required.');
 
+    const safeParent = parentId
+      ? sanitizeFolderParentId(parentId, '', currentFolders)
+      : undefined;
+    if (parentId && !safeParent) {
+      throw new Error('Parent folder not found.');
+    }
+
     const folder: Folder = {
       id: generateFolderId(),
       name: trimmed,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      ...(safeParent ? { parentId: safeParent } : {}),
     };
     const folders = ensureInbox([...currentFolders, folder]);
     // Persist gallery target in the same write so a refresh keeps the new tab;
@@ -334,11 +383,90 @@ export const folderService = {
     if (!currentFolders.some(f => f.id === folderId)) {
       throw new Error('Folder not found.');
     }
-    const folders = ensureInbox(currentFolders.filter(f => f.id !== folderId));
-    const nextActive = activeFolderId === folderId ? undefined : activeFolderId;
+    const deleted = currentFolders.find((f) => f.id === folderId);
+    const reparentTo = deleted?.parentId;
+    const removedSubtree = getDescendantFolderIds(currentFolders, folderId);
+    removedSubtree.add(folderId);
+    const folders = ensureInbox(
+      currentFolders
+        .filter((f) => f.id !== folderId)
+        .map((f) => {
+          if (f.parentId === folderId) {
+            const next: Folder = { ...f };
+            if (reparentTo) next.parentId = reparentTo;
+            else delete next.parentId;
+            return next;
+          }
+          return f;
+        })
+    );
+    const nextActive =
+      activeFolderId && removedSubtree.has(activeFolderId) ? undefined : activeFolderId;
     await persistFolders(user, folders, nextActive);
     return { folders, activeFolderId: nextActive };
   },
+
+  moveFolder: async (
+    user: User | null,
+    currentFolders: Folder[],
+    activeFolderId: string | undefined,
+    folderId: string,
+    newParentId: string | null
+  ): Promise<Folder[]> => {
+    if (folderId === INBOX_FOLDER_ID) {
+      throw new Error('Inbox cannot be moved.');
+    }
+    if (!currentFolders.some((f) => f.id === folderId)) {
+      throw new Error('Folder not found.');
+    }
+    const safeParent =
+      newParentId && newParentId.length > 0
+        ? sanitizeFolderParentId(newParentId, folderId, currentFolders)
+        : undefined;
+    if (newParentId && newParentId.length > 0 && !safeParent) {
+      throw new Error('Destination folder not found.');
+    }
+    if (wouldCreateFolderCycle(currentFolders, folderId, safeParent ?? null)) {
+      throw new Error('Cannot move a folder into itself or its subfolders.');
+    }
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      const next: Folder = { ...f };
+      if (safeParent) next.parentId = safeParent;
+      else delete next.parentId;
+      return next;
+    });
+    await persistFolders(user, folders, activeFolderId);
+    return folders;
+  },
+
+  setFolderInstructions: async (
+    user: User | null,
+    currentFolders: Folder[],
+    activeFolderId: string | undefined,
+    folderId: string,
+    customInstructions: string
+  ): Promise<Folder[]> => {
+    if (!currentFolders.some((f) => f.id === folderId)) {
+      throw new Error('Folder not found.');
+    }
+    const trimmed = customInstructions.trim().slice(0, MAX_FOLDER_INSTRUCTIONS);
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      const next: Folder = { ...f };
+      if (trimmed.length > 0) next.customInstructions = trimmed;
+      else delete next.customInstructions;
+      return next;
+    });
+    await persistFolders(user, folders, activeFolderId);
+    return folders;
+  },
+
+  /** Child folder ids plus tiles in this folder only (not nested). */
+  listFolderContents: (folders: Folder[], folderId: string) => ({
+    childFolders: getChildFolders(folders, folderId),
+    descendantFolderIds: getDescendantFolderIds(folders, folderId),
+  }),
 
   /**
    * Pin (or clear) the sticky folder for new generations. Pass `null` to

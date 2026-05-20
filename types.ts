@@ -143,6 +143,17 @@ export interface Folder {
   id: string;
   name: string;
   createdAt: number;
+  /**
+   * When set, this folder is nested under another folder. Omitted or
+   * invalid ids are treated as a top-level folder (sibling of Inbox).
+   */
+  parentId?: string;
+  /**
+   * Extra instructions merged into the system prompt for generations and
+   * refinements on tiles in this folder. Ancestor folder instructions are
+   * prepended (root → leaf) before this folder's own text.
+   */
+  customInstructions?: string;
 }
 
 export interface BrandGuidelinesAnalysis {

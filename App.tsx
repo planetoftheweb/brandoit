@@ -32,6 +32,10 @@ import { authService } from './services/authService';
 import { presetService } from './services/presetService';
 import { folderService } from './services/folderService';
 import {
+  getDescendantFolderIds,
+  mergeFolderInstructionsWithSystemPrompt,
+} from './services/folderTreeUtils';
+import {
   historyService,
   createGeneration,
   addRefinementVersion,
@@ -1295,13 +1299,17 @@ const App: React.FC = () => {
       const primaryModelId = modelIdsToRun[0];
       const runUser = user;
       const runContext = context;
-      const runSystemPrompt = user.preferences.systemPrompt;
+      const runFolderId = activeFolderId || INBOX_FOLDER_ID;
+      const runSystemPrompt = mergeFolderInstructionsWithSystemPrompt(
+        folders,
+        runFolderId,
+        user.preferences.systemPrompt
+      );
       const runOpenAIQuality = user.preferences.settings?.openaiImageQuality || 'auto';
       // Snapshot the sticky folder at click time so every tile from this
       // Generate run lands in the same folder, even if the user changes the
       // pin while the batch is in flight. Falls back to Inbox when nothing
       // is pinned, so the gallery can always group every tile by folder.
-      const runFolderId = activeFolderId || INBOX_FOLDER_ID;
       const startedAt = Date.now();
       jobId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const abortController = new AbortController();
@@ -1649,6 +1657,12 @@ const App: React.FC = () => {
         }
 
         const currentVersion = getCurrentVersion(currentGeneration);
+      const refineFolderId = currentGeneration.folderId || INBOX_FOLDER_ID;
+      const refineSystemPrompt = mergeFolderInstructionsWithSystemPrompt(
+        folders,
+        refineFolderId,
+        user.preferences.systemPrompt
+      );
       const requestedAspectRatio = extractAspectRatioFromText(refinementText, selectedModel, aspectRatios);
       const currentVersionAspectRatio =
         normalizeAspectRatio(currentVersion.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
@@ -1667,7 +1681,7 @@ const App: React.FC = () => {
       let result;
       if (selectedModel === 'gemini-svg') {
         const svgCode = currentVersion.svgCode || '';
-        result = await refineSvg(svgCode, refinementText, safeConfig, context, customKey, user?.preferences.systemPrompt);
+        result = await refineSvg(svgCode, refinementText, safeConfig, context, customKey, refineSystemPrompt);
       } else if (
         selectedModel === 'openai' ||
         selectedModel === 'openai-2' ||
@@ -1683,7 +1697,7 @@ const App: React.FC = () => {
           {
             modelId: selectedModel,
             quality: user?.preferences.settings?.openaiImageQuality || 'auto',
-            systemPrompt: user?.preferences.systemPrompt,
+            systemPrompt: refineSystemPrompt,
           }
         );
       } else {
@@ -1693,7 +1707,7 @@ const App: React.FC = () => {
           safeConfig,
           context,
           customKey,
-          user?.preferences.systemPrompt,
+          refineSystemPrompt,
           selectedModel,
           currentVersionAspectRatio || currentGeneration.config.aspectRatio
         );
@@ -2480,8 +2494,8 @@ const App: React.FC = () => {
   // through `folderService` (Firestore for users, localStorage for guests).
   // Local state is updated optimistically alongside every async write so
   // the gallery reflects changes without waiting on a round-trip.
-  const handleCreateFolder = async (name: string): Promise<Folder> => {
-    const result = await folderService.createFolder(user || null, name, folders);
+  const handleCreateFolder = async (name: string, parentId?: string): Promise<Folder> => {
+    const result = await folderService.createFolder(user || null, name, folders, parentId);
     setFolders(result.folders);
     setActiveFolderId(result.activeFolderId);
     setGalleryViewFolderId(result.folder.id);
@@ -2519,13 +2533,47 @@ const App: React.FC = () => {
     }
   };
 
+  const handleMoveFolder = async (folderId: string, parentId: string | null) => {
+    const nextFolders = await folderService.moveFolder(
+      user || null,
+      folders,
+      activeFolderId,
+      folderId,
+      parentId
+    );
+    setFolders(nextFolders);
+    if (user) {
+      setUser((prev) =>
+        prev ? { ...prev, preferences: { ...prev.preferences, folders: nextFolders } } : prev
+      );
+    }
+  };
+
+  const handleSetFolderInstructions = async (folderId: string, customInstructions: string) => {
+    const nextFolders = await folderService.setFolderInstructions(
+      user || null,
+      folders,
+      activeFolderId,
+      folderId,
+      customInstructions
+    );
+    setFolders(nextFolders);
+    if (user) {
+      setUser((prev) =>
+        prev ? { ...prev, preferences: { ...prev.preferences, folders: nextFolders } } : prev
+      );
+    }
+  };
+
   const handleDeleteFolder = async (folderId: string) => {
     // Sweep tiles into Inbox first so deletion never strands a tile in a
     // missing folder. The bulk move uses the same updateGeneration path
     // that refinements rely on, so writes are durable.
+    const removedIds = getDescendantFolderIds(folders, folderId);
+    removedIds.add(folderId);
     const orphanIds = history
-      .filter(g => g.folderId === folderId)
-      .map(g => g.id);
+      .filter((g) => removedIds.has(g.folderId || INBOX_FOLDER_ID))
+      .map((g) => g.id);
     if (orphanIds.length > 0) {
       const moved = await historyService.moveGenerationsToFolder(
         user || null,
@@ -3357,6 +3405,8 @@ const App: React.FC = () => {
               onDeleteFolder={handleDeleteFolder}
               onSetActiveFolder={handleSetActiveFolder}
               onMoveToFolder={handleMoveGenerationsToFolder}
+              onMoveFolder={handleMoveFolder}
+              onSetFolderInstructions={handleSetFolderInstructions}
             />
           </main>
         </>
