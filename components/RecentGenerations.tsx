@@ -273,6 +273,12 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   }, [galleryPageSize]);
   const toastTimerRef = React.useRef<number | null>(null);
   const blobUrlsRef = React.useRef<Record<string, string>>({});
+
+  const showToast = React.useCallback((msg: string) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToastMessage(msg);
+    toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 1800);
+  }, []);
   // Hover preview: floats a large, full-aspect-ratio version of the tile's
   // image above the grid. We capture the tile's bounding rect so the
   // preview can be docked to the opposite side of the viewport — that way
@@ -522,6 +528,38 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setTileContextMenu(null);
   }, []);
 
+  const copyGenerationPrompt = React.useCallback(
+    async (gen: Generation) => {
+      try {
+        await navigator.clipboard.writeText(gen.config.prompt);
+        showToast('Prompt copied');
+        closeAllContextMenus();
+      } catch {
+        showToast('Could not copy prompt');
+      }
+    },
+    [closeAllContextMenus, showToast]
+  );
+
+  const moveTileToFolder = React.useCallback(
+    async (generationId: string, folderId: string) => {
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return;
+      try {
+        setFolderBusy(true);
+        await onMoveToFolder([generationId], folderId);
+        showToast(`Moved to ${folder.name}`);
+        closeAllContextMenus();
+      } catch (err) {
+        console.error('Move tile failed:', err);
+        showToast('Move failed');
+      } finally {
+        setFolderBusy(false);
+      }
+    },
+    [folders, onMoveToFolder, closeAllContextMenus, showToast]
+  );
+
   const openFolderInstructions = React.useCallback(
     (folderId: string) => {
       const folder = folders.find((f) => f.id === folderId);
@@ -748,44 +786,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       aspectLabel ? `Size: ${aspectLabel}` : ''
     ].filter(Boolean).join('\n');
   };
-
-  const showToast = (msg: string) => {
-    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    setToastMessage(msg);
-    toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 1800);
-  };
-
-  const copyGenerationPrompt = React.useCallback(
-    async (gen: Generation) => {
-      try {
-        await navigator.clipboard.writeText(gen.config.prompt);
-        showToast('Prompt copied');
-        closeAllContextMenus();
-      } catch {
-        showToast('Could not copy prompt');
-      }
-    },
-    [closeAllContextMenus]
-  );
-
-  const moveTileToFolder = React.useCallback(
-    async (generationId: string, folderId: string) => {
-      const folder = folders.find((f) => f.id === folderId);
-      if (!folder) return;
-      try {
-        setFolderBusy(true);
-        await onMoveToFolder([generationId], folderId);
-        showToast(`Moved to ${folder.name}`);
-        closeAllContextMenus();
-      } catch (err) {
-        console.error('Move tile failed:', err);
-        showToast('Move failed');
-      } finally {
-        setFolderBusy(false);
-      }
-    },
-    [folders, onMoveToFolder, closeAllContextMenus]
-  );
 
   const getModelLabel = (modelId?: string) => {
     if (modelId === 'openai-2') return 'GPT Image 2';
