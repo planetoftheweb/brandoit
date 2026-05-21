@@ -1,7 +1,9 @@
-import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageDisplay } from './components/ImageDisplay';
 import { RecentGenerations } from './components/RecentGenerations';
+import type { GalleryPresetSource } from './components/GalleryPresetMenu';
+import { ToolbarPresetSnapshot } from './utils/toolbarPresetUtils';
 import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID, PromptImageStyleReference } from './types';
 import { 
   BRAND_COLORS, 
@@ -2534,6 +2536,109 @@ const App: React.FC = () => {
     setUser(prev => prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev);
   };
 
+  const buildToolbarPresetSnapshot = useCallback((): ToolbarPresetSnapshot => ({
+    graphicTypeId: config.graphicTypeId || undefined,
+    visualStyleId: config.visualStyleId || undefined,
+    colorSchemeId: config.colorSchemeId || undefined,
+    aspectRatio: config.aspectRatio || undefined,
+    svgMode: config.svgMode,
+    selectedModel,
+    openaiImageQuality: user?.preferences.settings?.openaiImageQuality,
+  }), [
+    config.graphicTypeId,
+    config.visualStyleId,
+    config.colorSchemeId,
+    config.aspectRatio,
+    config.svgMode,
+    selectedModel,
+    user?.preferences.settings?.openaiImageQuality,
+  ]);
+
+  const galleryViewFolder = useMemo(
+    () => folders.find((f) => f.id === galleryViewFolderId),
+    [folders, galleryViewFolderId]
+  );
+
+  const galleryPresetSource: GalleryPresetSource = galleryViewFolder?.useFolderPresets
+    ? 'folder'
+    : 'global';
+
+  const galleryPresets = useMemo(
+    () =>
+      galleryPresetSource === 'folder'
+        ? galleryViewFolder?.presets ?? []
+        : user?.preferences.presets ?? [],
+    [galleryPresetSource, galleryViewFolder?.presets, user?.preferences.presets]
+  );
+
+  const syncFoldersToUser = useCallback(
+    (nextFolders: Folder[]) => {
+      setFolders(nextFolders);
+      if (user) {
+        setUser((prev) =>
+          prev ? { ...prev, preferences: { ...prev.preferences, folders: nextFolders } } : prev
+        );
+      }
+    },
+    [user]
+  );
+
+  const handleGalleryPresetSourceChange = async (source: GalleryPresetSource) => {
+    const nextFolders = await folderService.setFolderUseFolderPresets(
+      user || null,
+      folders,
+      galleryViewFolderId,
+      source === 'folder'
+    );
+    syncFoldersToUser(nextFolders);
+  };
+
+  const handleGallerySavePreset = async (name: string) => {
+    const snapshot = buildToolbarPresetSnapshot();
+    if (galleryPresetSource === 'folder') {
+      const { folders: nextFolders } = await folderService.saveFolderPreset(
+        user || null,
+        folders,
+        galleryViewFolderId,
+        name,
+        snapshot
+      );
+      syncFoldersToUser(nextFolders);
+      return;
+    }
+    await handleSavePreset(name);
+  };
+
+  const handleGalleryUpdatePreset = async (presetId: string) => {
+    const snapshot = buildToolbarPresetSnapshot();
+    if (galleryPresetSource === 'folder') {
+      const nextFolders = await folderService.updateFolderPreset(
+        user || null,
+        folders,
+        galleryViewFolderId,
+        presetId,
+        snapshot
+      );
+      syncFoldersToUser(nextFolders);
+      return;
+    }
+    await handleUpdatePreset(presetId);
+  };
+
+  const handleGalleryDeletePreset = async (presetId: string) => {
+    if (galleryPresetSource === 'folder') {
+      const nextFolders = await folderService.deleteFolderPreset(
+        user || null,
+        folders,
+        galleryViewFolderId,
+        presetId
+      );
+      syncFoldersToUser(nextFolders);
+      return;
+    }
+    await handleDeletePreset(presetId);
+  };
+
   // ----- Folder handlers -----
   // Folders group generation tiles for the gallery. Persistence routes
   // through `folderService` (Firestore for users, localStorage for guests).
@@ -3457,6 +3562,21 @@ const App: React.FC = () => {
               onMoveFolder={handleMoveFolder}
               onReorderFolder={handleReorderFolder}
               onSetFolderInstructions={handleSetFolderInstructions}
+              galleryPresets={galleryPresets}
+              galleryPresetSource={galleryPresetSource}
+              onGalleryPresetSourceChange={handleGalleryPresetSourceChange}
+              galleryToolbarPresetSnapshot={buildToolbarPresetSnapshot()}
+              onApplyGalleryPreset={handleApplyPreset}
+              onSaveGalleryPreset={
+                galleryPresetSource === 'folder' || user ? handleGallerySavePreset : undefined
+              }
+              onUpdateGalleryPreset={
+                galleryPresetSource === 'folder' || user ? handleGalleryUpdatePreset : undefined
+              }
+              onDeleteGalleryPreset={
+                galleryPresetSource === 'folder' || user ? handleGalleryDeletePreset : undefined
+              }
+              galleryFolderName={galleryViewFolder?.name}
             />
           </main>
         </>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical, ClipboardCopy } from 'lucide-react';
+import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID, ToolbarPreset } from '../types';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical, ClipboardCopy, Download } from 'lucide-react';
 import {
   buildFolderTree,
   flattenVisibleFolderTree,
@@ -13,8 +13,16 @@ import { sanitizeSvg } from '../services/svgService';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlobUrl } from '../services/imageCache';
 import { getLatestVersion } from '../services/historyService';
+import {
+  buildVersionDownload,
+  downloadBlob,
+  singleDownloadOptions,
+  type DownloadFormat,
+} from '../services/imageFormatService';
 import { DownloadMenu } from './DownloadMenu';
 import { RichSelect, RichSelectOption } from './RichSelect';
+import { GalleryPresetMenu, GalleryPresetSource } from './GalleryPresetMenu';
+import { ToolbarPresetSnapshot } from '../utils/toolbarPresetUtils';
 import { useConfirmAction } from '../hooks/useConfirmAction';
 
 type ThumbnailSize = 'xs' | 'sm' | 'md' | 'lg';
@@ -227,6 +235,16 @@ interface RecentGenerationsProps {
     position: 'before' | 'after'
   ) => Promise<void>;
   onSetFolderInstructions: (folderId: string, customInstructions: string) => Promise<void>;
+  /** Presets shown in the gallery toolbar (global or folder-scoped). */
+  galleryPresets: ToolbarPreset[];
+  galleryPresetSource: GalleryPresetSource;
+  onGalleryPresetSourceChange: (source: GalleryPresetSource) => void | Promise<void>;
+  galleryToolbarPresetSnapshot: ToolbarPresetSnapshot;
+  onApplyGalleryPreset: (preset: ToolbarPreset) => void;
+  onSaveGalleryPreset?: (name: string) => Promise<void>;
+  onUpdateGalleryPreset?: (presetId: string) => Promise<void>;
+  onDeleteGalleryPreset?: (presetId: string) => Promise<void>;
+  galleryFolderName?: string;
   /**
    * ID of the generation currently rendered in the main `ImageDisplay`. The
    * matching tile in the grid below gets a brand-red ring so the user can
@@ -254,6 +272,15 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   onMoveFolder,
   onReorderFolder,
   onSetFolderInstructions,
+  galleryPresets,
+  galleryPresetSource,
+  onGalleryPresetSourceChange,
+  galleryToolbarPresetSnapshot,
+  onApplyGalleryPreset,
+  onSaveGalleryPreset,
+  onUpdateGalleryPreset,
+  onDeleteGalleryPreset,
+  galleryFolderName,
   activeGenerationId,
 }) => {
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
@@ -300,8 +327,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     generationId: string;
     x: number;
     y: number;
-    view: 'main' | 'move';
+    view: 'main' | 'move' | 'download';
   } | null>(null);
+  const [tileDownloadBusy, setTileDownloadBusy] = React.useState(false);
   const folderActionsMenuRef = React.useRef<HTMLDivElement>(null);
   const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
   // In-flight move-to-folder progress. `moveProgress` drives a sticky
@@ -652,6 +680,29 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setFolderContextMenu(null);
     setTileContextMenu(null);
   }, []);
+
+  const downloadTileFormat = React.useCallback(
+    async (gen: Generation, format: DownloadFormat) => {
+      const version = getLatestVersion(gen);
+      if (!version) {
+        showToast('Nothing to download yet');
+        return;
+      }
+      setTileDownloadBusy(true);
+      closeAllContextMenus();
+      try {
+        const payload = await buildVersionDownload(gen, version, format);
+        downloadBlob(payload.blob, payload.filename);
+        showToast(`${format.toUpperCase()} download started`);
+      } catch (err) {
+        console.warn('[RecentGenerations] tile download failed:', err);
+        showToast('Download failed');
+      } finally {
+        setTileDownloadBusy(false);
+      }
+    },
+    [closeAllContextMenus, showToast]
+  );
 
   const copyGenerationPrompt = React.useCallback(
     async (gen: Generation) => {
@@ -1625,12 +1676,59 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     if (!gen) return null;
     const latestVersion = getLatestVersion(gen);
     const isSelected = selectedIds.includes(gen.id);
+    const downloadOptions = singleDownloadOptions(latestVersion);
     const pos = clampContextPoint(
       { x: tileContextMenu.x, y: tileContextMenu.y },
       tileContextMenu.view === 'move'
         ? { width: 240, height: 360 }
-        : { width: 220, height: 280 }
+        : tileContextMenu.view === 'download'
+          ? { width: 220, height: 56 + downloadOptions.length * 40 }
+          : { width: 220, height: downloadOptions.length > 0 ? 320 : 280 }
     );
+
+    if (tileContextMenu.view === 'download') {
+      return createPortal(
+        <div
+          role="menu"
+          aria-label="Download image"
+          data-folder-menu
+          className={CONTEXT_MENU_PANEL}
+          style={{ left: pos.x, top: pos.y }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              setTileContextMenu((prev) =>
+                prev ? { ...prev, view: 'main' } : prev
+              )
+            }
+            className={CONTEXT_MENU_ITEM}
+          >
+            <ChevronLeft size={14} className="shrink-0" aria-hidden />
+            Back
+          </button>
+          <ContextMenuDivider />
+          {downloadOptions.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              role="menuitem"
+              disabled={tileDownloadBusy}
+              onClick={() => void downloadTileFormat(gen, opt.id)}
+              className={CONTEXT_MENU_ITEM}
+            >
+              <Download size={14} className="shrink-0 text-slate-400" />
+              <span className="truncate flex-1">{opt.label}</span>
+              {opt.description && (
+                <span className="text-[10px] text-slate-400 shrink-0">{opt.description}</span>
+              )}
+            </button>
+          ))}
+        </div>,
+        document.body
+      );
+    }
 
     if (tileContextMenu.view === 'move') {
       return createPortal(
@@ -1700,6 +1798,22 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           <ArrowUpRight size={14} className="shrink-0" />
           Open in preview
         </button>
+        {downloadOptions.length > 0 && (
+          <button
+            type="button"
+            role="menuitem"
+            disabled={tileDownloadBusy}
+            onClick={() =>
+              setTileContextMenu((prev) =>
+                prev ? { ...prev, view: 'download' } : prev
+              )
+            }
+            className={CONTEXT_MENU_ITEM}
+          >
+            <Download size={14} className="shrink-0" />
+            Download image…
+          </button>
+        )}
         {!selectionMode && !isComparePicking && onPickMark && (
           <button
             type="button"
@@ -2219,6 +2333,41 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   triggerLabelClassName="hidden xl:inline"
                 />
               </div>
+              <GalleryPresetMenu
+                presets={galleryPresets}
+                presetSource={galleryPresetSource}
+                onPresetSourceChange={(source) => {
+                  void onGalleryPresetSourceChange(source);
+                }}
+                currentSnapshot={galleryToolbarPresetSnapshot}
+                onApplyPreset={onApplyGalleryPreset}
+                onSavePreset={onSaveGalleryPreset}
+                onUpdatePreset={onUpdateGalleryPreset}
+                onDeletePreset={onDeleteGalleryPreset}
+                folderName={galleryFolderName}
+              />
+              <button
+                type="button"
+                onClick={() => openFolderInstructions(viewFolderId)}
+                aria-label={
+                  viewFolderEffectiveInstructions
+                    ? 'Edit folder instructions'
+                    : 'Add folder instructions'
+                }
+                className={`group/tip-instructions relative inline-flex items-center justify-center px-3 py-2 min-h-11 rounded-lg border transition shrink-0 ${
+                  viewFolderEffectiveInstructions
+                    ? 'border-brand-teal bg-brand-teal/10 text-brand-teal'
+                    : 'border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal'
+                }`}
+              >
+                <FileText size={16} aria-hidden />
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md bg-black/90 text-white shadow-lg opacity-0 group-hover/tip-instructions:opacity-100 group-focus-visible/tip-instructions:opacity-100 transition-opacity z-20"
+                >
+                  {viewFolderEffectiveInstructions ? 'Folder instructions' : 'Add instructions'}
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={() => setShowDetails((v) => !v)}

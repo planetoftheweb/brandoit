@@ -1,5 +1,6 @@
-import { Folder, INBOX_FOLDER_ID, User, UserPreferences } from "../types";
+import { Folder, INBOX_FOLDER_ID, ToolbarPreset, User, UserPreferences } from "../types";
 import { authService } from "./authService";
+import { sanitizeToolbarPresetList } from "../utils/toolbarPresetUtils";
 import {
   getChildFolders,
   getDescendantFolderIds,
@@ -49,6 +50,14 @@ const ensureInbox = (folders: Folder[]): Folder[] => {
 };
 
 const MAX_FOLDER_INSTRUCTIONS = 4000;
+const MAX_FOLDER_PRESETS = 50;
+
+const generatePresetId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `preset-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 const sanitizeFolder = (raw: any, allIds?: Set<string>): Folder | null => {
   if (!raw || typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
@@ -77,22 +86,33 @@ const sanitizeFolder = (raw: any, allIds?: Set<string>): Folder | null => {
   if (typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder)) {
     folder.sortOrder = raw.sortOrder;
   }
+  if (raw.useFolderPresets === true) {
+    folder.useFolderPresets = true;
+  }
+  const presets = sanitizeToolbarPresetList(raw.presets);
+  if (presets.length > 0) {
+    folder.presets = presets.slice(0, MAX_FOLDER_PRESETS);
+  }
   return folder;
 };
 
 const sanitizeFolderList = (rawList: unknown[]): Folder[] => {
   const pass1 = rawList
     .filter((raw) => raw && typeof (raw as Folder).id === 'string')
-    .map((raw) => ({
-      id: (raw as Folder).id,
-      name: typeof (raw as any).name === 'string' ? (raw as any).name.trim() : '',
-      createdAt: typeof (raw as any).createdAt === 'number' ? (raw as any).createdAt : Date.now(),
-      parentId: typeof (raw as any).parentId === 'string' ? (raw as any).parentId : undefined,
-      customInstructions:
-        typeof (raw as any).customInstructions === 'string'
-          ? (raw as any).customInstructions
-          : undefined,
-    }))
+    .map((raw) => {
+      const r = raw as Folder;
+      return {
+        id: r.id,
+        name: typeof r.name === 'string' ? r.name.trim() : '',
+        createdAt: typeof r.createdAt === 'number' ? r.createdAt : Date.now(),
+        parentId: typeof r.parentId === 'string' ? r.parentId : undefined,
+        customInstructions:
+          typeof r.customInstructions === 'string' ? r.customInstructions : undefined,
+        sortOrder: typeof r.sortOrder === 'number' ? r.sortOrder : undefined,
+        useFolderPresets: r.useFolderPresets === true ? true : undefined,
+        presets: r.presets,
+      };
+    })
     .filter((f) => f.name.length > 0);
   const idSet = new Set(pass1.map((f) => f.id));
   return pass1
@@ -504,6 +524,107 @@ export const folderService = {
       const next: Folder = { ...f };
       if (trimmed.length > 0) next.customInstructions = trimmed;
       else delete next.customInstructions;
+      return next;
+    });
+    await persistFolders(user, folders);
+    return folders;
+  },
+
+  setFolderUseFolderPresets: async (
+    user: User | null,
+    currentFolders: Folder[],
+    folderId: string,
+    useFolderPresets: boolean
+  ): Promise<Folder[]> => {
+    if (!currentFolders.some((f) => f.id === folderId)) {
+      throw new Error('Folder not found.');
+    }
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      const next: Folder = { ...f };
+      if (useFolderPresets) next.useFolderPresets = true;
+      else delete next.useFolderPresets;
+      return next;
+    });
+    await persistFolders(user, folders);
+    return folders;
+  },
+
+  saveFolderPreset: async (
+    user: User | null,
+    currentFolders: Folder[],
+    folderId: string,
+    name: string,
+    snapshot: Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'>
+  ): Promise<{ preset: ToolbarPreset; folders: Folder[] }> => {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Preset name is required.');
+    const target = currentFolders.find((f) => f.id === folderId);
+    if (!target) throw new Error('Folder not found.');
+
+    const preset: ToolbarPreset = {
+      id: generatePresetId(),
+      name: trimmedName,
+      createdAt: Date.now(),
+      ...snapshot,
+    };
+    const existing = target.presets || [];
+    if (existing.length >= MAX_FOLDER_PRESETS) {
+      throw new Error(`This folder can store at most ${MAX_FOLDER_PRESETS} presets.`);
+    }
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      return { ...f, presets: [...existing, preset], useFolderPresets: true };
+    });
+    await persistFolders(user, folders);
+    return { preset, folders };
+  },
+
+  updateFolderPreset: async (
+    user: User | null,
+    currentFolders: Folder[],
+    folderId: string,
+    presetId: string,
+    updates: Partial<Omit<ToolbarPreset, 'id' | 'createdAt'>>
+  ): Promise<Folder[]> => {
+    const target = currentFolders.find((f) => f.id === folderId);
+    if (!target) throw new Error('Folder not found.');
+    const existing = target.presets || [];
+    if (!existing.some((p) => p.id === presetId)) {
+      throw new Error('Preset not found.');
+    }
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      const presets = (f.presets || []).map((p) =>
+        p.id === presetId
+          ? {
+              ...p,
+              ...updates,
+              id: p.id,
+              createdAt: p.createdAt,
+              name: (updates.name ?? p.name).trim() || p.name,
+            }
+          : p
+      );
+      return { ...f, presets };
+    });
+    await persistFolders(user, folders);
+    return folders;
+  },
+
+  deleteFolderPreset: async (
+    user: User | null,
+    currentFolders: Folder[],
+    folderId: string,
+    presetId: string
+  ): Promise<Folder[]> => {
+    const target = currentFolders.find((f) => f.id === folderId);
+    if (!target) throw new Error('Folder not found.');
+    const folders = currentFolders.map((f) => {
+      if (f.id !== folderId) return f;
+      const presets = (f.presets || []).filter((p) => p.id !== presetId);
+      const next: Folder = { ...f, presets };
+      if (presets.length === 0) delete next.presets;
       return next;
     });
     await persistFolders(user, folders);

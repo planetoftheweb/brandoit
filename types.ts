@@ -159,6 +159,13 @@ export interface Folder {
    * prepended (root → leaf) before this folder's own text.
    */
   customInstructions?: string;
+  /**
+   * When true, the gallery preset picker uses `presets` on this folder instead
+   * of the account-wide list on `UserPreferences.presets`.
+   */
+  useFolderPresets?: boolean;
+  /** Named toolbar snapshots scoped to this folder (used when `useFolderPresets`). */
+  presets?: ToolbarPreset[];
 }
 
 export interface BrandGuidelinesAnalysis {

@@ -132,6 +132,26 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
         if (typeof folder.sortOrder === 'number' && Number.isFinite(folder.sortOrder)) {
           entry.sortOrder = folder.sortOrder;
         }
+        if (folder.useFolderPresets === true) {
+          entry.useFolderPresets = true;
+        }
+        if (Array.isArray(folder.presets) && folder.presets.length > 0) {
+          entry.presets = folder.presets.map((preset) => {
+            const p: Record<string, unknown> = {
+              id: preset.id,
+              name: preset.name,
+              createdAt: preset.createdAt,
+            };
+            if (preset.graphicTypeId) p.graphicTypeId = preset.graphicTypeId;
+            if (preset.visualStyleId) p.visualStyleId = preset.visualStyleId;
+            if (preset.colorSchemeId) p.colorSchemeId = preset.colorSchemeId;
+            if (preset.aspectRatio) p.aspectRatio = preset.aspectRatio;
+            if (preset.svgMode) p.svgMode = preset.svgMode;
+            if (preset.selectedModel) p.selectedModel = preset.selectedModel;
+            if (preset.openaiImageQuality) p.openaiImageQuality = preset.openaiImageQuality;
+            return p;
+          });
+        }
         return entry;
       });
   }
