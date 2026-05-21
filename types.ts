@@ -130,8 +130,8 @@ export interface Generation {
 /**
  * Reserved id of the always-present "Inbox" folder. Auto-created on first
  * init (per user / per guest device) and undeletable, but renameable. Used
- * as the fallback target when an `activeFolderId` is missing or a folder is
- * deleted with tiles still inside it.
+ * as the default gallery folder and when a folder is deleted with tiles
+ * still inside it.
  */
 export const INBOX_FOLDER_ID = 'folder-inbox';
 
@@ -184,15 +184,14 @@ export interface UserPreferences {
    */
   folders?: Folder[];
   /**
-   * Sticky folder for new generations. When set, every new tile auto-lands
-   * in this folder until cleared. `undefined` / missing => fall back to
-   * Inbox. Cleared explicitly by the user via the gallery's pin toggle.
+   * @deprecated Legacy sticky-folder pin — no longer written. New tiles use
+   * `galleryViewFolderId` (the folder currently open in the gallery).
    */
   activeFolderId?: string;
   /**
-   * Which folder the Recents gallery is currently showing. Persisted so the
-   * same selection restores across devices and sessions (Firestore for
-   * signed-in users; localStorage for guests). Invalid ids fall back to Inbox.
+   * Which folder the Recents gallery is currently showing. New generations
+   * land here. Persisted across devices/sessions (Firestore or localStorage).
+   * Invalid ids fall back to Inbox.
    */
   galleryViewFolderId?: string;
   /**

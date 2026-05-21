@@ -549,9 +549,8 @@ export const createGeneration = async (
     versions: [version],
     currentVersionIndex: 0,
     comparisonBatchId,
-    // Caller passes the user's sticky folder (or `INBOX_FOLDER_ID` when
-    // unset). Falling back here keeps callers that haven't been updated
-    // yet from accidentally writing tiles with no folder.
+    // Caller passes the gallery's open folder (or `INBOX_FOLDER_ID` when
+    // unset). Falling back here keeps callers from writing tiles with no folder.
     folderId: folderId && folderId.length > 0 ? folderId : INBOX_FOLDER_ID,
   };
 };

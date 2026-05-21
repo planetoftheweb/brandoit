@@ -10,7 +10,7 @@ import {
 /**
  * Manages user-owned folders that group generation tiles. Folders persist
  * on the user document for signed-in users (under
- * `preferences.folders` / `preferences.activeFolderId`) and in localStorage
+ * `preferences.folders` / `preferences.galleryViewFolderId`) and in localStorage
  * for guests so the gallery looks the same before and after sign-in.
  *
  * Every Generation belongs to exactly one folder; missing/legacy items are
@@ -19,7 +19,6 @@ import {
  */
 
 const FOLDERS_LOCAL_KEY = 'brandoit_folders_v1';
-const ACTIVE_FOLDER_LOCAL_KEY = 'brandoit_active_folder_v1';
 /** Last-opened Recents gallery folder for guests (signed-in uses Firestore). */
 const GALLERY_VIEW_FOLDER_LOCAL_KEY = 'brandoit_gallery_view_folder_v1';
 /** Legacy key from when view folder lived only in RecentGenerations. */
@@ -118,24 +117,6 @@ const writeLocalFolders = (folders: Folder[]) => {
   }
 };
 
-const readLocalActiveFolderId = (): string | undefined => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_FOLDER_LOCAL_KEY);
-    return raw && raw.length > 0 ? raw : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const writeLocalActiveFolderId = (id: string | null | undefined) => {
-  try {
-    if (id) localStorage.setItem(ACTIVE_FOLDER_LOCAL_KEY, id);
-    else localStorage.removeItem(ACTIVE_FOLDER_LOCAL_KEY);
-  } catch (err) {
-    console.warn('[folderService] Failed to persist active folder locally:', err);
-  }
-};
-
 const readLocalGalleryViewFolderId = (): string | undefined => {
   try {
     const primary = localStorage.getItem(GALLERY_VIEW_FOLDER_LOCAL_KEY);
@@ -169,14 +150,13 @@ const resolveGalleryViewFolderId = (
 const buildNextPreferences = (
   user: User,
   nextFolders: Folder[],
-  nextActiveFolderId: string | undefined,
   nextGalleryViewFolderId?: string
 ): UserPreferences => {
   const next: UserPreferences = {
     ...user.preferences,
     folders: nextFolders,
-    activeFolderId: nextActiveFolderId
   };
+  delete next.activeFolderId;
   if (nextGalleryViewFolderId !== undefined) {
     next.galleryViewFolderId = nextGalleryViewFolderId;
   }
@@ -184,24 +164,21 @@ const buildNextPreferences = (
 };
 
 /**
- * Persist a folder list (and the optional sticky active folder) for the
- * current actor. Centralizing the write makes it easy to keep guest +
- * signed-in flows in sync — every mutation goes through this helper.
+ * Persist a folder list for the current actor. Centralizing the write keeps
+ * guest + signed-in flows in sync — every mutation goes through this helper.
  */
 const persistFolders = async (
   user: User | null,
   folders: Folder[],
-  activeFolderId: string | undefined,
   galleryViewFolderId?: string
 ): Promise<void> => {
   if (user) {
     await authService.updateUserPreferences(
       user.id,
-      buildNextPreferences(user, folders, activeFolderId, galleryViewFolderId)
+      buildNextPreferences(user, folders, galleryViewFolderId)
     );
   } else {
     writeLocalFolders(folders);
-    writeLocalActiveFolderId(activeFolderId);
     if (galleryViewFolderId !== undefined && galleryViewFolderId.length > 0) {
       writeLocalGalleryViewFolderId(galleryViewFolderId);
     }
@@ -210,7 +187,6 @@ const persistFolders = async (
 
 export interface FolderState {
   folders: Folder[];
-  activeFolderId?: string;
   /** Which folder the Recents grid should open on; validated against `folders`. */
   galleryViewFolderId?: string;
 }
@@ -227,10 +203,6 @@ export const folderService = {
         ? sanitizeFolderList(user.preferences.folders)
         : [];
       const folders = ensureInbox(stored);
-      const activeFolderId =
-        typeof user.preferences.activeFolderId === 'string'
-          ? user.preferences.activeFolderId
-          : undefined;
 
       const fromPrefs = resolveGalleryViewFolderId(
         typeof user.preferences.galleryViewFolderId === 'string'
@@ -257,8 +229,7 @@ export const folderService = {
               .updateUserPreferences(user.id, {
                 ...user.preferences,
                 folders,
-                activeFolderId,
-                galleryViewFolderId: migrated
+                galleryViewFolderId: migrated,
               })
               .catch(err => console.warn('[folderService] Gallery view migration write failed:', err));
           }
@@ -272,13 +243,13 @@ export const folderService = {
       // shouldn't block the UI from rendering the in-memory seed.
       if (stored.length === 0) {
         try {
-          await persistFolders(user, folders, activeFolderId);
+          await persistFolders(user, folders);
         } catch (err) {
           console.warn('[folderService] Failed to seed Inbox for new user:', err);
         }
       }
 
-      return { folders, activeFolderId, galleryViewFolderId };
+      return { folders, galleryViewFolderId };
     }
 
     const stored = readLocalFolders();
@@ -287,8 +258,7 @@ export const folderService = {
     const galleryViewFolderId = resolveGalleryViewFolderId(readLocalGalleryViewFolderId(), folders);
     return {
       folders,
-      activeFolderId: readLocalActiveFolderId(),
-      galleryViewFolderId
+      galleryViewFolderId,
     };
   },
 
@@ -309,16 +279,15 @@ export const folderService = {
   },
 
   /**
-   * Append a new folder and make it the sticky default. Returns the new
-   * folder along with the resulting list/active id so callers can update
-   * local state in one shot.
+   * Append a new folder and switch the gallery view to it. Returns the new
+   * folder and list so callers can update local state in one shot.
    */
   createFolder: async (
     user: User | null,
     name: string,
     currentFolders: Folder[],
     parentId?: string
-  ): Promise<{ folder: Folder; folders: Folder[]; activeFolderId: string }> => {
+  ): Promise<{ folder: Folder; folders: Folder[] }> => {
     const trimmed = name.trim();
     if (!trimmed) throw new Error('Folder name is required.');
 
@@ -338,8 +307,8 @@ export const folderService = {
     const folders = ensureInbox([...currentFolders, folder]);
     // Persist gallery target in the same write so a refresh keeps the new tab;
     // also switch guests' localStorage gallery key immediately.
-    await persistFolders(user, folders, folder.id, folder.id);
-    return { folder, folders, activeFolderId: folder.id };
+    await persistFolders(user, folders, folder.id);
+    return { folder, folders };
   },
 
   /**
@@ -349,7 +318,6 @@ export const folderService = {
   renameFolder: async (
     user: User | null,
     currentFolders: Folder[],
-    activeFolderId: string | undefined,
     folderId: string,
     nextName: string
   ): Promise<Folder[]> => {
@@ -361,7 +329,7 @@ export const folderService = {
     const folders = currentFolders.map(f =>
       f.id === folderId ? { ...f, name: trimmed } : f
     );
-    await persistFolders(user, folders, activeFolderId);
+    await persistFolders(user, folders);
     return folders;
   },
 
@@ -369,14 +337,12 @@ export const folderService = {
    * Remove a folder. Refuses to delete Inbox. Callers are expected to
    * reassign any tiles still inside the deleted folder to Inbox via
    * `historyService.moveGenerationsToFolder` before/after this call.
-   * Also clears the sticky pin if it pointed at the deleted folder.
    */
   deleteFolder: async (
     user: User | null,
     currentFolders: Folder[],
-    activeFolderId: string | undefined,
     folderId: string
-  ): Promise<{ folders: Folder[]; activeFolderId: string | undefined }> => {
+  ): Promise<{ folders: Folder[] }> => {
     if (folderId === INBOX_FOLDER_ID) {
       throw new Error('Inbox cannot be deleted.');
     }
@@ -400,16 +366,13 @@ export const folderService = {
           return f;
         })
     );
-    const nextActive =
-      activeFolderId && removedSubtree.has(activeFolderId) ? undefined : activeFolderId;
-    await persistFolders(user, folders, nextActive);
-    return { folders, activeFolderId: nextActive };
+    await persistFolders(user, folders);
+    return { folders };
   },
 
   moveFolder: async (
     user: User | null,
     currentFolders: Folder[],
-    activeFolderId: string | undefined,
     folderId: string,
     newParentId: string | null
   ): Promise<Folder[]> => {
@@ -436,14 +399,13 @@ export const folderService = {
       else delete next.parentId;
       return next;
     });
-    await persistFolders(user, folders, activeFolderId);
+    await persistFolders(user, folders);
     return folders;
   },
 
   setFolderInstructions: async (
     user: User | null,
     currentFolders: Folder[],
-    activeFolderId: string | undefined,
     folderId: string,
     customInstructions: string
   ): Promise<Folder[]> => {
@@ -458,7 +420,7 @@ export const folderService = {
       else delete next.customInstructions;
       return next;
     });
-    await persistFolders(user, folders, activeFolderId);
+    await persistFolders(user, folders);
     return folders;
   },
 
@@ -467,21 +429,4 @@ export const folderService = {
     childFolders: getChildFolders(folders, folderId),
     descendantFolderIds: getDescendantFolderIds(folders, folderId),
   }),
-
-  /**
-   * Pin (or clear) the sticky folder for new generations. Pass `null` to
-   * clear the pin so new tiles fall back to Inbox.
-   */
-  setActiveFolder: async (
-    user: User | null,
-    currentFolders: Folder[],
-    folderId: string | null
-  ): Promise<string | undefined> => {
-    const nextActive = folderId && folderId.length > 0 ? folderId : undefined;
-    if (nextActive && !currentFolders.some(f => f.id === nextActive)) {
-      throw new Error('Folder not found.');
-    }
-    await persistFolders(user, currentFolders, nextActive);
-    return nextActive;
-  }
 };

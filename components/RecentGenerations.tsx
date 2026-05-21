@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical } from 'lucide-react';
 import {
   buildFolderTree,
   flattenVisibleFolderTree,
@@ -75,9 +75,7 @@ interface RecentGenerationsProps {
   pickedMarkIds?: { a?: string; b?: string };
   /** All folders the current actor owns. The Inbox folder is always present. */
   folders: Folder[];
-  /** Sticky folder for new generations. `undefined` => Inbox is the fallback. */
-  activeFolderId?: string;
-  /** Which folder's tiles the Recents grid is showing; owned and persisted by App. */
+  /** Which folder's tiles the Recents grid is showing; new generations land here. */
   galleryViewFolderId: string;
   /** Persist the user's gallery folder tab (Firestore or guest localStorage). */
   onGalleryViewFolderChange: (folderId: string) => void | Promise<void>;
@@ -85,8 +83,6 @@ interface RecentGenerationsProps {
   onCreateFolder: (name: string, parentId?: string) => Promise<Folder>;
   onRenameFolder: (folderId: string, nextName: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  /** Pin or clear (`null`) the sticky folder for new generations. */
-  onSetActiveFolder: (folderId: string | null) => Promise<void>;
   /** Bulk-move a list of tiles into a folder (used by selection-mode action). */
   onMoveToFolder: (generationIds: string[], folderId: string) => Promise<void>;
   /** Reparent a folder (drop onto another folder). Pass `null` for top level. */
@@ -110,13 +106,11 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   onPickMark,
   pickedMarkIds,
   folders,
-  activeFolderId,
   galleryViewFolderId,
   onGalleryViewFolderChange,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
-  onSetActiveFolder,
   onMoveToFolder,
   onMoveFolder,
   onSetFolderInstructions,
@@ -746,24 +740,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setNewFolderDraft('');
     };
 
-    const handleTogglePin = async (folder: Folder) => {
-      const wasPinned = folder.id === activeFolderId;
-      try {
-        setFolderBusy(true);
-        await onSetActiveFolder(wasPinned ? null : folder.id);
-        showToast(
-          wasPinned
-            ? 'Sticky folder cleared'
-            : `New tiles will save to ${folder.name}`
-        );
-      } catch (err) {
-        console.error('Toggle sticky folder failed:', err);
-        showToast('Could not update sticky folder');
-      } finally {
-        setFolderBusy(false);
-      }
-    };
-
     return (
       <div
         className="relative"
@@ -783,10 +759,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300">
             {activeCount}
           </span>
-          {/* Pin badge intentionally omitted from the trigger — the menu
-              still shows which folder is the sticky default via the
-              highlighted pin button on its row. Showing it twice (here
-              *and* in the menu) was redundant and added visual noise. */}
           <ChevronDown
             size={14}
             aria-hidden
@@ -819,7 +791,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             </div>
             {visibleFolderRows.map(({ folder, depth, hasChildren, isCollapsed }) => {
               const isViewing = folder.id === viewFolderId;
-              const isPinned = folder.id === activeFolderId;
               const isInbox = folder.id === INBOX_FOLDER_ID;
               const count = folderCounts.get(folder.id) || 0;
               const isRenaming = renamingFolderId === folder.id;
@@ -837,20 +808,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     data-folder-menu
                     className="absolute right-0 top-full mt-0.5 z-40 min-w-[11rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg"
                   >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => void handleTogglePin(folder)}
-                      disabled={folderBusy}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
-                    >
-                      {isPinned ? (
-                        <Pin size={14} className="text-amber-500 shrink-0" fill="currentColor" />
-                      ) : (
-                        <PinOff size={14} className="shrink-0 text-slate-400" />
-                      )}
-                      {isPinned ? 'Unpin sticky folder' : 'Pin as sticky folder'}
-                    </button>
                     <button
                       type="button"
                       role="menuitem"
@@ -1072,14 +1029,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     <span className="flex-1 min-w-0 truncate" title={folder.name}>
                       {folder.name}
                     </span>
-                    {isPinned && (
-                      <Pin
-                        size={12}
-                        className="shrink-0 text-amber-500"
-                        fill="currentColor"
-                        aria-label="Sticky folder for new generations"
-                      />
-                    )}
                     {hasInstructions && (
                       <FileText
                         size={12}
@@ -1266,7 +1215,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         <div className="flex flex-wrap items-center gap-2 min-w-0 text-slate-500 dark:text-slate-400">
           {/* Folder picker — combines the prior "Inbox" chip and "(N items in
               folder)" text into one dropdown. The trigger surfaces the active
-              view's name + count + sticky-pin state; the menu lists every
+              view's name + count; the menu lists every
               folder with inline pin/rename/delete actions and a "+ New
               folder" affordance at the bottom. The wrapping container sets
               `position: relative` so the absolutely-positioned menu anchors
@@ -1540,7 +1489,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
                   >
                     {visibleFolderRows.map(({ folder, depth }) => {
-                      const isHighlighted = folder.id === (activeFolderId || INBOX_FOLDER_ID);
+                      const isHighlighted = folder.id === viewFolderId;
                       return (
                         <button
                           key={folder.id}
@@ -1801,9 +1750,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       {visibleHistory.length === 0 && childFoldersInView.length === 0 && (
         <div className="text-center py-12 text-sm text-slate-500 dark:text-slate-400 border border-dashed border-gray-300 dark:border-[#30363d] rounded-xl mb-4">
           This folder is empty.
-          {activeFolderId === viewFolderId
-            ? ' New generations will land here.'
-            : ' Pin this folder to make new generations land here, or move tiles in from another folder.'}
+          {viewFolderId === galleryViewFolderId
+            ? ' New generations will land here while this folder is open.'
+            : ' Move tiles in from another folder, or open this folder before generating.'}
         </div>
       )}
 

@@ -352,10 +352,9 @@ const App: React.FC = () => {
   const [currentGeneration, setCurrentGeneration] = useState<Generation | null>(null);
   const [history, setHistory] = useState<Generation[]>([]);
   // Folder state. `folders` is hydrated from the user doc (or localStorage
-  // for guests) on every auth change; `activeFolderId` is the sticky pin
-  // for new generations — `undefined` means "no pin, fall back to Inbox".
+  // for guests) on every auth change. New generations land in whichever
+  // folder the gallery is currently showing (`galleryViewFolderId`).
   const [folders, setFolders] = useState<Folder[]>([]);
-  const [activeFolderId, setActiveFolderId] = useState<string | undefined>(undefined);
   /** Recents gallery folder tab; persisted (Firestore / guest localStorage). */
   const [galleryViewFolderId, setGalleryViewFolderId] = useState<string>(INBOX_FOLDER_ID);
   /** Refine / recompose jobs: depth > 0 drives in-flight spinners; work is serialized to avoid version races. */
@@ -520,10 +519,9 @@ const App: React.FC = () => {
     // auto-seeds Inbox the first time it's called for a user/device.
     let cancelled = false;
     folderService.loadFolders(user || null)
-      .then(({ folders: nextFolders, activeFolderId: nextActive, galleryViewFolderId: nextGallery }) => {
+      .then(({ folders: nextFolders, galleryViewFolderId: nextGallery }) => {
         if (cancelled) return;
         setFolders(nextFolders);
-        setActiveFolderId(nextActive);
         setGalleryViewFolderId(nextGallery ?? INBOX_FOLDER_ID);
       })
       .catch(err => {
@@ -1299,17 +1297,16 @@ const App: React.FC = () => {
       const primaryModelId = modelIdsToRun[0];
       const runUser = user;
       const runContext = context;
-      const runFolderId = activeFolderId || INBOX_FOLDER_ID;
+      const runFolderId = galleryViewFolderId || INBOX_FOLDER_ID;
       const runSystemPrompt = mergeFolderInstructionsWithSystemPrompt(
         folders,
         runFolderId,
         user.preferences.systemPrompt
       );
       const runOpenAIQuality = user.preferences.settings?.openaiImageQuality || 'auto';
-      // Snapshot the sticky folder at click time so every tile from this
-      // Generate run lands in the same folder, even if the user changes the
-      // pin while the batch is in flight. Falls back to Inbox when nothing
-      // is pinned, so the gallery can always group every tile by folder.
+      // Snapshot the open gallery folder at click time so every tile from
+      // this Generate run lands together, even if the user switches folders
+      // while the batch is in flight.
       const startedAt = Date.now();
       jobId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const abortController = new AbortController();
@@ -2497,7 +2494,6 @@ const App: React.FC = () => {
   const handleCreateFolder = async (name: string, parentId?: string): Promise<Folder> => {
     const result = await folderService.createFolder(user || null, name, folders, parentId);
     setFolders(result.folders);
-    setActiveFolderId(result.activeFolderId);
     setGalleryViewFolderId(result.folder.id);
     if (user) {
       setUser((prev) =>
@@ -2507,7 +2503,6 @@ const App: React.FC = () => {
               preferences: {
                 ...prev.preferences,
                 folders: result.folders,
-                activeFolderId: result.activeFolderId,
                 galleryViewFolderId: result.folder.id,
               },
             }
@@ -2521,7 +2516,6 @@ const App: React.FC = () => {
     const nextFolders = await folderService.renameFolder(
       user || null,
       folders,
-      activeFolderId,
       folderId,
       nextName
     );
@@ -2537,7 +2531,6 @@ const App: React.FC = () => {
     const nextFolders = await folderService.moveFolder(
       user || null,
       folders,
-      activeFolderId,
       folderId,
       parentId
     );
@@ -2553,7 +2546,6 @@ const App: React.FC = () => {
     const nextFolders = await folderService.setFolderInstructions(
       user || null,
       folders,
-      activeFolderId,
       folderId,
       customInstructions
     );
@@ -2590,11 +2582,9 @@ const App: React.FC = () => {
     const result = await folderService.deleteFolder(
       user || null,
       folders,
-      activeFolderId,
       folderId
     );
     setFolders(result.folders);
-    setActiveFolderId(result.activeFolderId);
     if (user) {
       setUser((prev) =>
         prev
@@ -2603,25 +2593,6 @@ const App: React.FC = () => {
               preferences: {
                 ...prev.preferences,
                 folders: result.folders,
-                activeFolderId: result.activeFolderId,
-              },
-            }
-          : prev
-      );
-    }
-  };
-
-  const handleSetActiveFolder = async (folderId: string | null) => {
-    const next = await folderService.setActiveFolder(user || null, folders, folderId);
-    setActiveFolderId(next);
-    if (user) {
-      setUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              preferences: {
-                ...prev.preferences,
-                activeFolderId: next,
               },
             }
           : prev
@@ -3397,13 +3368,11 @@ const App: React.FC = () => {
                 b: comparisonState.b ? `${comparisonState.b.generationId}|${comparisonState.b.versionId}` : undefined,
               }}
               folders={folders}
-              activeFolderId={activeFolderId}
               galleryViewFolderId={galleryViewFolderId}
               onGalleryViewFolderChange={handleGalleryViewFolderChange}
               onCreateFolder={handleCreateFolder}
               onRenameFolder={handleRenameFolder}
               onDeleteFolder={handleDeleteFolder}
-              onSetActiveFolder={handleSetActiveFolder}
               onMoveToFolder={handleMoveGenerationsToFolder}
               onMoveFolder={handleMoveFolder}
               onSetFolderInstructions={handleSetFolderInstructions}
