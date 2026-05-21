@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical, ClipboardCopy } from 'lucide-react';
 import {
   buildFolderTree,
   flattenVisibleFolderTree,
@@ -28,6 +28,40 @@ const THUMBNAIL_GRID_CLASS: Record<ThumbnailSize, string> = {
   md: 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3',
   lg: 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4',
 };
+
+type ContextPoint = { x: number; y: number };
+
+const CONTEXT_MENU_PANEL =
+  'fixed z-[70] min-w-[11rem] max-w-[min(100vw-1rem,16rem)] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl max-h-[min(70vh,20rem)] overflow-y-auto';
+const CONTEXT_MENU_ITEM =
+  'w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d] disabled:opacity-50 disabled:pointer-events-none';
+const CONTEXT_MENU_ITEM_ACCENT =
+  'w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10';
+const CONTEXT_MENU_ITEM_DANGER =
+  'w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20';
+
+function clampContextPoint(
+  point: ContextPoint,
+  size: { width: number; height: number } = { width: 220, height: 300 }
+): ContextPoint {
+  if (typeof window === 'undefined') return point;
+  const margin = 8;
+  const maxX = Math.max(margin, window.innerWidth - size.width - margin);
+  const maxY = Math.max(margin, window.innerHeight - size.height - margin);
+  return {
+    x: Math.min(Math.max(margin, point.x), maxX),
+    y: Math.min(Math.max(margin, point.y), maxY),
+  };
+}
+
+function ContextMenuDivider() {
+  return (
+    <div
+      className="my-1 border-t border-gray-200 dark:border-[#30363d]"
+      role="separator"
+    />
+  );
+}
 
 // Single-word labels keep the compact RichSelect trigger from wrapping
 // onto two lines at narrow widths (the trigger is `w-28 xl:w-32`, which
@@ -147,6 +181,12 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     folderId: string | 'root';
     x: number;
     y: number;
+  } | null>(null);
+  const [tileContextMenu, setTileContextMenu] = React.useState<{
+    generationId: string;
+    x: number;
+    y: number;
+    view: 'main' | 'move';
   } | null>(null);
   const folderActionsMenuRef = React.useRef<HTMLDivElement>(null);
   const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
@@ -336,7 +376,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   // tag themselves with `data-folder-menu` so a click *inside* either menu
   // (or its trigger) is left alone.
   React.useEffect(() => {
-    if (!isFolderPickerOpen && !moveMenuOpen && !pageMenuOpen && !folderActionsMenuId && !folderContextMenu) {
+    if (
+      !isFolderPickerOpen &&
+      !moveMenuOpen &&
+      !pageMenuOpen &&
+      !folderActionsMenuId &&
+      !folderContextMenu &&
+      !tileContextMenu
+    ) {
       return;
     }
     const onClick = (e: MouseEvent) => {
@@ -353,6 +400,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setPageMenuOpen(false);
       setFolderActionsMenuId(null);
       setFolderContextMenu(null);
+      setTileContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -361,6 +409,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         setPageMenuOpen(false);
         setFolderActionsMenuId(null);
         setFolderContextMenu(null);
+        setTileContextMenu(null);
         setRenamingFolderId(null);
         setRenameDraft('');
         setIsCreatingFolder(false);
@@ -374,7 +423,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       window.removeEventListener('mousedown', onClick);
       window.removeEventListener('keydown', onKey);
     };
-  }, [isFolderPickerOpen, moveMenuOpen, pageMenuOpen, folderActionsMenuId, folderContextMenu]);
+  }, [
+    isFolderPickerOpen,
+    moveMenuOpen,
+    pageMenuOpen,
+    folderActionsMenuId,
+    folderContextMenu,
+    tileContextMenu,
+  ]);
 
   // Visible history is the slice of tiles that live in the currently-viewed
   // folder. Legacy items without a `folderId` are normalized into Inbox via
@@ -460,6 +516,55 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setFolderActionsMenuId(null);
     setFolderContextMenu(null);
   }, []);
+
+  const closeAllContextMenus = React.useCallback(() => {
+    setFolderContextMenu(null);
+    setTileContextMenu(null);
+  }, []);
+
+  const openFolderInstructions = React.useCallback(
+    (folderId: string) => {
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return;
+      setInstructionsFolderId(folderId);
+      setInstructionsDraft(folder.customInstructions || '');
+      setFolderActionsMenuId(null);
+      closeAllContextMenus();
+      setIsFolderPickerOpen(false);
+    },
+    [folders, closeAllContextMenus]
+  );
+
+  const startRenameFolder = React.useCallback(
+    (folderId: string) => {
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return;
+      setRenamingFolderId(folderId);
+      setRenameDraft(folder.name);
+      setFolderActionsMenuId(null);
+      closeAllContextMenus();
+    },
+    [folders, closeAllContextMenus]
+  );
+
+  const promptDeleteFolder = React.useCallback(
+    (folderId: string) => {
+      setFolderActionsMenuId(null);
+      closeAllContextMenus();
+      setIsFolderPickerOpen(false);
+      setPendingDeleteFolderId(folderId);
+    },
+    [closeAllContextMenus]
+  );
+
+  const openFolderFromMenu = React.useCallback(
+    (folderId: string) => {
+      void onGalleryViewFolderChange(folderId);
+      closeAllContextMenus();
+      setIsFolderPickerOpen(false);
+    },
+    [onGalleryViewFolderChange, closeAllContextMenus]
+  );
 
   const childFoldersInView = React.useMemo(
     () => getChildFolders(folders, viewFolderId),
@@ -650,6 +755,38 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 1800);
   };
 
+  const copyGenerationPrompt = React.useCallback(
+    async (gen: Generation) => {
+      try {
+        await navigator.clipboard.writeText(gen.config.prompt);
+        showToast('Prompt copied');
+        closeAllContextMenus();
+      } catch {
+        showToast('Could not copy prompt');
+      }
+    },
+    [closeAllContextMenus]
+  );
+
+  const moveTileToFolder = React.useCallback(
+    async (generationId: string, folderId: string) => {
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return;
+      try {
+        setFolderBusy(true);
+        await onMoveToFolder([generationId], folderId);
+        showToast(`Moved to ${folder.name}`);
+        closeAllContextMenus();
+      } catch (err) {
+        console.error('Move tile failed:', err);
+        showToast('Move failed');
+      } finally {
+        setFolderBusy(false);
+      }
+    },
+    [folders, onMoveToFolder, closeAllContextMenus]
+  );
+
   const getModelLabel = (modelId?: string) => {
     if (modelId === 'openai-2') return 'GPT Image 2';
     if (modelId === 'openai-mini') return 'GPT Image Mini';
@@ -811,12 +948,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     <button
                       type="button"
                       role="menuitem"
-                      onClick={() => {
-                        setInstructionsFolderId(folder.id);
-                        setInstructionsDraft(folder.customInstructions || '');
-                        setFolderActionsMenuId(null);
-                        setIsFolderPickerOpen(false);
-                      }}
+                      onClick={() => openFolderInstructions(folder.id)}
                       className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-gray-50 dark:hover:bg-[#21262d] ${
                         hasInstructions
                           ? 'text-brand-teal'
@@ -829,12 +961,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     <button
                       type="button"
                       role="menuitem"
-                      onClick={() => {
-                        setRenamingFolderId(folder.id);
-                        setRenameDraft(folder.name);
-                        setFolderActionsMenuId(null);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
+                      onClick={() => startRenameFolder(folder.id)}
+                      className={CONTEXT_MENU_ITEM}
                     >
                       <Pencil size={14} className="shrink-0 text-slate-400" />
                       Rename
@@ -843,7 +971,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       type="button"
                       role="menuitem"
                       onClick={() => beginAddSubfolder(folder.id)}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
+                      className={CONTEXT_MENU_ITEM}
                     >
                       <FolderPlus size={14} className="shrink-0 text-brand-teal" />
                       Add subfolder
@@ -852,12 +980,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       <button
                         type="button"
                         role="menuitem"
-                        onClick={() => {
-                          setFolderActionsMenuId(null);
-                          setIsFolderPickerOpen(false);
-                          setPendingDeleteFolderId(folder.id);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        onClick={() => promptDeleteFolder(folder.id)}
+                        className={CONTEXT_MENU_ITEM_DANGER}
                       >
                         <Trash2 size={14} className="shrink-0" />
                         Delete
@@ -1069,42 +1193,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               );
             })}
 
-            {folderContextMenu && (
-              <div
-                role="menu"
-                data-folder-menu
-                className="fixed z-50 min-w-[10.5rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl"
-                style={{
-                  left: folderContextMenu.x,
-                  top: folderContextMenu.y,
-                }}
-              >
-                {folderContextMenu.folderId === 'root' ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => beginCreateRootFolder()}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
-                  >
-                    <FolderPlus size={14} className="shrink-0" />
-                    New folder
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() =>
-                      beginAddSubfolder(folderContextMenu.folderId)
-                    }
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
-                  >
-                    <FolderPlus size={14} className="shrink-0" />
-                    Add subfolder
-                  </button>
-                )}
-              </div>
-            )}
-
             <div
               className="my-1 border-t border-gray-200 dark:border-[#30363d]"
               aria-hidden
@@ -1197,6 +1285,267 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           </div>
         )}
       </div>
+    );
+  };
+
+  const renderFolderContextMenuPortal = () => {
+    if (!folderContextMenu || typeof document === 'undefined') return null;
+    const pos = clampContextPoint({
+      x: folderContextMenu.x,
+      y: folderContextMenu.y,
+    });
+    const isRoot = folderContextMenu.folderId === 'root';
+    const folder = isRoot
+      ? null
+      : folders.find((f) => f.id === folderContextMenu.folderId);
+    const isInbox = folder?.id === INBOX_FOLDER_ID;
+    const hasInstructions = Boolean(folder?.customInstructions?.trim());
+    const isViewing = folder?.id === viewFolderId;
+
+    return createPortal(
+      <div
+        role="menu"
+        data-folder-menu
+        className={CONTEXT_MENU_PANEL}
+        style={{ left: pos.x, top: pos.y }}
+      >
+        {isRoot ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => beginCreateRootFolder()}
+            className={CONTEXT_MENU_ITEM_ACCENT}
+          >
+            <FolderPlus size={14} className="shrink-0" />
+            New folder
+          </button>
+        ) : (
+          folder && (
+            <>
+              {!isViewing && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => openFolderFromMenu(folder.id)}
+                  className={CONTEXT_MENU_ITEM}
+                >
+                  <FolderIcon size={14} className="shrink-0 text-brand-teal" />
+                  Open folder
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => beginAddSubfolder(folder.id)}
+                className={CONTEXT_MENU_ITEM_ACCENT}
+              >
+                <FolderPlus size={14} className="shrink-0" />
+                Add subfolder
+              </button>
+              <ContextMenuDivider />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => openFolderInstructions(folder.id)}
+                className={
+                  hasInstructions ? CONTEXT_MENU_ITEM_ACCENT : CONTEXT_MENU_ITEM
+                }
+              >
+                <FileText size={14} className="shrink-0" />
+                {hasInstructions ? 'Edit instructions' : 'Add instructions'}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => startRenameFolder(folder.id)}
+                className={CONTEXT_MENU_ITEM}
+              >
+                <Pencil size={14} className="shrink-0 text-slate-400" />
+                Rename
+              </button>
+              {!isInbox && (
+                <>
+                  <ContextMenuDivider />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => promptDeleteFolder(folder.id)}
+                    className={CONTEXT_MENU_ITEM_DANGER}
+                  >
+                    <Trash2 size={14} className="shrink-0" />
+                    Delete folder
+                  </button>
+                </>
+              )}
+            </>
+          )
+        )}
+      </div>,
+      document.body
+    );
+  };
+
+  const renderTileContextMenuPortal = () => {
+    if (!tileContextMenu || typeof document === 'undefined') return null;
+    const gen = history.find((g) => g.id === tileContextMenu.generationId);
+    if (!gen) return null;
+    const latestVersion = getLatestVersion(gen);
+    const isSelected = selectedIds.includes(gen.id);
+    const pos = clampContextPoint(
+      { x: tileContextMenu.x, y: tileContextMenu.y },
+      tileContextMenu.view === 'move'
+        ? { width: 240, height: 360 }
+        : { width: 220, height: 280 }
+    );
+
+    if (tileContextMenu.view === 'move') {
+      return createPortal(
+        <div
+          role="menu"
+          aria-label="Move to folder"
+          data-folder-menu
+          className={CONTEXT_MENU_PANEL}
+          style={{ left: pos.x, top: pos.y }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              setTileContextMenu((prev) =>
+                prev ? { ...prev, view: 'main' } : prev
+              )
+            }
+            className={CONTEXT_MENU_ITEM}
+          >
+            <ChevronLeft size={14} className="shrink-0" aria-hidden />
+            Back
+          </button>
+          <ContextMenuDivider />
+          {visibleFolderRows.map(({ folder, depth }) => {
+            const inFolder = (gen.folderId || INBOX_FOLDER_ID) === folder.id;
+            return (
+              <button
+                key={folder.id}
+                type="button"
+                role="menuitem"
+                disabled={inFolder || folderBusy}
+                onClick={() => void moveTileToFolder(gen.id, folder.id)}
+                className={CONTEXT_MENU_ITEM}
+                style={{ paddingLeft: `${12 + depth * 12}px` }}
+              >
+                <FolderIcon size={14} className="shrink-0 text-slate-400" />
+                <span className="truncate flex-1">{folder.name}</span>
+                {inFolder && (
+                  <span className="text-[10px] text-slate-400 shrink-0">here</span>
+                )}
+              </button>
+            );
+          })}
+        </div>,
+        document.body
+      );
+    }
+
+    return createPortal(
+      <div
+        role="menu"
+        data-folder-menu
+        className={CONTEXT_MENU_PANEL}
+        style={{ left: pos.x, top: pos.y }}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onSelect(gen);
+            showToast('Restored');
+            closeAllContextMenus();
+          }}
+          className={CONTEXT_MENU_ITEM}
+        >
+          <ArrowUpRight size={14} className="shrink-0" />
+          Open in preview
+        </button>
+        {!selectionMode && !isComparePicking && onPickMark && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onPickMark({
+                generationId: gen.id,
+                versionId: latestVersion.id,
+                imageUrl: getDisplayImageUrl(gen),
+                mimeType: latestVersion.mimeType,
+                modelId: latestVersion.modelId || gen.modelId,
+                markLabel: latestVersion.label,
+                aspectRatio:
+                  latestVersion.aspectRatio || gen.config.aspectRatio,
+              });
+              closeAllContextMenus();
+            }}
+            className={CONTEXT_MENU_ITEM}
+          >
+            <GitCompare size={14} className="shrink-0" />
+            Pick for compare
+          </button>
+        )}
+        <ContextMenuDivider />
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            if (!selectionMode) setSelectionMode(true);
+            toggleSelect(gen.id);
+            closeAllContextMenus();
+          }}
+          className={CONTEXT_MENU_ITEM}
+        >
+          {isSelected ? (
+            <CheckSquare size={14} className="shrink-0 text-brand-teal" />
+          ) : (
+            <Square size={14} className="shrink-0" />
+          )}
+          {isSelected ? 'Deselect' : 'Select'}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() =>
+            setTileContextMenu((prev) =>
+              prev ? { ...prev, view: 'move' } : prev
+            )
+          }
+          disabled={folderBusy}
+          className={CONTEXT_MENU_ITEM}
+        >
+          <FolderInput size={14} className="shrink-0" />
+          Move to folder…
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => void copyGenerationPrompt(gen)}
+          className={CONTEXT_MENU_ITEM}
+        >
+          <ClipboardCopy size={14} className="shrink-0" />
+          Copy prompt
+        </button>
+        <ContextMenuDivider />
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onDelete(gen.id);
+            showToast('Deleting…');
+            closeAllContextMenus();
+          }}
+          className={CONTEXT_MENU_ITEM_DANGER}
+        >
+          <Trash2 size={14} className="shrink-0" />
+          Delete
+        </button>
+      </div>,
+      document.body
     );
   };
 
@@ -1728,6 +2077,17 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   setDropTargetFolderId(null);
                 }}
                 onClick={() => void onGalleryViewFolderChange(sub.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setFolderActionsMenuId(null);
+                  setTileContextMenu(null);
+                  setFolderContextMenu({
+                    folderId: sub.id,
+                    x: e.clientX,
+                    y: e.clientY,
+                  });
+                }}
                 className={`flex items-center gap-2 p-3 min-h-11 rounded-xl border text-left transition ${
                   isSubDrop
                     ? 'border-brand-teal ring-2 ring-brand-teal/40 bg-brand-teal/5'
@@ -1818,6 +2178,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               aria-current={isActiveTile ? 'true' : undefined}
               onMouseEnter={(e) => scheduleHoverPreview(gen.id, e.currentTarget)}
               onMouseLeave={clearHoverPreview}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                clearHoverPreview();
+                setFolderContextMenu(null);
+                setFolderActionsMenuId(null);
+                setTileContextMenu({
+                  generationId: gen.id,
+                  x: e.clientX,
+                  y: e.clientY,
+                  view: 'main',
+                });
+              }}
             >
               {selectionMode && (
                 <div className="absolute top-2 left-2 z-20">
@@ -2264,6 +2636,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           document.body
         );
       })()}
+
+      {renderFolderContextMenuPortal()}
+      {renderTileContextMenuPortal()}
 
       {toastMessage && (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center">
