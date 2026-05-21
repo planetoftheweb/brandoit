@@ -2590,6 +2590,26 @@ const App: React.FC = () => {
     }
   };
 
+  const handleReorderFolder = async (
+    folderId: string,
+    referenceFolderId: string,
+    position: 'before' | 'after'
+  ) => {
+    const nextFolders = await folderService.reorderFolder(
+      user || null,
+      folders,
+      folderId,
+      referenceFolderId,
+      position
+    );
+    setFolders(nextFolders);
+    if (user) {
+      setUser((prev) =>
+        prev ? { ...prev, preferences: { ...prev.preferences, folders: nextFolders } } : prev
+      );
+    }
+  };
+
   const handleSetFolderInstructions = async (folderId: string, customInstructions: string) => {
     const nextFolders = await folderService.setFolderInstructions(
       user || null,
@@ -3435,6 +3455,7 @@ const App: React.FC = () => {
               onDeleteFolder={handleDeleteFolder}
               onMoveToFolder={handleMoveGenerationsToFolder}
               onMoveFolder={handleMoveFolder}
+              onReorderFolder={handleReorderFolder}
               onSetFolderInstructions={handleSetFolderInstructions}
             />
           </main>

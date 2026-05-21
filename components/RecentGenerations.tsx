@@ -119,8 +119,14 @@ interface RecentGenerationsProps {
   onDeleteFolder: (folderId: string) => Promise<void>;
   /** Bulk-move a list of tiles into a folder (used by selection-mode action). */
   onMoveToFolder: (generationIds: string[], folderId: string) => Promise<void>;
-  /** Reparent a folder (drop onto another folder). Pass `null` for top level. */
+  /** Reparent a folder (Shift+drop onto another folder). Pass `null` for top level. */
   onMoveFolder: (folderId: string, parentId: string | null) => Promise<void>;
+  /** Reorder among siblings — drop above/below another folder row. */
+  onReorderFolder: (
+    folderId: string,
+    referenceFolderId: string,
+    position: 'before' | 'after'
+  ) => Promise<void>;
   onSetFolderInstructions: (folderId: string, customInstructions: string) => Promise<void>;
   /**
    * ID of the generation currently rendered in the main `ImageDisplay`. The
@@ -147,6 +153,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   onDeleteFolder,
   onMoveToFolder,
   onMoveFolder,
+  onReorderFolder,
   onSetFolderInstructions,
   activeGenerationId,
 }) => {
@@ -174,6 +181,10 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [draggingTileId, setDraggingTileId] = React.useState<string | null>(null);
   const [draggingFolderId, setDraggingFolderId] = React.useState<string | null>(null);
   const [dropTargetFolderId, setDropTargetFolderId] = React.useState<string | null>(null);
+  const [folderDropIndicator, setFolderDropIndicator] = React.useState<{
+    folderId: string;
+    position: 'before' | 'after';
+  } | null>(null);
   const [collapsedFolderIds, setCollapsedFolderIds] = React.useState<Set<string>>(() => new Set());
   const [folderActionsMenuId, setFolderActionsMenuId] = React.useState<string | null>(null);
   const [folderContextMenu, setFolderContextMenu] = React.useState<{
@@ -640,11 +651,20 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       }
       return;
     }
-    if (draggingFolderId && draggingFolderId !== targetFolderId) {
+    if (draggingFolderId) {
       try {
         setFolderBusy(true);
-        await onMoveFolder(draggingFolderId, targetFolderId);
-        showToast('Folder moved');
+        if (folderDropIndicator) {
+          await onReorderFolder(
+            draggingFolderId,
+            folderDropIndicator.folderId,
+            folderDropIndicator.position
+          );
+          showToast('Folder reordered');
+        } else if (dropTargetFolderId) {
+          await onMoveFolder(draggingFolderId, dropTargetFolderId);
+          showToast('Folder moved into folder');
+        }
       } catch (err) {
         console.error('Move folder failed:', err);
         showToast(err instanceof Error ? err.message : 'Could not move folder');
@@ -654,19 +674,51 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
   };
 
+  const resolveFolderDropPosition = (e: React.DragEvent): 'before' | 'after' => {
+    const el = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    const ratio = (e.clientY - rect.top) / Math.max(rect.height, 1);
+    return ratio < 0.5 ? 'before' : 'after';
+  };
+
   const folderDropHandlers = (targetFolderId: string) => ({
     onDragOver: (e: React.DragEvent) => {
       if (!draggingTileId && !draggingFolderId) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = draggingFolderId === targetFolderId ? 'none' : 'move';
-      setDropTargetFolderId(targetFolderId);
+      if (draggingTileId) {
+        e.dataTransfer.dropEffect = 'move';
+        setFolderDropIndicator(null);
+        setDropTargetFolderId(targetFolderId);
+        return;
+      }
+      if (draggingFolderId === targetFolderId) {
+        e.dataTransfer.dropEffect = 'none';
+        setFolderDropIndicator(null);
+        setDropTargetFolderId(null);
+        return;
+      }
+      e.dataTransfer.dropEffect = 'move';
+      if (e.shiftKey) {
+        setFolderDropIndicator(null);
+        setDropTargetFolderId(targetFolderId);
+        return;
+      }
+      setDropTargetFolderId(null);
+      setFolderDropIndicator({
+        folderId: targetFolderId,
+        position: resolveFolderDropPosition(e),
+      });
     },
     onDragLeave: () => {
       setDropTargetFolderId((prev) => (prev === targetFolderId ? null : prev));
+      setFolderDropIndicator((prev) =>
+        prev?.folderId === targetFolderId ? null : prev
+      );
     },
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
       setDropTargetFolderId(null);
+      setFolderDropIndicator(null);
       setDraggingTileId(null);
       setDraggingFolderId(null);
       void applyFolderDrop(targetFolderId);
@@ -931,7 +983,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               const isInbox = folder.id === INBOX_FOLDER_ID;
               const count = folderCounts.get(folder.id) || 0;
               const isRenaming = renamingFolderId === folder.id;
-              const isDropTarget = dropTargetFolderId === folder.id;
+              const showInsertBefore =
+                folderDropIndicator?.folderId === folder.id &&
+                folderDropIndicator.position === 'before';
+              const showInsertAfter =
+                folderDropIndicator?.folderId === folder.id &&
+                folderDropIndicator.position === 'after';
+              const isNestDropTarget =
+                Boolean(draggingFolderId) &&
+                dropTargetFolderId === folder.id &&
+                !folderDropIndicator;
+              const isTileDropTarget =
+                Boolean(draggingTileId) && dropTargetFolderId === folder.id;
               const hasInstructions = Boolean(folder.customInstructions?.trim());
               const canDragFolder = !isInbox;
               const rowIndent = depth * 14;
@@ -1072,8 +1135,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       y: e.clientY,
                     });
                   }}
-                  className={`group flex items-center gap-0.5 rounded-md pr-1 py-0.5 ${
-                    isDropTarget
+                  className={`group relative flex items-center gap-0.5 rounded-md pr-1 py-0.5 ${
+                    isTileDropTarget || isNestDropTarget
                       ? 'ring-2 ring-brand-teal/60 bg-brand-teal/5'
                       : isViewing
                         ? 'bg-brand-teal/10'
@@ -1081,6 +1144,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   }`}
                   style={{ paddingLeft: `${4 + rowIndent}px` }}
                 >
+                  {showInsertBefore && (
+                    <div
+                      className="absolute left-1 right-1 top-0 z-20 border-t-4 border-brand-teal pointer-events-none"
+                      aria-hidden
+                    />
+                  )}
+                  {showInsertAfter && (
+                    <div
+                      className="absolute left-1 right-1 bottom-0 z-20 border-b-4 border-brand-teal pointer-events-none"
+                      aria-hidden
+                    />
+                  )}
                   {hasChildren ? (
                     <button
                       type="button"
@@ -1130,6 +1205,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                         ? () => {
                             setDraggingFolderId(null);
                             setDropTargetFolderId(null);
+                            setFolderDropIndicator(null);
                           }
                         : undefined
                     }
@@ -1145,7 +1221,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     }`}
                     aria-label={
                       canDragFolder
-                        ? `${folder.name}, ${count} items. Click to open, drag to move into another folder.`
+                        ? `${folder.name}, ${count} items. Click to open. Drag above or below another folder to reorder; hold Shift and drop to nest inside.`
                         : `${folder.name}, ${count} items`
                     }
                   >
@@ -2059,7 +2135,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-4">
           {childFoldersInView.map((sub) => {
             const subCount = folderCounts.get(sub.id) || 0;
-            const isSubDrop = dropTargetFolderId === sub.id;
+            const subInsertBefore =
+              folderDropIndicator?.folderId === sub.id &&
+              folderDropIndicator.position === 'before';
+            const subInsertAfter =
+              folderDropIndicator?.folderId === sub.id &&
+              folderDropIndicator.position === 'after';
+            const isSubNestDrop =
+              Boolean(draggingFolderId) &&
+              dropTargetFolderId === sub.id &&
+              !folderDropIndicator;
+            const isSubTileDrop =
+              Boolean(draggingTileId) && dropTargetFolderId === sub.id;
             return (
               <button
                 key={sub.id}
@@ -2075,6 +2162,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 onDragEnd={() => {
                   setDraggingFolderId(null);
                   setDropTargetFolderId(null);
+                  setFolderDropIndicator(null);
                 }}
                 onClick={() => void onGalleryViewFolderChange(sub.id)}
                 onContextMenu={(e) => {
@@ -2088,12 +2176,24 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     y: e.clientY,
                   });
                 }}
-                className={`flex items-center gap-2 p-3 min-h-11 rounded-xl border text-left transition ${
-                  isSubDrop
+                className={`relative flex items-center gap-2 p-3 min-h-11 rounded-xl border text-left transition ${
+                  isSubTileDrop || isSubNestDrop
                     ? 'border-brand-teal ring-2 ring-brand-teal/40 bg-brand-teal/5'
                     : 'border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] hover:border-brand-teal'
                 }`}
               >
+                {subInsertBefore && (
+                  <div
+                    className="absolute left-2 right-2 top-0 z-20 border-t-4 border-brand-teal pointer-events-none"
+                    aria-hidden
+                  />
+                )}
+                {subInsertAfter && (
+                  <div
+                    className="absolute left-2 right-2 bottom-0 z-20 border-b-4 border-brand-teal pointer-events-none"
+                    aria-hidden
+                  />
+                )}
                 <FolderIcon size={18} className="text-brand-teal shrink-0" aria-hidden />
                 <span className="flex-1 min-w-0">
                   <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">

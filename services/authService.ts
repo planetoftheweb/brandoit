@@ -129,6 +129,9 @@ const sanitizePreferences = (prefs: UserPreferences): any => {
           const trimmed = folder.customInstructions.trim();
           if (trimmed.length > 0) entry.customInstructions = trimmed.slice(0, 4000);
         }
+        if (typeof folder.sortOrder === 'number' && Number.isFinite(folder.sortOrder)) {
+          entry.sortOrder = folder.sortOrder;
+        }
         return entry;
       });
   }
@@ -222,6 +225,9 @@ const hydratePreferences = (savedPrefs: any): UserPreferences => {
             if (typeof f.customInstructions === 'string') {
               const trimmed = f.customInstructions.trim();
               if (trimmed.length > 0) entry.customInstructions = trimmed.slice(0, 4000);
+            }
+            if (typeof f.sortOrder === 'number' && Number.isFinite(f.sortOrder)) {
+              entry.sortOrder = f.sortOrder;
             }
             return entry;
           }) as Folder[];

@@ -149,6 +149,11 @@ export interface Folder {
    */
   parentId?: string;
   /**
+   * Sibling order within the same `parentId` (lower = higher in the list).
+   * Omitted on legacy folders — falls back to `createdAt`.
+   */
+  sortOrder?: number;
+  /**
    * Extra instructions merged into the system prompt for generations and
    * refinements on tiles in this folder. Ancestor folder instructions are
    * prepended (root → leaf) before this folder's own text.
@@ -180,7 +185,7 @@ export interface UserPreferences {
   /**
    * User-owned folders that contain generation tiles. The reserved
    * `INBOX_FOLDER_ID` entry is auto-seeded on first init and cannot be
-   * removed (only renamed). Folder list order is the order of creation.
+   * removed (only renamed). Sibling order uses `sortOrder` (then `createdAt`).
    */
   folders?: Folder[];
   /**

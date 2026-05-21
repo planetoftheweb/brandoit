@@ -50,6 +50,13 @@ export const mergeFolderInstructionsWithSystemPrompt = (
   return `${base}\n\n${folderBlock}`;
 };
 
+export const compareFolderSiblingOrder = (a: Folder, b: Folder): number => {
+  const aOrder = a.sortOrder ?? a.createdAt;
+  const bOrder = b.sortOrder ?? b.createdAt;
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return a.createdAt - b.createdAt;
+};
+
 export const getChildFolders = (folders: Folder[], parentId: string | undefined): Folder[] =>
   folders
     .filter((f) => {
@@ -57,7 +64,7 @@ export const getChildFolders = (folders: Folder[], parentId: string | undefined)
       if (!parentId) return !pid || pid.length === 0;
       return pid === parentId;
     })
-    .sort((a, b) => a.createdAt - b.createdAt);
+    .sort(compareFolderSiblingOrder);
 
 export const getDescendantFolderIds = (folders: Folder[], folderId: string): Set<string> => {
   const out = new Set<string>();

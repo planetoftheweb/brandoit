@@ -74,6 +74,9 @@ const sanitizeFolder = (raw: any, allIds?: Set<string>): Folder | null => {
   };
   if (parentId) folder.parentId = parentId;
   if (customInstructions) folder.customInstructions = customInstructions;
+  if (typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder)) {
+    folder.sortOrder = raw.sortOrder;
+  }
   return folder;
 };
 
@@ -298,10 +301,16 @@ export const folderService = {
       throw new Error('Parent folder not found.');
     }
 
+    const siblings = getChildFolders(currentFolders, safeParent);
+    const maxSort = siblings.reduce(
+      (max, f) => Math.max(max, f.sortOrder ?? f.createdAt),
+      0
+    );
     const folder: Folder = {
       id: generateFolderId(),
       name: trimmed,
       createdAt: Date.now(),
+      sortOrder: maxSort + 1000,
       ...(safeParent ? { parentId: safeParent } : {}),
     };
     const folders = ensureInbox([...currentFolders, folder]);
@@ -399,6 +408,84 @@ export const folderService = {
       else delete next.parentId;
       return next;
     });
+    await persistFolders(user, folders);
+    return folders;
+  },
+
+  /**
+   * Reorder a folder among siblings of `referenceFolderId` (same parent).
+   * Inbox stays first at the root; hold Shift while dropping to nest instead
+   * (`moveFolder`).
+   */
+  reorderFolder: async (
+    user: User | null,
+    currentFolders: Folder[],
+    folderId: string,
+    referenceFolderId: string,
+    position: 'before' | 'after'
+  ): Promise<Folder[]> => {
+    if (folderId === INBOX_FOLDER_ID) {
+      throw new Error('Inbox cannot be moved.');
+    }
+    if (folderId === referenceFolderId) {
+      throw new Error('Cannot reorder a folder relative to itself.');
+    }
+    const moving = currentFolders.find((f) => f.id === folderId);
+    const reference = currentFolders.find((f) => f.id === referenceFolderId);
+    if (!moving || !reference) {
+      throw new Error('Folder not found.');
+    }
+    const descendants = getDescendantFolderIds(currentFolders, folderId);
+    if (descendants.has(referenceFolderId)) {
+      throw new Error('Cannot move a folder into itself or its subfolders.');
+    }
+
+    const targetParentId = reference.parentId;
+    let siblings = getChildFolders(currentFolders, targetParentId).filter(
+      (f) => f.id !== folderId
+    );
+    const refIndex = siblings.findIndex((f) => f.id === referenceFolderId);
+    if (refIndex < 0) {
+      throw new Error('Reference folder not found among siblings.');
+    }
+
+    let insertIndex = position === 'before' ? refIndex : refIndex + 1;
+
+    if (!targetParentId) {
+      const inboxIndex = siblings.findIndex((f) => f.id === INBOX_FOLDER_ID);
+      if (inboxIndex >= 0) {
+        if (position === 'before' && referenceFolderId === INBOX_FOLDER_ID) {
+          insertIndex = inboxIndex + 1;
+        }
+        insertIndex = Math.max(insertIndex, inboxIndex + 1);
+      }
+    }
+
+    const ordered: Folder[] = [
+      ...siblings.slice(0, insertIndex),
+      moving,
+      ...siblings.slice(insertIndex),
+    ];
+
+    const sortById = new Map<string, number>();
+    ordered.forEach((f, index) => {
+      sortById.set(f.id, (index + 1) * 1000);
+    });
+
+    const folders = currentFolders.map((f) => {
+      const nextSort = sortById.get(f.id);
+      if (f.id === folderId) {
+        const next: Folder = { ...f, sortOrder: sortById.get(folderId) };
+        if (targetParentId) next.parentId = targetParentId;
+        else delete next.parentId;
+        return next;
+      }
+      if (nextSort !== undefined) {
+        return { ...f, sortOrder: nextSort };
+      }
+      return f;
+    });
+
     await persistFolders(user, folders);
     return folders;
   },
