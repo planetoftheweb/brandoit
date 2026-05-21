@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption, INBOX_FOLDER_ID } from '../types';
 import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check } from 'lucide-react';
 import { useConfirmAction } from '../hooks/useConfirmAction';
@@ -33,6 +34,22 @@ export interface ImageDisplayComparisonState {
 interface ImageDisplayProps {
   generation: Generation | null;
   onRefine: (refinementText: string) => void;
+  /**
+   * Re-roll the same prompt as a fresh generation and append the result as a
+   * new Mark on the current tile. Unlike `onRefine`, this does NOT use the
+   * previous image as input, so the model is free to rethink the layout,
+   * palette application, and overall composition. Wired to the "+" plus
+   * button at the end of the version rail. The optional `count` (1-9) batches
+   * multiple re-rolls — held-digit shortcut on the rail, or count picker in
+   * the editor.
+   */
+  onRerun?: (rerunPrompt: string, count?: number) => void;
+  /**
+   * In-flight "Add a new Mark" re-rolls owned by the App. The version rail
+   * renders this many spinner placeholders after the real versions so a
+   * batched click shows N pending boxes at once instead of one-at-a-time.
+   */
+  pendingRerunCount?: number;
   onAnalyzeRefinePrompt: () => Promise<string>;
   /** AI-expand the refine draft (or the tile's original prompt when the draft is empty). */
   onExpandRefinementPrompt: (draft: string) => Promise<string>;
@@ -85,6 +102,8 @@ const isTypingInteractionTarget = (t: EventTarget | null): boolean => {
 export const ImageDisplay: React.FC<ImageDisplayProps> = ({ 
   generation,
   onRefine,
+  onRerun,
+  pendingRerunCount = 0,
   onAnalyzeRefinePrompt,
   onExpandRefinementPrompt,
   onResizeCanvasRefine,
@@ -201,6 +220,30 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   const [isResizingCanvas, setIsResizingCanvas] = useState(false);
   const [deletingRefinementId, setDeletingRefinementId] = useState<string | null>(null);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
+  // The prompt editor has two callers. The refine bar / refine-action buttons
+  // open it in 'refine' mode (text is an edit instruction; submit goes to
+  // `onRefine` and uses the previous image as input). The "+" button on the
+  // version rail opens it in 'rerun' mode (text is the original brief; submit
+  // goes to `onRerun` for fresh creative re-rolls and supports a count).
+  const [promptEditorMode, setPromptEditorMode] = useState<'refine' | 'rerun'>('refine');
+  const [rerunDraft, setRerunDraft] = useState('');
+  const [rerunCount, setRerunCount] = useState(1);
+  // Held digit (1-9) when the "+" button is clicked — batches that many
+  // re-rolls in one click. Tracked via window-level keydown/keyup so the
+  // shortcut works from anywhere on the page that doesn't have its own
+  // focused input. We keep both a ref (read at click time, latest value)
+  // and a state (for rendering the floating badge on the "+" button).
+  const heldDigitRef = useRef<number | null>(null);
+  const [heldDigit, setHeldDigit] = useState<number | null>(null);
+  // Anchor + visibility for the "+" button's rich hover tooltip. Portaled to
+  // body so the rail's `overflow-y-auto` (which also clips horizontally)
+  // doesn't truncate the tip. Position computed on enter; hidden on leave.
+  const [addMarkTipAnchor, setAddMarkTipAnchor] = useState<{
+    top: number;
+    bottom: number;
+    right: number;
+  } | null>(null);
+  const [addMarkTipVisible, setAddMarkTipVisible] = useState(false);
   const [resizeAspectRatio, setResizeAspectRatio] = useState('');
   /** True while refine / analysis / expand / recompose is in flight. */
   const refinementControlsLocked =
@@ -724,6 +767,53 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [isPromptEditorOpen]);
 
+  // Hold a digit (1-9) while clicking the "+" button to batch that many
+  // re-rolls in one click. We track via a ref (no re-render churn per
+  // keystroke) and ignore digits typed into form inputs / textareas so the
+  // user can type a "3" into the refine prompt without arming the shortcut.
+  useEffect(() => {
+    const isFormFieldTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        target.isContentEditable
+      );
+    };
+    const onDown = (e: KeyboardEvent) => {
+      if (isFormFieldTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key >= '1' && e.key <= '9') {
+        const n = parseInt(e.key, 10);
+        heldDigitRef.current = n;
+        setHeldDigit(n);
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key >= '1' && e.key <= '9' && heldDigitRef.current === parseInt(e.key, 10)) {
+        heldDigitRef.current = null;
+        setHeldDigit(null);
+      }
+    };
+    const clear = () => {
+      heldDigitRef.current = null;
+      setHeldDigit(null);
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    // Belt-and-suspenders: if the user Cmd-tabs away or the window blurs
+    // while the digit is held, the keyup may never fire — drop the held
+    // state on blur so a stale digit can't haunt the next click.
+    window.addEventListener('blur', clear);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', clear);
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       Object.values(versionBlobUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
@@ -1167,6 +1257,25 @@ ${version.svgCode}
     }
   };
 
+  // Submit the prompt editor when it's in 'rerun' mode — fires N fresh
+  // re-rolls via onRerun (no image input, no preservation directives), then
+  // closes the editor. Returns true when the submit landed.
+  const submitRerunFromEditor = (): boolean => {
+    const text = rerunDraft.trim();
+    if (!text || !onRerun) return false;
+    const safeCount = Math.max(1, Math.min(9, Math.floor(rerunCount || 1)));
+    onRerun(text, safeCount);
+    return true;
+  };
+
+  const handleRerunModalKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    if (submitRerunFromEditor()) {
+      setIsPromptEditorOpen(false);
+    }
+  };
+
   const handleAnalyzeRefineClick = async () => {
     if (refinementControlsLocked) return;
     setIsAnalyzingRefinePrompt(true);
@@ -1174,6 +1283,7 @@ ${version.svgCode}
       const prompt = await onAnalyzeRefinePrompt();
       if (prompt?.trim()) {
         setRefinementInput(prompt.trim());
+        setPromptEditorMode('refine');
         setIsPromptEditorOpen(true);
         showNotice('Analysis complete. Detailed fix prompt added.');
       } else {
@@ -1727,50 +1837,188 @@ ${version.svgCode}
                   );
                 })}
 
+                {/* In-flight "Add a new Mark" placeholders. When the user
+                    batches re-rolls (hold 1-9 + click + / pick a count in
+                    the editor) we want them to immediately see N pending
+                    boxes — not a single spinner that swaps places — so the
+                    upcoming Marks are visible the moment they click. Each
+                    placeholder shows a spinning loader and clears as the
+                    real Mark lands (App decrements `pendingRerunCount`). */}
+                {!isCompareMode && !isComparing && pendingRerunCount > 0 && (
+                  Array.from({ length: pendingRerunCount }).map((_, i) => (
+                    <div
+                      key={`pending-rerun-${i}`}
+                      className="shrink-0 w-full aspect-square rounded-md border-2 border-dashed border-brand-teal/50 bg-brand-teal/5 flex items-center justify-center text-brand-teal animate-pulse"
+                      role="status"
+                      aria-label={`Mark ${i + 1} of ${pendingRerunCount} generating`}
+                      title={`Generating Mark ${i + 1} of ${pendingRerunCount}…`}
+                    >
+                      <RefreshCw size={22} strokeWidth={2.5} className="animate-spin" aria-hidden="true" />
+                    </div>
+                  ))
+                )}
+
                 {/* "Add a new Mark" affordance — sits after the last thumb so
                     users can iterate on the current image without hunting for
-                    the refine bar. One-click "do it again": re-runs the last
-                    prompt (current version's refinement prompt, or the
-                    generation's original prompt) through the refinement
-                    pipeline to add a fresh Mark. Shift-click opens the full
-                    prompt editor for users who want to tweak before sending.
-                    Hidden in compare-pick / comparing mode so it can't fight
-                    with the two-mark selection flow. */}
+                    the refine bar. One-click "re-roll": runs the original
+                    generation prompt through a FRESH generation (no previous
+                    image input, no preservation directives) so the new Mark
+                    is a creative re-take on the same brief — the model is
+                    free to rethink layout, palette application, and
+                    composition rather than just nudging the existing image.
+                    Shift-click opens the full prompt editor for users who
+                    want to tweak before sending. Hidden in compare-pick /
+                    comparing mode so it can't fight with the two-mark
+                    selection flow. */}
                 {!isCompareMode && !isComparing && (() => {
+                  // Prefer the tile's ORIGINAL generation prompt over the
+                  // current version's refinementPrompt — the refine prompt
+                  // is an incremental edit instruction ("make the title
+                  // bigger") that isn't useful as a standalone prompt for a
+                  // fresh image. The original prompt is what produced the
+                  // tile and is the right brief to re-roll against.
                   const lastPrompt =
-                    (version?.refinementPrompt && version.refinementPrompt.trim()) ||
                     (generation.config.prompt && generation.config.prompt.trim()) ||
+                    (version?.refinementPrompt && version.refinementPrompt.trim()) ||
                     '';
                   const hasLastPrompt = Boolean(lastPrompt);
+                  const canRerun = hasLastPrompt && !!onRerun;
                   const handleAddMarkClick = (event: React.MouseEvent) => {
-                    if (event.shiftKey || !hasLastPrompt) {
+                    const heldDigit = heldDigitRef.current;
+                    if (event.shiftKey || !canRerun) {
+                      setPromptEditorMode('rerun');
+                      setRerunDraft(lastPrompt);
+                      setRerunCount(heldDigit ?? 1);
                       setIsPromptEditorOpen(true);
                       return;
                     }
-                    onRefine(lastPrompt);
+                    onRerun!(lastPrompt, heldDigit ?? 1);
                   };
-                  const titleText = hasLastPrompt
-                    ? 'Add a new Mark — re-run the last prompt (Shift-click to edit)'
+                  const titleText = canRerun
+                    ? 'Add a new Mark — re-roll the original prompt. Hold 1-9 to batch; Shift-click to edit prompt or count.'
                     : 'Add a new Mark — open the refine editor';
+                  // Show the "×N" badge whenever a digit is held, even
+                  // briefly — gives the user immediate visual confirmation
+                  // that the next click will batch N re-rolls. We only
+                  // render when canRerun (no point teasing if the rerun
+                  // path won't fire) and never for "1" (that's the default
+                  // and would just be visual noise).
+                  const showHeldBadge = canRerun && heldDigit !== null && heldDigit > 1;
+                  const openTip = (e: React.MouseEvent | React.FocusEvent) => {
+                    if (!canRerun) return;
+                    const wrapper = e.currentTarget as HTMLElement;
+                    const r = wrapper.getBoundingClientRect();
+                    setAddMarkTipAnchor({ top: r.top, bottom: r.bottom, right: r.right });
+                    setAddMarkTipVisible(true);
+                  };
+                  const closeTip = () => setAddMarkTipVisible(false);
                   return (
-                    <button
-                      type="button"
-                      onClick={handleAddMarkClick}
-                      onMouseEnter={() => setHoveredVersionIdx(null)}
-                      onFocus={() => setHoveredVersionIdx(null)}
-                      disabled={refinementControlsLocked}
-                      aria-label={hasLastPrompt ? 'Add a new Mark using the last prompt' : 'Add a new Mark'}
-                      title={titleText}
-                      className="shrink-0 w-full aspect-square rounded-md border-2 border-dashed border-gray-300 dark:border-[#30363d] flex items-center justify-center text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-[#161b22]/60 hover:border-brand-teal hover:text-brand-teal hover:bg-brand-teal/5 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    <div
+                      className="group/addmark relative shrink-0 w-full"
+                      onMouseEnter={openTip}
+                      onMouseLeave={closeTip}
+                      onFocus={openTip}
+                      onBlur={closeTip}
                     >
-                      {isRefining ? (
-                        <RefreshCw size={24} strokeWidth={2.5} className="animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Plus size={28} strokeWidth={2.5} aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={handleAddMarkClick}
+                        onMouseEnter={() => setHoveredVersionIdx(null)}
+                        onFocus={() => setHoveredVersionIdx(null)}
+                        disabled={refinementControlsLocked}
+                        aria-label={canRerun ? 'Add a new Mark — re-roll the original prompt' : 'Add a new Mark'}
+                        // Keep the native `title` as a short fallback for
+                        // screen readers / browser-default tooltips. The rich
+                        // panel below is the primary discovery surface.
+                        title={titleText}
+                        className="block w-full aspect-square rounded-md border-2 border-dashed border-gray-300 dark:border-[#30363d] text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-[#161b22]/60 hover:border-brand-teal hover:text-brand-teal hover:bg-brand-teal/5 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="w-full h-full flex items-center justify-center">
+                          {/* Always show the Plus glyph so the button stays
+                              recognizable as "add another Mark". In-flight
+                              work is conveyed by the separate spinner
+                              placeholder boxes rendered above the "+", so
+                              swapping the icon would just be redundant —
+                              and confusing, because it makes the affordance
+                              look like a generating tile rather than a
+                              clickable target. */}
+                          <Plus size={28} strokeWidth={2.5} aria-hidden="true" />
+                        </span>
+                      </button>
+                      {showHeldBadge && (
+                        <span
+                          role="status"
+                          aria-live="polite"
+                          aria-label={`Hold ${heldDigit}: next click adds ${heldDigit} Marks`}
+                          className="pointer-events-none absolute -top-1.5 -right-1.5 z-10 min-w-6 h-6 px-1.5 inline-flex items-center justify-center rounded-full bg-brand-teal text-white text-[11px] font-bold shadow-lg ring-2 ring-white dark:ring-[#0d1117] tabular-nums animate-in zoom-in-50 duration-150"
+                        >
+                          ×{heldDigit}
+                        </span>
                       )}
-                    </button>
+                    </div>
                   );
                 })()}
+
+                {/* Portaled rich tooltip for the "+" button. Lives outside
+                    the rail's `overflow-y-auto` container so it can extend
+                    to the right of the rail without being clipped. Anchored
+                    to the wrapper's rect, captured on enter/focus. */}
+                {addMarkTipVisible && addMarkTipAnchor && typeof document !== 'undefined' &&
+                  createPortal(
+                    <div
+                      role="tooltip"
+                      style={{
+                        position: 'fixed',
+                        top: Math.max(8, Math.min(addMarkTipAnchor.bottom - 234, window.innerHeight - 242)),
+                        left: addMarkTipAnchor.right + 12,
+                        zIndex: 80,
+                      }}
+                      className="pointer-events-none w-64 px-3 py-2.5 rounded-xl bg-black/90 text-white shadow-xl"
+                    >
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Add a new Mark
+                      </div>
+                      <div className="text-[11px] leading-relaxed text-slate-100 mb-2">
+                        Re-rolls the original prompt as a fresh generation — the model is free to rethink layout, palette, and composition.
+                      </div>
+                      <div className="pt-2 border-t border-white/10 space-y-1.5 text-[11px] text-slate-300">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 shrink-0">
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">Click</kbd>
+                          </span>
+                          <span>Add one Mark</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 shrink-0">
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">1-9</kbd>
+                            <span className="text-slate-400">+</span>
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">Click</kbd>
+                          </span>
+                          <span>Add that many Marks</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="inline-flex items-center gap-1 shrink-0 mt-0.5">
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">⇧</kbd>
+                            <span className="text-slate-400">+</span>
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">Click</kbd>
+                          </span>
+                          <span>Open the editor (edit the prompt or pick a count)</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="inline-flex items-center gap-1 shrink-0 mt-0.5">
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">1-9</kbd>
+                            <span className="text-slate-400">+</span>
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">⇧</kbd>
+                            <span className="text-slate-400">+</span>
+                            <kbd className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded bg-white/10 border border-white/15 text-[10px] font-mono">Click</kbd>
+                          </span>
+                          <span>Open the editor pre-filled with that count</span>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )
+                }
               </div>
 
               {/* Ephemeral "shift-click another to compare" hint. Pops up for
@@ -2395,7 +2643,7 @@ ${version.svgCode}
                         </span>
                         <button
                           type="button"
-                          onClick={() => setIsPromptEditorOpen(true)}
+                          onClick={() => { setPromptEditorMode('refine'); setIsPromptEditorOpen(true); }}
                           aria-expanded={isPromptEditorOpen}
                           aria-controls="refine-prompt-modal"
                           className="text-sm font-semibold text-brand-teal dark:text-teal-400 hover:underline decoration-brand-teal/60 underline-offset-2 min-h-11 px-2 rounded-lg hover:bg-brand-teal/10 dark:hover:bg-teal-950/40 transition-colors"
@@ -2432,7 +2680,7 @@ ${version.svgCode}
                         </button>
                         <button
                           type="button"
-                          onClick={() => setIsPromptEditorOpen(true)}
+                          onClick={() => { setPromptEditorMode('refine'); setIsPromptEditorOpen(true); }}
                           disabled={refinementControlsLocked}
                           className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-all ${
                             refinementControlsLocked
@@ -2715,7 +2963,7 @@ ${version.svgCode}
         </div>
       )}
 
-      {isPromptEditorOpen && (
+      {isPromptEditorOpen && promptEditorMode === 'refine' && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-auto">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsPromptEditorOpen(false)} aria-hidden />
           <div
@@ -2773,6 +3021,100 @@ ${version.svgCode}
                 }`}
               >
                 Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPromptEditorOpen && promptEditorMode === 'rerun' && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-auto">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsPromptEditorOpen(false)} aria-hidden />
+          <div
+            id="rerun-prompt-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rerun-prompt-modal-title"
+            className="relative w-full max-w-4xl max-h-[90vh] flex flex-col bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-2xl shadow-2xl p-4 sm:p-5"
+          >
+            <div className="flex items-center justify-between gap-3 mb-3 shrink-0">
+              <div>
+                <h3 id="rerun-prompt-modal-title" className="text-base font-semibold text-slate-900 dark:text-white">
+                  Add Marks — re-roll the prompt
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Generates fresh takes from this brief — the model is free to rethink layout, palette, and composition.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPromptEditorOpen(false)}
+                className="h-11 min-w-11 shrink-0 inline-flex items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+                aria-label="Close prompt editor"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <textarea
+              value={rerunDraft}
+              onChange={(e) => setRerunDraft(e.target.value)}
+              onKeyDown={handleRerunModalKeyDown}
+              placeholder="Prompt for the new Marks (e.g. 'A friendly illustration of a robot teaching kids how to code...')"
+              rows={18}
+              className="w-full min-h-[min(70vh,28rem)] max-h-[min(70vh,36rem)] p-4 rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] text-base leading-relaxed text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-teal/60 overflow-y-auto shrink"
+              disabled={refinementControlsLocked}
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-3 shrink-0">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                Marks to add
+                {/* 1-9 segmented picker — direct tap target instead of a
+                    spinner so the user can pick a count in one click. */}
+                <span className="inline-flex rounded-lg border border-gray-200 dark:border-[#30363d] overflow-hidden">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setRerunCount(n)}
+                      className={`w-8 h-9 text-xs font-semibold transition-colors ${
+                        rerunCount === n
+                          ? 'bg-brand-teal text-white'
+                          : 'bg-white dark:bg-[#0d1117] text-slate-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                      }`}
+                      aria-pressed={rerunCount === n}
+                      aria-label={`Add ${n} Mark${n === 1 ? '' : 's'}`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </span>
+              </label>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Esc to close · Cmd/Ctrl+Enter to submit · Tip: hold 1-9 while clicking <kbd className="font-mono px-1 rounded bg-gray-100 dark:bg-[#21262d]">+</kbd> to skip this editor.
+              </p>
+            </div>
+            <div className="mt-4 flex justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsPromptEditorOpen(false)}
+                className="min-h-11 px-4 rounded-lg border border-gray-200 dark:border-[#30363d] text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d] transition-colors"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (submitRerunFromEditor()) {
+                    setIsPromptEditorOpen(false);
+                  }
+                }}
+                disabled={!rerunDraft.trim() || refinementControlsLocked || !onRerun}
+                className={`min-h-11 px-4 rounded-lg text-sm font-semibold text-white transition-colors ${
+                  !rerunDraft.trim() || refinementControlsLocked || !onRerun
+                    ? 'bg-gray-300 dark:bg-[#30363d] cursor-not-allowed'
+                    : 'bg-brand-teal hover:bg-teal-600'
+                }`}
+              >
+                Add {rerunCount} Mark{rerunCount === 1 ? '' : 's'}
               </button>
             </div>
           </div>

@@ -23,6 +23,54 @@ import type { WhatsNewEntry } from '../types';
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: 'v0.20.0-add-marks-rerolls',
+    title: 'The + button now re-rolls the prompt — hold 1-9 to batch',
+    summary:
+      'Clicking + on the version rail now runs a fresh creative re-roll of the original prompt; hold a digit to batch, or Shift-click to edit prompt + count.',
+    blurb:
+      'The + button at the end of the version rail used to refine the previous image — same prompt, but the model was told to "preserve composition, framing, subjects, layout, lighting" so new Marks ended up nearly identical. Now it runs a fresh generation: no previous image input, no preservation directives, so the model rethinks layout, palette, and composition every time. Hold a number (1-9) while clicking to batch that many re-rolls in one click — a teal "×N" badge appears on the + so you can see what the next click will do, and N spinner placeholders show up immediately in the rail so the upcoming Marks are visible before they finish. Shift-click opens the new "Add Marks" editor where you can tweak the prompt and pick a count.',
+    publishedAt: Date.parse('2026-05-21T20:00:00Z'),
+    version: '0.20.0',
+    image: '/whats-new/whatsnew-v0.20.0.png',
+    sections: [
+      {
+        heading: 'Click + to re-roll the prompt',
+        body: 'The + button at the bottom of the version rail no longer "refines" the previous image — it now runs a fresh generation against the tile\'s original prompt, with no previous-image input and no preservation directives. The model is free to rethink layout, palette application, and composition every time.',
+        steps: [
+          { text: 'Restore any generation from your gallery so its rail is showing.', icon: 'Layers' },
+          { text: 'Click + at the end of the rail — a new Mark appears with a fresh creative take.', icon: 'Plus' },
+          { text: 'The refine bar still works for incremental edits ("make the title bigger", "darken the background") — that path keeps using the previous image as input.', icon: 'Wand2' },
+        ],
+      },
+      {
+        heading: 'Hold 1-9 to batch multiple re-rolls',
+        body: 'Press and hold any digit from 1 to 9 while clicking + and that many fresh Marks queue up at once. A teal "×N" badge floats on the + button so you know what the next click will do; the same number of spinner placeholders appear in the rail immediately so the incoming Marks are visible before they finish.',
+        steps: [
+          { text: 'Press and hold a number (1-9) anywhere on the page that isn\'t a text field.', icon: 'ArrowRight' },
+          { text: 'Watch the + button — a small "×3" (or whatever digit you held) teal badge appears in its top-right corner.', icon: 'Check' },
+          { text: 'Click + once; three spinner placeholders pop into the rail and the re-rolls run sequentially.', icon: 'Sparkles' },
+        ],
+      },
+      {
+        heading: 'Shift-click for the new Add Marks editor',
+        body: 'Hold Shift while clicking + to open a dedicated editor instead of running immediately. Pre-filled with the tile\'s original prompt, fully editable, with a 1-9 count picker right there. Distinct from the refine editor — it submits to the re-roll pipeline, not the refinement one.',
+        steps: [
+          { text: 'Shift-click + on the version rail (or hold 1-9 + Shift-click to pre-fill the count).', icon: 'Pencil' },
+          { text: 'Edit the prompt if you want a variant, then pick how many Marks to add from the 1-9 segmented picker.', icon: 'BookOpen' },
+          { text: 'Cmd/Ctrl+Enter submits; the editor closes and N placeholders appear in the rail.', icon: 'Check' },
+        ],
+      },
+      {
+        heading: 'Hover the + for a keyboard cheat sheet',
+        body: 'A rich hover tooltip on the + button lists all four interaction modes — Click, 1-9 + Click, Shift+Click, and 1-9 + Shift+Click — with the exact behavior each one triggers. Portaled out of the rail so it doesn\'t get clipped by the scroll container.',
+        steps: [
+          { text: 'Hover (or focus) the + button on any version rail.', icon: 'Eye' },
+          { text: 'A panel appears beside it with the four modes and what each does.', icon: 'Info' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'v0.19.0-preset-actions-and-search',
     title: 'Preset hamburger menus, hover previews, and a bigger search',
     summary:

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-05-21
+
+### Added
+
+- **Re-roll on `+` instead of refine.** The "Add a new Mark" plus button at the end of the version rail used to call `handleRefine(lastPrompt)` — which routed through the refinement pipeline, feeding the previous image into the model along with strict preservation directives (`"Treat the attached raster as the only source of truth — edit it in place"`, `"Preserve composition, framing, subjects, poses, facial identity, layout, logos, icons, lighting"` — see `services/geminiService.ts`). Net effect: new Marks looked nearly identical to the parent. The button now calls a new `handleRerun(prompt, count)` in `App.tsx` that runs a fresh generation against the tile's original prompt — no previous-image input, no preservation directives — and appends the result as a `type: 'generation'` Mark on the current tile. The refine bar still goes through `handleRefine` for intentional incremental edits (`components/ImageDisplay.tsx`).
+- **Hold 1-9 + Click to batch re-rolls.** Window-level `keydown`/`keyup` listeners track a held digit into both a ref (read at click time, latest value) and state (for rendering a `×N` teal badge floating on the `+` button's top-right corner). Form-field guard so typing "3" into the refine prompt doesn't arm the shortcut; `window.blur` clears the held state so a stale digit can't haunt the next click. `handleRerun(prompt, count)` enqueues `count` work items through the existing serialized `enqueuePreviewWork` queue (`components/ImageDisplay.tsx`, `App.tsx`).
+- **N spinner placeholders while batches run.** New `pendingRerunCount` state in `App.tsx` increments by `count` at click time and decrements in the per-item `finally` (so failures also clear the placeholder). The rail renders that many teal-bordered, animate-pulsed boxes between the last real version and the `+` button — users see the upcoming Marks immediately rather than one-at-a-time as they finish (`components/ImageDisplay.tsx`).
+- **New "Add Marks" editor for Shift-click +.** A second prompt-editor mode (`promptEditorMode: 'refine' | 'rerun'`) opens on Shift-click — pre-filled with the tile's original prompt, fully editable, with a 1-9 segmented count picker. Submit button reads "Add N Marks" and routes to `onRerun(text, count)`. The existing refine editor (Refine bar, Analyze → fill, Edit Prompt button) keeps using the refine path with its own state (`components/ImageDisplay.tsx`).
+- **Rich hover tooltip on `+`.** Portaled to `document.body` with `position: fixed` so the rail's `overflow-y-auto` can't clip it. Surfaces all four interaction modes (Click / 1-9 + Click / Shift + Click / 1-9 + Shift + Click) with `<kbd>` chips and a one-line description for each, anchored to the wrapper's rect captured on `onMouseEnter`/`onFocus`. Same dark-glass style as the existing prev/next-generation tooltips.
+- **`Plus` and `Info` icons added to `WhatsNewPage` ICON_MAP** so the new entry's steps can render real glyphs.
+
+### Changed
+
+- **`+` icon no longer swaps to a spinner.** The button used to render `<RefreshCw>` when `isRefining` was true; with placeholder boxes now carrying the loading visual, swapping the icon was redundant and made the affordance look like a generating tile rather than a clickable target. The `+` always renders `<Plus>` now (`components/ImageDisplay.tsx`).
+- **`+` prompt-source priority swapped.** Re-roll now prefers the tile's original `generation.config.prompt` over `version.refinementPrompt` (which is an incremental edit instruction like "make the title bigger" — not a useful standalone brief for a fresh generation).
+
 ## [0.19.0] - 2026-05-21
 
 ### Added

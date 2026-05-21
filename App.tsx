@@ -397,6 +397,12 @@ const App: React.FC = () => {
   // Active Generations panel can be docked to a small floating pill so it
   // doesn't cover the main preview while batches run.
   const [isGenerationsPanelCollapsed, setIsGenerationsPanelCollapsed] = useState(false);
+  // Count of in-flight "Add a new Mark" re-rolls. The version rail renders
+  // this many spinner placeholders after the real versions so the user can
+  // see how many more Marks are coming when they batch (hold 1-9 + click +,
+  // or pick a count in the rerun editor). Decremented in the work item's
+  // finally so failures also clear the placeholder.
+  const [pendingRerunCount, setPendingRerunCount] = useState(0);
   // Toolbar (Type/Style/Colors/Size/Model row) can be collapsed so the user
   // can focus on previews. We auto-collapse on scroll-down past the toolbar
   // and restore on scroll-up; a header button lets the user pin the choice
@@ -1808,6 +1814,124 @@ const App: React.FC = () => {
         setError(err.message || 'Failed to refine image.');
       }
     });
+  };
+
+  // Re-roll: produce a brand-new image for the same prompt and append it as
+  // a "generation"-type Mark on the current tile. Unlike `handleRefine`, this
+  // does NOT pass the previous image into the model and is NOT wrapped in the
+  // "preserve composition / framing / layout" directives that make refine
+  // outputs hug the source — so each new Mark is a fresh take on the prompt
+  // with the model free to rethink layout, palette application, and
+  // organization. Hooked up to the "+" plus button at the end of the version
+  // rail; refine-bar text submissions still go through `handleRefine` because
+  // those are intentional edits on top of the current image.
+  const handleRerun = (rerunPrompt: string, count: number = 1) => {
+    // Hold a number key (1-9) while clicking the "+" button to batch this:
+    // the queue runs each unit serially so the user sees each new Mark
+    // appear in order, and each unit picks up the latest tile state via
+    // `currentGenerationRef.current` so multiple re-rolls stack on the
+    // same tile.
+    const safeCount = Math.max(1, Math.min(9, Math.floor(count || 1)));
+    setPendingRerunCount((n) => n + safeCount);
+    for (let i = 0; i < safeCount; i++) {
+      void enqueuePreviewWork(runOneRerun);
+    }
+
+    async function runOneRerun() {
+      const currentGeneration = currentGenerationRef.current;
+      if (!currentGeneration) return;
+
+      setError(null);
+      try {
+        if (!user) {
+          openAuthModal('signup');
+          throw new Error('Free accounts use your own API key (BYOK). Create an account, then add your key in Settings to add new Marks.');
+        }
+
+        const customKey = getActiveApiKey();
+        if (!customKey) {
+          setSettingsMode(true);
+          throw new Error('Add your API key in Settings before adding a new Mark. Free accounts use BYOK keys.');
+        }
+
+        const currentVersion = getCurrentVersion(currentGeneration);
+        const previousAspect =
+          normalizeAspectRatio(currentVersion?.aspectRatio || currentGeneration.config.aspectRatio || config.aspectRatio);
+        const safeAspectRatio = getSafeAspectRatioForModel(
+          selectedModel,
+          previousAspect || config.aspectRatio,
+          aspectRatios
+        );
+        const rerunConfig: GenerationConfig = {
+          ...config,
+          ...currentGeneration.config,
+          prompt: rerunPrompt,
+          aspectRatio: safeAspectRatio,
+        };
+        const folderId = currentGeneration.folderId || INBOX_FOLDER_ID;
+        const rerunSystemPrompt = mergeFolderInstructionsWithSystemPrompt(
+          folders,
+          folderId,
+          user.preferences.systemPrompt
+        );
+        const structuredPrompt = buildStructuredPrompt(rerunConfig);
+        const runQuality = user.preferences.settings?.openaiImageQuality || 'auto';
+
+        let result: GeneratedImage;
+        if (selectedModel === 'gemini-svg') {
+          result = await generateSvg(rerunConfig, context, customKey, rerunSystemPrompt);
+        } else if (
+          selectedModel === 'openai' ||
+          selectedModel === 'openai-2' ||
+          selectedModel === 'openai-mini'
+        ) {
+          result = await generateOpenAIImage(structuredPrompt, rerunConfig, customKey, {
+            modelId: selectedModel,
+            quality: runQuality,
+            systemPrompt: rerunSystemPrompt,
+          });
+        } else {
+          result = await generateGraphic(
+            rerunConfig,
+            context,
+            customKey,
+            rerunSystemPrompt,
+            selectedModel
+          );
+        }
+
+        const newVersion = await createVersionFromImage(
+          result,
+          currentGeneration.versions.length + 1,
+          'generation',
+          undefined,
+          undefined,
+          safeAspectRatio,
+          selectedModel
+        );
+        const updatedVersions = [...currentGeneration.versions, newVersion];
+        const updatedGeneration: Generation = {
+          ...currentGeneration,
+          versions: updatedVersions,
+          currentVersionIndex: updatedVersions.length - 1,
+          config: {
+            ...currentGeneration.config,
+            aspectRatio: safeAspectRatio || currentGeneration.config.aspectRatio,
+          },
+        };
+        setCurrentGeneration(updatedGeneration);
+        currentGenerationRef.current = updatedGeneration;
+
+        await historyService.updateGeneration(user, updatedGeneration);
+        const updatedHistory = await historyService.getHistory(user);
+        setHistory(updatedHistory);
+      } catch (err: any) {
+        setError(err.message || 'Failed to add a new Mark.');
+      } finally {
+        // Always decrement so a failure doesn't leave a stale placeholder.
+        setPendingRerunCount((n) => Math.max(0, n - 1));
+      }
+    }
   };
 
   const handleAnalyzeRefinePrompt = async (): Promise<string> => {
@@ -3559,6 +3683,8 @@ const App: React.FC = () => {
               <ImageDisplay
                 generation={currentGeneration}
                 onRefine={handleRefine}
+                onRerun={handleRerun}
+                pendingRerunCount={pendingRerunCount}
                 onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
                 onExpandRefinementPrompt={handleExpandRefinementPrompt}
                 onResizeCanvasRefine={handleResizeCanvasRefine}
