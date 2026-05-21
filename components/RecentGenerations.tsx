@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, GripVertical, MoreVertical } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, MoreVertical } from 'lucide-react';
 import {
   buildFolderTree,
   flattenVisibleFolderTree,
@@ -149,7 +149,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [collapsedFolderIds, setCollapsedFolderIds] = React.useState<Set<string>>(() => new Set());
   const [folderActionsMenuId, setFolderActionsMenuId] = React.useState<string | null>(null);
   const [folderContextMenu, setFolderContextMenu] = React.useState<{
-    folderId: string;
+    /** `'root'` = header right-click (create top-level folder). */
+    folderId: string | 'root';
     x: number;
     y: number;
   } | null>(null);
@@ -456,6 +457,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       next.delete(parentId);
       return next;
     });
+  }, []);
+
+  const beginCreateRootFolder = React.useCallback(() => {
+    setCreateFolderParentId(undefined);
+    setIsCreatingFolder(true);
+    setNewFolderDraft('');
+    setFolderActionsMenuId(null);
+    setFolderContextMenu(null);
   }, []);
 
   const childFoldersInView = React.useMemo(
@@ -794,7 +803,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             data-folder-menu
             className="absolute left-0 top-full mt-2 z-30 w-[min(100vw-2rem,22rem)] max-h-[min(70vh,480px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
           >
-            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <div
+              className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 select-none rounded-md hover:bg-gray-50 dark:hover:bg-[#21262d]"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setFolderActionsMenuId(null);
+                setFolderContextMenu({
+                  folderId: 'root',
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+              }}
+            >
               Folders
             </div>
             {visibleFolderRows.map(({ folder, depth, hasChildren, isCollapsed }) => {
@@ -980,27 +1000,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   }`}
                   style={{ paddingLeft: `${4 + rowIndent}px` }}
                 >
-                  {canDragFolder ? (
-                    <span
-                      draggable
-                      onDragStart={(e) => {
-                        e.stopPropagation();
-                        setDraggingFolderId(folder.id);
-                        e.dataTransfer.setData('text/plain', `folder:${folder.id}`);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragEnd={() => {
-                        setDraggingFolderId(null);
-                        setDropTargetFolderId(null);
-                      }}
-                      className="inline-flex items-center justify-center h-8 w-5 shrink-0 cursor-grab text-slate-400 hover:text-brand-teal"
-                      aria-label={`Drag ${folder.name} into another folder`}
-                    >
-                      <GripVertical size={14} aria-hidden />
-                    </span>
-                  ) : (
-                    <span className="w-5 shrink-0" aria-hidden />
-                  )}
                   {hasChildren ? (
                     <button
                       type="button"
@@ -1031,12 +1030,43 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     type="button"
                     role="option"
                     aria-selected={isViewing}
+                    draggable={canDragFolder}
+                    onDragStart={
+                      canDragFolder
+                        ? (e) => {
+                            e.stopPropagation();
+                            setDraggingFolderId(folder.id);
+                            e.dataTransfer.setData(
+                              'text/plain',
+                              `folder:${folder.id}`
+                            );
+                            e.dataTransfer.effectAllowed = 'move';
+                          }
+                        : undefined
+                    }
+                    onDragEnd={
+                      canDragFolder
+                        ? () => {
+                            setDraggingFolderId(null);
+                            setDropTargetFolderId(null);
+                          }
+                        : undefined
+                    }
                     onClick={() => handleSelectFolder(folder.id)}
                     className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left py-1.5 pr-1 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
+                      canDragFolder
+                        ? 'cursor-grab active:cursor-grabbing'
+                        : ''
+                    } ${
                       isViewing
                         ? 'text-brand-teal'
                         : 'text-slate-700 dark:text-slate-200'
                     }`}
+                    aria-label={
+                      canDragFolder
+                        ? `${folder.name}, ${count} items. Click to open, drag to move into another folder.`
+                        : `${folder.name}, ${count} items`
+                    }
                   >
                     <FolderIcon size={14} aria-hidden className="shrink-0" />
                     <span className="flex-1 min-w-0 truncate" title={folder.name}>
@@ -1100,15 +1130,29 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   top: folderContextMenu.y,
                 }}
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => beginAddSubfolder(folderContextMenu.folderId)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
-                >
-                  <FolderPlus size={14} className="shrink-0" />
-                  Add subfolder
-                </button>
+                {folderContextMenu.folderId === 'root' ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => beginCreateRootFolder()}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
+                  >
+                    <FolderPlus size={14} className="shrink-0" />
+                    New folder
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() =>
+                      beginAddSubfolder(folderContextMenu.folderId)
+                    }
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
+                  >
+                    <FolderPlus size={14} className="shrink-0" />
+                    Add subfolder
+                  </button>
+                )}
               </div>
             )}
 
