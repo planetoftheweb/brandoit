@@ -54,6 +54,86 @@ function clampContextPoint(
   };
 }
 
+const PANEL_ANCHOR_GAP = 8;
+
+type PanelAnchor = {
+  top: number;
+  left: number;
+  align: 'start' | 'center' | 'end';
+};
+
+function panelAnchorFromRect(
+  rect: DOMRect,
+  opts?: { align?: PanelAnchor['align']; gap?: number }
+): PanelAnchor {
+  const gap = opts?.gap ?? PANEL_ANCHOR_GAP;
+  const align = opts?.align ?? 'start';
+  return {
+    top: rect.bottom + gap,
+    left:
+      align === 'center'
+        ? rect.left + rect.width / 2
+        : align === 'end'
+          ? rect.right
+          : rect.left,
+    align,
+  };
+}
+
+function panelAnchorStyle(
+  anchor: PanelAnchor,
+  panelWidth: number
+): React.CSSProperties {
+  const margin = 8;
+  const vw = typeof window !== 'undefined' ? window.innerWidth : panelWidth + margin * 2;
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    top: anchor.top,
+    zIndex: 70,
+  };
+  if (anchor.align === 'center') {
+    style.left = anchor.left;
+    style.transform = 'translateX(-50%)';
+    style.width = Math.min(panelWidth, vw - margin * 2);
+  } else if (anchor.align === 'end') {
+    style.right = Math.max(margin, vw - anchor.left);
+    style.minWidth = Math.min(panelWidth, vw - margin * 2);
+  } else {
+    const width = Math.min(panelWidth, vw - margin * 2);
+    style.left = Math.max(margin, Math.min(anchor.left, vw - margin - width));
+    style.width = width;
+  }
+  return style;
+}
+
+function usePanelAnchor(
+  open: boolean,
+  ref: React.RefObject<HTMLElement | null>,
+  opts?: { align?: PanelAnchor['align'] }
+): PanelAnchor | null {
+  const [anchor, setAnchor] = React.useState<PanelAnchor | null>(null);
+  const align = opts?.align ?? 'start';
+  const update = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    setAnchor(panelAnchorFromRect(el.getBoundingClientRect(), { align }));
+  }, [ref, align]);
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setAnchor(null);
+      return;
+    }
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [open, update]);
+  return anchor;
+}
+
 function ContextMenuDivider() {
   return (
     <div
@@ -172,6 +252,10 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   // teach RichSelect about per-row pin/rename/delete actions.
   const [isFolderPickerOpen, setIsFolderPickerOpen] = React.useState(false);
   const folderPickerRef = React.useRef<HTMLDivElement>(null);
+  const [folderActionsMenuAnchor, setFolderActionsMenuAnchor] =
+    React.useState<PanelAnchor | null>(null);
+  const pageMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const moveMenuTriggerRef = React.useRef<HTMLDivElement>(null);
   const [isCreatingFolder, setIsCreatingFolder] = React.useState(false);
   const [createFolderParentId, setCreateFolderParentId] = React.useState<string | undefined>(undefined);
   const [newFolderDraft, setNewFolderDraft] = React.useState('');
@@ -216,6 +300,13 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   // in the gallery header. Replaces the prior wide page-size dropdown and
   // the standalone numeric page indicator with a single compact trigger.
   const [pageMenuOpen, setPageMenuOpen] = React.useState(false);
+  const folderPickerAnchor = usePanelAnchor(isFolderPickerOpen, folderPickerRef);
+  const pageMenuAnchor = usePanelAnchor(pageMenuOpen, pageMenuTriggerRef, {
+    align: 'center',
+  });
+  const moveMenuAnchor = usePanelAnchor(moveMenuOpen, moveMenuTriggerRef, {
+    align: 'end',
+  });
   // Per-tile details panel (prompt + tag chips) is opt-in. Default to hidden
   // so the gallery reads as a clean image grid; users who want context can
   // flip the toggle and the choice survives reloads via localStorage.
@@ -416,6 +507,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setMoveMenuOpen(false);
       setPageMenuOpen(false);
       setFolderActionsMenuId(null);
+      setFolderActionsMenuAnchor(null);
       setFolderContextMenu(null);
       setTileContextMenu(null);
     };
@@ -425,6 +517,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         setMoveMenuOpen(false);
         setPageMenuOpen(false);
         setFolderActionsMenuId(null);
+        setFolderActionsMenuAnchor(null);
         setFolderContextMenu(null);
         setTileContextMenu(null);
         setRenamingFolderId(null);
@@ -518,6 +611,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setIsCreatingFolder(true);
     setNewFolderDraft('');
     setFolderActionsMenuId(null);
+    setFolderActionsMenuAnchor(null);
     setFolderContextMenu(null);
     setCollapsedFolderIds((prev) => {
       const next = new Set(prev);
@@ -531,6 +625,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     setIsCreatingFolder(true);
     setNewFolderDraft('');
     setFolderActionsMenuId(null);
+    setFolderActionsMenuAnchor(null);
     setFolderContextMenu(null);
   }, []);
 
@@ -578,6 +673,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setInstructionsFolderId(folderId);
       setInstructionsDraft(folder.customInstructions || '');
       setFolderActionsMenuId(null);
+      setFolderActionsMenuAnchor(null);
       closeAllContextMenus();
       setIsFolderPickerOpen(false);
     },
@@ -591,6 +687,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setRenamingFolderId(folderId);
       setRenameDraft(folder.name);
       setFolderActionsMenuId(null);
+      setFolderActionsMenuAnchor(null);
       closeAllContextMenus();
     },
     [folders, closeAllContextMenus]
@@ -599,6 +696,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const promptDeleteFolder = React.useCallback(
     (folderId: string) => {
       setFolderActionsMenuId(null);
+      setFolderActionsMenuAnchor(null);
       closeAllContextMenus();
       setIsFolderPickerOpen(false);
       setPendingDeleteFolderId(folderId);
@@ -957,12 +1055,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           />
         </button>
 
-        {isFolderPickerOpen && (
+        {isFolderPickerOpen &&
+          folderPickerAnchor &&
+          typeof document !== 'undefined' &&
+          createPortal(
           <div
             role="listbox"
             aria-label="Switch folder"
             data-folder-menu
-            className="absolute left-0 top-full mt-2 z-30 w-[min(100vw-2rem,22rem)] max-h-[min(70vh,480px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
+            className="fixed max-h-[min(70vh,480px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
+            style={panelAnchorStyle(folderPickerAnchor, 352)}
           >
             <div
               className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 select-none rounded-md hover:bg-gray-50 dark:hover:bg-[#21262d]"
@@ -998,61 +1100,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               const hasInstructions = Boolean(folder.customInstructions?.trim());
               const canDragFolder = !isInbox;
               const rowIndent = depth * 14;
-
-              const renderFolderActionsMenu = () => {
-                if (folderActionsMenuId !== folder.id) return null;
-                return (
-                  <div
-                    ref={folderActionsMenuRef}
-                    role="menu"
-                    data-folder-menu
-                    className="absolute right-0 top-full mt-0.5 z-40 min-w-[11rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg"
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => openFolderInstructions(folder.id)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-gray-50 dark:hover:bg-[#21262d] ${
-                        hasInstructions
-                          ? 'text-brand-teal'
-                          : 'text-slate-700 dark:text-slate-200'
-                      }`}
-                    >
-                      <FileText size={14} className="shrink-0" />
-                      {hasInstructions ? 'Edit instructions' : 'Add instructions'}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => startRenameFolder(folder.id)}
-                      className={CONTEXT_MENU_ITEM}
-                    >
-                      <Pencil size={14} className="shrink-0 text-slate-400" />
-                      Rename
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => beginAddSubfolder(folder.id)}
-                      className={CONTEXT_MENU_ITEM}
-                    >
-                      <FolderPlus size={14} className="shrink-0 text-brand-teal" />
-                      Add subfolder
-                    </button>
-                    {!isInbox && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => promptDeleteFolder(folder.id)}
-                        className={CONTEXT_MENU_ITEM_DANGER}
-                      >
-                        <Trash2 size={14} className="shrink-0" />
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                );
-              };
 
               if (isRenaming) {
                 return (
@@ -1246,15 +1293,24 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       {count}
                     </span>
                   </button>
-                  <div className="relative shrink-0">
+                  <div className="shrink-0">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setFolderContextMenu(null);
-                        setFolderActionsMenuId((id) =>
-                          id === folder.id ? null : folder.id
-                        );
+                        if (folderActionsMenuId === folder.id) {
+                          setFolderActionsMenuId(null);
+                          setFolderActionsMenuAnchor(null);
+                        } else {
+                          setFolderActionsMenuId(folder.id);
+                          setFolderActionsMenuAnchor(
+                            panelAnchorFromRect(
+                              (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                              { align: 'end' }
+                            )
+                          );
+                        }
                       }}
                       aria-haspopup="menu"
                       aria-expanded={folderActionsMenuId === folder.id}
@@ -1263,7 +1319,6 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     >
                       <MoreVertical size={14} aria-hidden />
                     </button>
-                    {renderFolderActionsMenu()}
                   </div>
                 </div>
               );
@@ -1358,9 +1413,78 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 New folder
               </button>
             )}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
+    );
+  };
+
+  const renderFolderRowActionsMenuPortal = () => {
+    if (
+      !folderActionsMenuId ||
+      !folderActionsMenuAnchor ||
+      typeof document === 'undefined'
+    ) {
+      return null;
+    }
+    const folder = folders.find((f) => f.id === folderActionsMenuId);
+    if (!folder) return null;
+    const isInbox = folder.id === INBOX_FOLDER_ID;
+    const hasInstructions = Boolean(folder.customInstructions?.trim());
+
+    return createPortal(
+      <div
+        ref={folderActionsMenuRef}
+        role="menu"
+        data-folder-menu
+        className="fixed min-w-[11rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg"
+        style={panelAnchorStyle(folderActionsMenuAnchor, 176)}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => openFolderInstructions(folder.id)}
+          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-gray-50 dark:hover:bg-[#21262d] ${
+            hasInstructions
+              ? 'text-brand-teal'
+              : 'text-slate-700 dark:text-slate-200'
+          }`}
+        >
+          <FileText size={14} className="shrink-0" />
+          {hasInstructions ? 'Edit instructions' : 'Add instructions'}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => startRenameFolder(folder.id)}
+          className={CONTEXT_MENU_ITEM}
+        >
+          <Pencil size={14} className="shrink-0 text-slate-400" />
+          Rename
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => beginAddSubfolder(folder.id)}
+          className={CONTEXT_MENU_ITEM}
+        >
+          <FolderPlus size={14} className="shrink-0 text-brand-teal" />
+          Add subfolder
+        </button>
+        {!isInbox && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => promptDeleteFolder(folder.id)}
+            className={CONTEXT_MENU_ITEM_DANGER}
+          >
+            <Trash2 size={14} className="shrink-0" />
+            Delete
+          </button>
+        )}
+      </div>,
+      document.body
     );
   };
 
@@ -1695,6 +1819,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </div>
               </div>
               <button
+                ref={pageMenuTriggerRef}
                 type="button"
                 onClick={() => setPageMenuOpen((open) => !open)}
                 aria-haspopup="menu"
@@ -1733,16 +1858,15 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   </div>
                 </div>
               </div>
-              {pageMenuOpen && (
+              {pageMenuOpen &&
+                pageMenuAnchor &&
+                typeof document !== 'undefined' &&
+                createPortal(
                 <div
                   role="menu"
-                  // Anchored to the cluster (which is `relative`), centered
-                  // under the "1/2 ▾" trigger button. The trigger sits in
-                  // the middle slot, so `left-1/2 -translate-x-1/2` lands
-                  // the popover roughly under it on most widths without
-                  // pixel-perfect anchoring.
-                  className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-30 min-w-[16rem] max-w-[20rem] rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-3"
+                  className="fixed min-w-[16rem] max-w-[20rem] rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-3"
                   data-folder-menu
+                  style={panelAnchorStyle(pageMenuAnchor, 320)}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Page jump chips. Wraps freely so even very large
@@ -1818,7 +1942,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     Showing {galleryRangeStart}–{galleryRangeEnd} of {visibleHistory.length}
                     {history.length !== visibleHistory.length ? ` · ${history.length} total in history` : ''}
                   </p>
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           )}
@@ -1890,7 +2015,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 onNotify={showToast}
                 align="right"
               />
-              <div className="relative shrink-0" data-folder-menu>
+              <div className="relative shrink-0" data-folder-menu ref={moveMenuTriggerRef}>
                 <button
                   type="button"
                   onClick={() => setMoveMenuOpen((prev) => !prev)}
@@ -1908,10 +2033,15 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     Move to folder
                   </span>
                 </button>
-                {moveMenuOpen && (
+                {moveMenuOpen &&
+                  moveMenuAnchor &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
                   <div
                     role="menu"
-                    className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
+                    data-folder-menu
+                    className="fixed min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
+                    style={panelAnchorStyle(moveMenuAnchor, 200)}
                   >
                     {visibleFolderRows.map(({ folder, depth }) => {
                       const isHighlighted = folder.id === viewFolderId;
@@ -1967,7 +2097,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                         </button>
                       );
                     })}
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
               {/* Bulk delete — destructive action so it follows the same
@@ -2737,6 +2868,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         );
       })()}
 
+      {renderFolderRowActionsMenuPortal()}
       {renderFolderContextMenuPortal()}
       {renderTileContextMenuPortal()}
 
