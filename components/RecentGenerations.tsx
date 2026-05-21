@@ -723,7 +723,10 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     [folders, viewFolderId]
   );
 
-  const applyFolderDrop = async (targetFolderId: string) => {
+  const applyFolderDrop = async (
+    targetFolderId: string,
+    folderDropMode?: 'before' | 'after' | 'nest'
+  ) => {
     if (draggingTileId) {
       const ids = selectedIds.includes(draggingTileId) && selectedIds.length > 0
         ? selectedIds
@@ -750,17 +753,20 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       return;
     }
     if (draggingFolderId) {
+      const mode =
+        folderDropMode ??
+        (folderDropIndicator
+          ? folderDropIndicator.position
+          : dropTargetFolderId
+            ? 'nest'
+            : null);
       try {
         setFolderBusy(true);
-        if (folderDropIndicator) {
-          await onReorderFolder(
-            draggingFolderId,
-            folderDropIndicator.folderId,
-            folderDropIndicator.position
-          );
+        if (mode === 'before' || mode === 'after') {
+          await onReorderFolder(draggingFolderId, targetFolderId, mode);
           showToast('Folder reordered');
-        } else if (dropTargetFolderId) {
-          await onMoveFolder(draggingFolderId, dropTargetFolderId);
+        } else if (mode === 'nest') {
+          await onMoveFolder(draggingFolderId, targetFolderId);
           showToast('Folder moved into folder');
         }
       } catch (err) {
@@ -772,11 +778,16 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
   };
 
-  const resolveFolderDropPosition = (e: React.DragEvent): 'before' | 'after' => {
+  /** Top/bottom bands reorder among siblings; center band nests inside the row. */
+  const resolveFolderDropMode = (
+    e: React.DragEvent
+  ): 'before' | 'after' | 'nest' => {
     const el = e.currentTarget as HTMLElement;
     const rect = el.getBoundingClientRect();
     const ratio = (e.clientY - rect.top) / Math.max(rect.height, 1);
-    return ratio < 0.5 ? 'before' : 'after';
+    if (ratio < 0.25) return 'before';
+    if (ratio > 0.75) return 'after';
+    return 'nest';
   };
 
   const folderDropHandlers = (targetFolderId: string) => ({
@@ -796,7 +807,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         return;
       }
       e.dataTransfer.dropEffect = 'move';
-      if (e.shiftKey) {
+      const mode = resolveFolderDropMode(e);
+      if (mode === 'nest') {
         setFolderDropIndicator(null);
         setDropTargetFolderId(targetFolderId);
         return;
@@ -804,7 +816,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       setDropTargetFolderId(null);
       setFolderDropIndicator({
         folderId: targetFolderId,
-        position: resolveFolderDropPosition(e),
+        position: mode,
       });
     },
     onDragLeave: () => {
@@ -815,11 +827,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     },
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
+      const folderDropMode = draggingFolderId
+        ? resolveFolderDropMode(e)
+        : undefined;
       setDropTargetFolderId(null);
       setFolderDropIndicator(null);
       setDraggingTileId(null);
       setDraggingFolderId(null);
-      void applyFolderDrop(targetFolderId);
+      void applyFolderDrop(targetFolderId, folderDropMode);
     },
   });
 
@@ -1268,7 +1283,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     }`}
                     aria-label={
                       canDragFolder
-                        ? `${folder.name}, ${count} items. Click to open. Drag above or below another folder to reorder; hold Shift and drop to nest inside.`
+                        ? `${folder.name}, ${count} items. Click to open. Drag to the top or bottom edge to reorder; drop on the middle to move inside.`
                         : `${folder.name}, ${count} items`
                     }
                   >

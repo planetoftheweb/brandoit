@@ -414,8 +414,7 @@ export const folderService = {
 
   /**
    * Reorder a folder among siblings of `referenceFolderId` (same parent).
-   * Inbox stays first at the root; hold Shift while dropping to nest instead
-   * (`moveFolder`).
+   * Inbox stays first at the root. Nest into another folder via `moveFolder`.
    */
   reorderFolder: async (
     user: User | null,
