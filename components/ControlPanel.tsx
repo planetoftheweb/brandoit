@@ -1781,7 +1781,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   return (
     <>
       <div
-        className={`sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] transition-[padding] duration-300 ${
+        className={`sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] transition-[padding] duration-300 [overflow-anchor:none] ${
           isOptionsCollapsed ? 'px-4 py-0' : 'p-4'
         }`}
         ref={containerRef}
@@ -1799,16 +1799,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               fallback so tiny viewports never produce a horizontal
               scrollbar that would clip the dropdown panels. */}
           <div
-            className={`transition-all duration-300 ease-in-out ${
-              isOptionsCollapsed
-                ? 'max-h-0 opacity-0 pointer-events-none overflow-hidden -mb-4'
-                : 'max-h-[500px] opacity-100'
+            className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
+              isOptionsCollapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'
             }`}
             aria-hidden={isOptionsCollapsed}
             // `inert` keeps Tab focus from landing on the hidden controls;
             // `aria-hidden` alone doesn't remove them from the focus order.
             inert={isOptionsCollapsed}
           >
+          <div className="overflow-hidden min-h-0">
           <div className="flex flex-wrap lg:flex-nowrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full lg:min-w-0">
             
             {/* Graphic Type */}
@@ -2361,6 +2360,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
           </div>
           </div>
+          </div>
 
           {/* 2. Prompt Input Area — also tucked away while the toolbar is
               docked. The user explicitly OK'd hiding the prompt when
@@ -2369,14 +2369,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               vertical pixel. The header's Maximize toggle (and scrolling
               back to the top of the page) restores it. */}
           <div
-            className={`w-full max-w-5xl mx-auto flex flex-col gap-1.5 min-w-0 transition-all duration-300 ease-in-out ${
-              isOptionsCollapsed
-                ? 'max-h-0 opacity-0 pointer-events-none overflow-hidden -mt-4'
-                : 'max-h-[400px] opacity-100'
+            className={`w-full max-w-5xl mx-auto grid transition-[grid-template-rows] duration-300 ease-in-out ${
+              isOptionsCollapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'
             }`}
             aria-hidden={isOptionsCollapsed}
             inert={isOptionsCollapsed}
           >
+            <div className="flex flex-col gap-1.5 min-w-0 overflow-hidden min-h-0">
             <div className="flex flex-nowrap items-stretch gap-2 min-w-0 w-full">
               <div
                 className={`relative flex-1 basis-0 min-w-0 rounded-lg transition-shadow ${
@@ -2591,6 +2590,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
             )}
           </div>
+            </div>
 
         </div>
       </div>

@@ -405,6 +405,34 @@ const App: React.FC = () => {
   // listener doesn't compete with the in-flight animation while the user
   // tries to take over with their wheel/trackpad.
   const isProgrammaticScrollRef = useRef(false);
+  // Sentinel sits directly under the toolbar; IntersectionObserver uses it
+  // instead of scroll deltas (which fight layout reflow at scrollY ≈ 0).
+  const toolbarDockSentinelRef = useRef<HTMLDivElement>(null);
+  // After a dock/undock height animation, ignore observer callbacks briefly.
+  const toolbarCollapseIgnoreUntilRef = useRef(0);
+  // Manual header toggle pins until the user scrolls away from that choice.
+  const toolbarUserPinnedRef = useRef<'collapsed' | 'expanded' | null>(null);
+  // False after auto-docking for a new preview; re-enabled once the user
+  // scrolls down so scrolling back to the top can undock again.
+  const toolbarAutoUndockEnabledRef = useRef(true);
+
+  const setToolbarCollapsed = useCallback((collapsed: boolean) => {
+    setIsToolbarCollapsed((prev) => {
+      if (prev === collapsed) return prev;
+      toolbarCollapseIgnoreUntilRef.current = Date.now() + 400;
+      return collapsed;
+    });
+  }, []);
+
+  const toggleToolbarCollapsed = useCallback(() => {
+    setIsToolbarCollapsed((prev) => {
+      const next = !prev;
+      toolbarUserPinnedRef.current = next ? 'collapsed' : 'expanded';
+      toolbarAutoUndockEnabledRef.current = true;
+      toolbarCollapseIgnoreUntilRef.current = Date.now() + 400;
+      return next;
+    });
+  }, []);
 
   // Analysis Modal State
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
@@ -785,74 +813,91 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Auto-collapse the toolbar options row when the user scrolls down to look
-  // at images, restore it when they scroll back up. The intent is "give me
-  // back vertical pixels while I'm browsing previews" without removing the
-  // controls entirely. The threshold is small (just enough to avoid flicker
-  // from focusing the prompt textarea) so even a tiny scroll while viewing
-  // a large preview docks the toolbar — otherwise an image that fills the
-  // viewport never triggers the collapse because the user has nothing to
-  // scroll past. Manual header toggles still work because the next
-  // scroll-up restores them anyway.
+  const isToolbarTextInputFocused = useCallback((): boolean => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return false;
+    const tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+    return el.isContentEditable;
+  }, []);
+
+  // Re-enable scroll-to-top undock after the user has scrolled into the gallery.
   useEffect(() => {
-    let lastY = window.scrollY;
-    const COLLAPSE_THRESHOLD = 16;
-    // Skip auto-collapse while the user is actively typing in any text
-    // field. Now that the prompt input itself is part of the collapsible
-    // group, yanking it away mid-keystroke would feel like the cursor
-    // jumped or the page swallowed the prompt — both are jarring.
-    // Manual toggles (header button, scroll-back-to-top) still work.
-    const isTextInputFocused = (): boolean => {
-      const el = document.activeElement as HTMLElement | null;
-      if (!el) return false;
-      const tag = el.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
-      if (el.isContentEditable) return true;
-      return false;
-    };
     const onScroll = () => {
-      const y = window.scrollY;
-      // While a `window.scrollTo` is animating (e.g. the snap-to-top after
-      // clicking a gallery tile), absorb its synthetic events. Otherwise the
-      // negative-delta train as `y` decays toward 0 would hit the
-      // `delta < -2 && y <= COLLAPSE_THRESHOLD` branch and pop the toolbar
-      // back open the moment we tried to dock it. We still update `lastY`
-      // so the next user-driven scroll computes a sensible delta from the
-      // settled position.
-      if (isProgrammaticScrollRef.current) {
-        lastY = y;
-        return;
+      if (isProgrammaticScrollRef.current) return;
+      if (window.scrollY > 64) {
+        toolbarAutoUndockEnabledRef.current = true;
       }
-      const delta = y - lastY;
-      if (delta > 2 && y > COLLAPSE_THRESHOLD) {
-        if (isTextInputFocused()) {
-          lastY = y;
-          return;
-        }
-        setIsToolbarCollapsed(true);
-      } else if (delta < -2 && y <= COLLAPSE_THRESHOLD) {
-        // Only restore once the user has come (almost) all the way back to
-        // the top. A casual mid-scroll wiggle shouldn't pop the toolbar back
-        // into view while they're still browsing the gallery below.
-        setIsToolbarCollapsed(false);
-      }
-      lastY = y;
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  // Dock when the sentinel scrolls off-screen; undock when it returns to the
+  // top — avoids scroll-delta feedback loops from toolbar height animations.
+  useEffect(() => {
+    const sentinel = toolbarDockSentinelRef.current;
+    if (!sentinel) return;
+
+    const applyFromIntersection = (isAtTop: boolean) => {
+      if (Date.now() < toolbarCollapseIgnoreUntilRef.current) return;
+      if (isProgrammaticScrollRef.current) return;
+      if (isToolbarTextInputFocused()) return;
+
+      const pin = toolbarUserPinnedRef.current;
+
+      if (pin === 'expanded') {
+        if (!isAtTop) {
+          toolbarUserPinnedRef.current = null;
+          setToolbarCollapsed(true);
+        } else {
+          setToolbarCollapsed(false);
+        }
+        return;
+      }
+      if (pin === 'collapsed') {
+        setToolbarCollapsed(true);
+        return;
+      }
+
+      if (isAtTop) {
+        if (toolbarAutoUndockEnabledRef.current) {
+          setToolbarCollapsed(false);
+        }
+      } else {
+        toolbarUserPinnedRef.current = null;
+        setToolbarCollapsed(true);
+      }
+    };
+
+    let rafId = 0;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const isAtTop = entry.isIntersecting;
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => applyFromIntersection(isAtTop));
+      },
+      { root: null, threshold: 0, rootMargin: '0px' }
+    );
+    observer.observe(sentinel);
+    return () => {
+      cancelAnimationFrame(rafId);
+      observer.disconnect();
+    };
+  }, [isToolbarTextInputFocused, setToolbarCollapsed]);
+
   // Auto-collapse whenever the user lands on a new large preview. Without
   // this, a freshly-selected image that fits inside the viewport never
-  // triggers the scroll-based collapse — the user would have to manually
-  // scroll past the (already-tall) toolbar just to get the focus mode they
-  // were after. Keying on the generation id (not the object) avoids
-  // re-collapsing on every refinement-version change for the same image.
+  // triggers docking — the user would have to scroll just to get focus mode.
+  // Keying on the generation id (not the object) avoids re-collapsing on
+  // every refinement-version change for the same image.
   useEffect(() => {
-    if (currentGeneration?.id) {
-      setIsToolbarCollapsed(true);
-    }
-  }, [currentGeneration?.id]);
+    if (!currentGeneration?.id) return;
+    if (toolbarUserPinnedRef.current === 'expanded') return;
+    toolbarUserPinnedRef.current = null;
+    toolbarAutoUndockEnabledRef.current = false;
+    setToolbarCollapsed(true);
+  }, [currentGeneration?.id, setToolbarCollapsed]);
 
   useEffect(() => {
     setConfig(prev => {
@@ -2904,7 +2949,7 @@ const App: React.FC = () => {
                above the (z-40) toolbar even mid-collapse. */}
            {!adminMode && !settingsMode && !catalogMode && !whatsNewMode && (
              <button
-               onClick={() => setIsToolbarCollapsed(prev => !prev)}
+               onClick={toggleToolbarCollapsed}
                className="hidden md:inline-flex p-2 text-slate-500 hover:text-brand-teal dark:hover:text-brand-teal hover:bg-slate-100 dark:hover:bg-[#21262d] rounded-lg transition-colors"
                title={isToolbarCollapsed ? 'Show toolbar and prompt' : 'Hide toolbar and prompt to focus on preview'}
                aria-pressed={isToolbarCollapsed}
@@ -3037,6 +3082,14 @@ const App: React.FC = () => {
             hasGenerated={!!currentGeneration}
             activePromptImageStyleReference={promptImageStyleReference}
             onPromptImageStyleReferenceChange={setPromptImageStyleReference}
+          />
+
+          {/* When this leaves the viewport the toolbar docks; when it returns,
+              undock (unless focus-mode just selected a preview at the top). */}
+          <div
+            ref={toolbarDockSentinelRef}
+            className="h-px w-full shrink-0 pointer-events-none"
+            aria-hidden="true"
           />
 
           {/* Main Content Area */}
