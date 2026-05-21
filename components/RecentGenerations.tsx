@@ -1,10 +1,10 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, BrandColor, VisualStyle, GraphicType, AspectRatioOption, Folder, INBOX_FOLDER_ID } from '../types';
-import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, GripVertical } from 'lucide-react';
+import { ArrowUpRight, Trash2, Archive, CheckSquare, Square, GitCompare, Eye, EyeOff, LayoutGrid, Folder as FolderIcon, FolderPlus, Pin, PinOff, Pencil, FolderInput, X as XIcon, Check, ChevronLeft, ChevronRight, ChevronDown, Loader2, FileText, GripVertical, MoreVertical } from 'lucide-react';
 import {
   buildFolderTree,
-  flattenFolderTree,
+  flattenVisibleFolderTree,
   getChildFolders,
   getDescendantFolderIds,
   getEffectiveFolderInstructions,
@@ -146,6 +146,14 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   const [draggingTileId, setDraggingTileId] = React.useState<string | null>(null);
   const [draggingFolderId, setDraggingFolderId] = React.useState<string | null>(null);
   const [dropTargetFolderId, setDropTargetFolderId] = React.useState<string | null>(null);
+  const [collapsedFolderIds, setCollapsedFolderIds] = React.useState<Set<string>>(() => new Set());
+  const [folderActionsMenuId, setFolderActionsMenuId] = React.useState<string | null>(null);
+  const [folderContextMenu, setFolderContextMenu] = React.useState<{
+    folderId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const folderActionsMenuRef = React.useRef<HTMLDivElement>(null);
   const [moveMenuOpen, setMoveMenuOpen] = React.useState(false);
   // In-flight move-to-folder progress. `moveProgress` drives a sticky
   // "Moving N items to <folder>…" banner with a spinner so the user sees
@@ -333,7 +341,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   // tag themselves with `data-folder-menu` so a click *inside* either menu
   // (or its trigger) is left alone.
   React.useEffect(() => {
-    if (!isFolderPickerOpen && !moveMenuOpen && !pageMenuOpen) return;
+    if (!isFolderPickerOpen && !moveMenuOpen && !pageMenuOpen && !folderActionsMenuId && !folderContextMenu) {
+      return;
+    }
     const onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       // `data-folder-menu` is a misnomer at this point — it's the generic
@@ -342,15 +352,25 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       // attribute keeps a single global outside-click handler authoritative
       // for the whole header cluster.
       if (target && target.closest('[data-folder-menu]')) return;
+      if (target && folderActionsMenuRef.current?.contains(target)) return;
       setIsFolderPickerOpen(false);
       setMoveMenuOpen(false);
       setPageMenuOpen(false);
+      setFolderActionsMenuId(null);
+      setFolderContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsFolderPickerOpen(false);
         setMoveMenuOpen(false);
         setPageMenuOpen(false);
+        setFolderActionsMenuId(null);
+        setFolderContextMenu(null);
+        setRenamingFolderId(null);
+        setRenameDraft('');
+        setIsCreatingFolder(false);
+        setCreateFolderParentId(undefined);
+        setNewFolderDraft('');
       }
     };
     window.addEventListener('mousedown', onClick);
@@ -359,7 +379,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
       window.removeEventListener('mousedown', onClick);
       window.removeEventListener('keydown', onKey);
     };
-  }, [isFolderPickerOpen, moveMenuOpen, pageMenuOpen]);
+  }, [isFolderPickerOpen, moveMenuOpen, pageMenuOpen, folderActionsMenuId, folderContextMenu]);
 
   // Visible history is the slice of tiles that live in the currently-viewed
   // folder. Legacy items without a `folderId` are normalized into Inbox via
@@ -409,10 +429,34 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     return counts;
   }, [history, folders]);
 
-  const flatFolderRows = React.useMemo(
-    () => flattenFolderTree(buildFolderTree(folders)),
-    [folders]
+  const folderTreeRoots = React.useMemo(() => buildFolderTree(folders), [folders]);
+
+  const visibleFolderRows = React.useMemo(
+    () => flattenVisibleFolderTree(folderTreeRoots, collapsedFolderIds),
+    [folderTreeRoots, collapsedFolderIds]
   );
+
+  const toggleFolderCollapsed = React.useCallback((folderId: string) => {
+    setCollapsedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  }, []);
+
+  const beginAddSubfolder = React.useCallback((parentId: string) => {
+    setCreateFolderParentId(parentId);
+    setIsCreatingFolder(true);
+    setNewFolderDraft('');
+    setFolderActionsMenuId(null);
+    setFolderContextMenu(null);
+    setCollapsedFolderIds((prev) => {
+      const next = new Set(prev);
+      next.delete(parentId);
+      return next;
+    });
+  }, []);
 
   const childFoldersInView = React.useMemo(
     () => getChildFolders(folders, viewFolderId),
@@ -671,14 +715,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
     }
   };
 
-  // Folder picker — combined trigger + dropdown menu replacing the prior
-  // chip-strip. The trigger shows the currently-viewed folder's name, item
-  // count, and a small pin badge if it's also the sticky default for new
-  // generations. The menu lists every folder with inline pin/rename/delete
-  // actions and a "+ New folder" affordance at the bottom. Per-row icons
-  // (pencil/trash) are always visible so touch users don't need a hover to
-  // surface them — only the rename pencil and delete trash are inline; the
-  // rest of the row click switches the view (and closes the menu).
+  // Folder picker — trigger + collapsible tree dropdown. Row actions live in
+  // a hamburger menu; chevrons expand/collapse branches; right-click adds a
+  // subfolder under the clicked folder.
   const renderFolderPicker = () => {
     const activeFolder =
       folders.find((f) => f.id === viewFolderId) ??
@@ -731,7 +770,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
           className="inline-flex items-center gap-2 pl-2.5 pr-2 py-1.5 min-h-9 rounded-full border border-gray-300 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-brand-teal hover:text-brand-teal focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal transition"
         >
           <FolderIcon size={14} aria-hidden />
-          <span className="truncate max-w-[10rem]">{activeName}</span>
+          <span className="truncate max-w-[14rem] sm:max-w-[18rem]">{activeName}</span>
           <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300">
             {activeCount}
           </span>
@@ -753,12 +792,12 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             role="listbox"
             aria-label="Switch folder"
             data-folder-menu
-            className="absolute left-0 top-full mt-2 z-30 w-72 max-h-[min(70vh,440px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
+            className="absolute left-0 top-full mt-2 z-30 w-[min(100vw-2rem,22rem)] max-h-[min(70vh,480px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
           >
             <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
               Folders
             </div>
-            {flatFolderRows.map(({ folder, depth }) => {
+            {visibleFolderRows.map(({ folder, depth, hasChildren, isCollapsed }) => {
               const isViewing = folder.id === viewFolderId;
               const isPinned = folder.id === activeFolderId;
               const isInbox = folder.id === INBOX_FOLDER_ID;
@@ -767,12 +806,96 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
               const isDropTarget = dropTargetFolderId === folder.id;
               const hasInstructions = Boolean(folder.customInstructions?.trim());
               const canDragFolder = !isInbox;
+              const rowIndent = depth * 14;
+
+              const renderFolderActionsMenu = () => {
+                if (folderActionsMenuId !== folder.id) return null;
+                return (
+                  <div
+                    ref={folderActionsMenuRef}
+                    role="menu"
+                    data-folder-menu
+                    className="absolute right-0 top-full mt-0.5 z-40 min-w-[11rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => void handleTogglePin(folder)}
+                      disabled={folderBusy}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
+                    >
+                      {isPinned ? (
+                        <Pin size={14} className="text-amber-500 shrink-0" fill="currentColor" />
+                      ) : (
+                        <PinOff size={14} className="shrink-0 text-slate-400" />
+                      )}
+                      {isPinned ? 'Unpin sticky folder' : 'Pin as sticky folder'}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setInstructionsFolderId(folder.id);
+                        setInstructionsDraft(folder.customInstructions || '');
+                        setFolderActionsMenuId(null);
+                        setIsFolderPickerOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-gray-50 dark:hover:bg-[#21262d] ${
+                        hasInstructions
+                          ? 'text-brand-teal'
+                          : 'text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      <FileText size={14} className="shrink-0" />
+                      {hasInstructions ? 'Edit instructions' : 'Add instructions'}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setRenamingFolderId(folder.id);
+                        setRenameDraft(folder.name);
+                        setFolderActionsMenuId(null);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
+                    >
+                      <Pencil size={14} className="shrink-0 text-slate-400" />
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => beginAddSubfolder(folder.id)}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-[#21262d]"
+                    >
+                      <FolderPlus size={14} className="shrink-0 text-brand-teal" />
+                      Add subfolder
+                    </button>
+                    {!isInbox && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setFolderActionsMenuId(null);
+                          setIsFolderPickerOpen(false);
+                          setPendingDeleteFolderId(folder.id);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        <Trash2 size={14} className="shrink-0" />
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                );
+              };
 
               if (isRenaming) {
                 return (
                   <form
                     key={folder.id}
                     className="flex items-center gap-1 px-2 py-1"
+                    style={{ paddingLeft: `${8 + rowIndent}px` }}
                     onSubmit={async (e) => {
                       e.preventDefault();
                       const next = renameDraft.trim();
@@ -839,13 +962,23 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 <div
                   key={folder.id}
                   {...folderDropHandlers(folder.id)}
-                  className={`group flex items-center gap-1 rounded-md px-1 py-0.5 ${
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setFolderActionsMenuId(null);
+                    setFolderContextMenu({
+                      folderId: folder.id,
+                      x: e.clientX,
+                      y: e.clientY,
+                    });
+                  }}
+                  className={`group flex items-center gap-0.5 rounded-md pr-1 py-0.5 ${
                     isDropTarget
                       ? 'ring-2 ring-brand-teal/60 bg-brand-teal/5'
                       : isViewing
                         ? 'bg-brand-teal/10'
                         : 'hover:bg-gray-50 dark:hover:bg-[#21262d]'
                   }`}
+                  style={{ paddingLeft: `${4 + rowIndent}px` }}
                 >
                   {canDragFolder ? (
                     <span
@@ -860,30 +993,72 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                         setDraggingFolderId(null);
                         setDropTargetFolderId(null);
                       }}
-                      className="inline-flex items-center justify-center h-8 w-6 shrink-0 cursor-grab text-slate-400 hover:text-brand-teal"
+                      className="inline-flex items-center justify-center h-8 w-5 shrink-0 cursor-grab text-slate-400 hover:text-brand-teal"
                       aria-label={`Drag ${folder.name} into another folder`}
                     >
                       <GripVertical size={14} aria-hidden />
                     </span>
                   ) : (
-                    <span className="w-6 shrink-0" aria-hidden />
+                    <span className="w-5 shrink-0" aria-hidden />
+                  )}
+                  {hasChildren ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFolderCollapsed(folder.id);
+                      }}
+                      aria-label={
+                        isCollapsed
+                          ? `Expand ${folder.name}`
+                          : `Collapse ${folder.name}`
+                      }
+                      aria-expanded={!isCollapsed}
+                      className="inline-flex items-center justify-center h-8 w-5 shrink-0 rounded-md text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]"
+                    >
+                      <ChevronRight
+                        size={14}
+                        aria-hidden
+                        className={`transition-transform duration-150 ${
+                          isCollapsed ? '' : 'rotate-90'
+                        }`}
+                      />
+                    </button>
+                  ) : (
+                    <span className="w-5 shrink-0" aria-hidden />
                   )}
                   <button
                     type="button"
                     role="option"
                     aria-selected={isViewing}
                     onClick={() => handleSelectFolder(folder.id)}
-                    style={{ paddingLeft: `${8 + depth * 12}px` }}
-                    className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left pr-2 py-1.5 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
+                    className={`flex-1 min-w-0 inline-flex items-center gap-2 text-left py-1.5 pr-1 text-xs font-semibold rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal ${
                       isViewing
                         ? 'text-brand-teal'
                         : 'text-slate-700 dark:text-slate-200'
                     }`}
                   >
                     <FolderIcon size={14} aria-hidden className="shrink-0" />
-                    <span className="truncate flex-1">{folder.name}</span>
+                    <span className="flex-1 min-w-0 truncate" title={folder.name}>
+                      {folder.name}
+                    </span>
+                    {isPinned && (
+                      <Pin
+                        size={12}
+                        className="shrink-0 text-amber-500"
+                        fill="currentColor"
+                        aria-label="Sticky folder for new generations"
+                      />
+                    )}
+                    {hasInstructions && (
+                      <FileText
+                        size={12}
+                        className="shrink-0 text-brand-teal"
+                        aria-label="Has custom instructions"
+                      />
+                    )}
                     <span
-                      className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums ${
+                      className={`inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold leading-none tabular-nums shrink-0 ${
                         isViewing
                           ? 'bg-brand-teal text-white'
                           : 'bg-gray-200 dark:bg-[#30363d] text-slate-600 dark:text-slate-300'
@@ -892,87 +1067,50 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                       {count}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleTogglePin(folder)}
-                    title={
-                      isPinned
-                        ? 'Sticky for new generations — click to clear'
-                        : 'Pin as sticky folder for new generations'
-                    }
-                    aria-label={
-                      isPinned
-                        ? `Clear sticky pin on ${folder.name}`
-                        : `Pin ${folder.name} as sticky folder`
-                    }
-                    aria-pressed={isPinned}
-                    disabled={folderBusy}
-                    className={`inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md transition ${
-                      isPinned
-                        ? 'text-amber-500 hover:bg-amber-100/40 dark:hover:bg-amber-500/10'
-                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
-                    }`}
-                  >
-                    {isPinned ? (
-                      <Pin size={14} fill="currentColor" />
-                    ) : (
-                      <PinOff size={14} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInstructionsFolderId(folder.id);
-                      setInstructionsDraft(folder.customInstructions || '');
-                      setIsFolderPickerOpen(false);
-                    }}
-                    title={
-                      hasInstructions
-                        ? `Edit instructions for ${folder.name}`
-                        : `Add instructions for ${folder.name}`
-                    }
-                    aria-label={`Folder instructions for ${folder.name}`}
-                    className={`inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md transition ${
-                      hasInstructions
-                        ? 'text-brand-teal hover:bg-brand-teal/10'
-                        : 'text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d]'
-                    }`}
-                  >
-                    <FileText size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenamingFolderId(folder.id);
-                      setRenameDraft(folder.name);
-                    }}
-                    title={`Rename ${folder.name}`}
-                    aria-label={`Rename ${folder.name}`}
-                    className="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                  {!isInbox ? (
+                  <div className="relative shrink-0">
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsFolderPickerOpen(false);
-                        setPendingDeleteFolderId(folder.id);
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderContextMenu(null);
+                        setFolderActionsMenuId((id) =>
+                          id === folder.id ? null : folder.id
+                        );
                       }}
-                      title={`Delete ${folder.name}`}
-                      aria-label={`Delete ${folder.name}`}
-                      className="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-md text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                      aria-haspopup="menu"
+                      aria-expanded={folderActionsMenuId === folder.id}
+                      aria-label={`Actions for ${folder.name}`}
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-slate-400 hover:text-brand-teal hover:bg-gray-100 dark:hover:bg-[#21262d] transition"
                     >
-                      <Trash2 size={13} />
+                      <MoreVertical size={14} aria-hidden />
                     </button>
-                  ) : (
-                    // Spacer keeps Inbox's row aligned with the others so
-                    // the trash columns line up across rows.
-                    <span className="h-8 w-8 shrink-0" aria-hidden />
-                  )}
+                    {renderFolderActionsMenu()}
+                  </div>
                 </div>
               );
             })}
+
+            {folderContextMenu && (
+              <div
+                role="menu"
+                data-folder-menu
+                className="fixed z-50 min-w-[10.5rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl"
+                style={{
+                  left: folderContextMenu.x,
+                  top: folderContextMenu.y,
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => beginAddSubfolder(folderContextMenu.folderId)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-brand-teal hover:bg-brand-teal/10"
+                >
+                  <FolderPlus size={14} className="shrink-0" />
+                  Add subfolder
+                </button>
+              </div>
+            )}
 
             <div
               className="my-1 border-t border-gray-200 dark:border-[#30363d]"
@@ -1016,10 +1154,13 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     if (e.key === 'Escape') {
                       e.preventDefault();
                       setIsCreatingFolder(false);
+                      setCreateFolderParentId(undefined);
                       setNewFolderDraft('');
                     }
                   }}
-                  placeholder="Folder name"
+                  placeholder={
+                    createFolderParentId ? 'Subfolder name' : 'Folder name'
+                  }
                   className="flex-1 min-w-0 text-xs font-semibold bg-transparent border border-brand-teal rounded-md px-2 py-1 min-h-8 focus:outline-none focus:ring-2 focus:ring-brand-teal/40 text-slate-900 dark:text-slate-100"
                   maxLength={60}
                 />
@@ -1027,7 +1168,9 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   type="submit"
                   disabled={folderBusy || !newFolderDraft.trim()}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-md text-brand-teal hover:bg-brand-teal/10 disabled:opacity-50"
-                  aria-label="Create folder"
+                  aria-label={
+                    createFolderParentId ? 'Create subfolder' : 'Create folder'
+                  }
                 >
                   <Check size={14} />
                 </button>
@@ -1045,32 +1188,18 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                 </button>
               </form>
             ) : (
-              <div className="flex flex-col gap-0.5 px-1 py-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreateFolderParentId(undefined);
-                    setIsCreatingFolder(true);
-                    setNewFolderDraft('');
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-teal rounded-md hover:bg-brand-teal/10 transition"
-                >
-                  <FolderPlus size={14} aria-hidden />
-                  New folder
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreateFolderParentId(viewFolderId);
-                    setIsCreatingFolder(true);
-                    setNewFolderDraft('');
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 rounded-md hover:bg-gray-50 dark:hover:bg-[#21262d] transition"
-                >
-                  <FolderPlus size={14} aria-hidden />
-                  New subfolder here
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateFolderParentId(undefined);
+                  setIsCreatingFolder(true);
+                  setNewFolderDraft('');
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-teal rounded-md hover:bg-brand-teal/10 transition"
+              >
+                <FolderPlus size={14} aria-hidden />
+                New folder
+              </button>
             )}
           </div>
         )}
@@ -1366,7 +1495,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     role="menu"
                     className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
                   >
-                    {flatFolderRows.map(({ folder, depth }) => {
+                    {visibleFolderRows.map(({ folder, depth }) => {
                       const isHighlighted = folder.id === (activeFolderId || INBOX_FOLDER_ID);
                       return (
                         <button

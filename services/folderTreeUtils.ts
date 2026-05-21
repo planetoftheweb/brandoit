@@ -113,6 +113,31 @@ export const flattenFolderTree = (nodes: FolderTreeNode[]): { folder: Folder; de
   return out;
 };
 
+export interface VisibleFolderRow {
+  folder: Folder;
+  depth: number;
+  hasChildren: boolean;
+  isCollapsed: boolean;
+}
+
+/** Depth-first list respecting collapsed nodes (children hidden when collapsed). */
+export const flattenVisibleFolderTree = (
+  nodes: FolderTreeNode[],
+  collapsedIds: ReadonlySet<string>
+): VisibleFolderRow[] => {
+  const out: VisibleFolderRow[] = [];
+  const walk = (list: FolderTreeNode[]) => {
+    for (const node of list) {
+      const hasChildren = node.children.length > 0;
+      const isCollapsed = collapsedIds.has(node.folder.id);
+      out.push({ folder: node.folder, depth: node.depth, hasChildren, isCollapsed });
+      if (hasChildren && !isCollapsed) walk(node.children);
+    }
+  };
+  walk(nodes);
+  return out;
+};
+
 export const sanitizeFolderParentId = (
   rawParentId: string | undefined,
   folderId: string,
