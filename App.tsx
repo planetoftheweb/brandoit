@@ -258,34 +258,41 @@ const writeToolbarSelection = (selection: ToolbarSelectionCache, userId?: string
   }
 };
 
-const App: React.FC = () => {
-  // Critical Config Check
-  if (missingKeys.length > 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#0d1117] p-4 font-sans">
-        <div className="bg-white dark:bg-[#161b22] p-8 rounded-xl shadow-2xl max-w-lg w-full border border-red-200 dark:border-red-900">
-          <div className="flex items-center gap-3 text-red-600 mb-6">
-            <AlertCircle size={32} />
-            <h1 className="text-2xl font-bold">Configuration Error</h1>
-          </div>
-          <p className="text-slate-600 dark:text-slate-300 mb-4">
-            The following Firebase configuration keys are missing from your environment. The app cannot start without them.
-          </p>
-          <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg border border-red-100 dark:border-red-900/50 mb-6">
-            <ul className="list-disc pl-5 space-y-1">
-              {missingKeys.map(key => (
-                <li key={key} className="text-red-700 dark:text-red-300 font-mono text-sm">{key}</li>
-              ))}
-            </ul>
-          </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Please check your <code>.env</code> file. Ensure keys start with <code>VITE_</code> and the file is in the project root. Restart the dev server after changes.
-          </p>
-        </div>
-      </div>
-    );
-  }
+const isToolbarTextInputFocused = (): boolean => {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+  return el.isContentEditable;
+};
 
+const ConfigurationErrorScreen: React.FC<{ keys: string[] }> = ({ keys }) => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#0d1117] p-4 font-sans">
+    <div className="bg-white dark:bg-[#161b22] p-8 rounded-xl shadow-2xl max-w-lg w-full border border-red-200 dark:border-red-900">
+      <div className="flex items-center gap-3 text-red-600 mb-6">
+        <AlertCircle size={32} />
+        <h1 className="text-2xl font-bold">Configuration Error</h1>
+      </div>
+      <p className="text-slate-600 dark:text-slate-300 mb-4">
+        The following Firebase configuration keys are missing from your environment. The app cannot start without them.
+      </p>
+      <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg border border-red-100 dark:border-red-900/50 mb-6">
+        <ul className="list-disc pl-5 space-y-1">
+          {keys.map((key) => (
+            <li key={key} className="text-red-700 dark:text-red-300 font-mono text-sm">
+              {key}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <p className="text-sm text-slate-500 dark:text-slate-400">
+        Please check your <code>.env</code> file. Ensure keys start with <code>VITE_</code> and the file is in the project root. Restart the dev server after changes.
+      </p>
+    </div>
+  </div>
+);
+
+const App: React.FC = () => {
   // Theme State
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined' && window.matchMedia) {
@@ -813,13 +820,8 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const isToolbarTextInputFocused = useCallback((): boolean => {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el) return false;
-    const tag = el.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
-    return el.isContentEditable;
-  }, []);
+  const isStudioRoute =
+    !adminMode && !settingsMode && !catalogMode && !whatsNewMode;
 
   // Re-enable scroll-to-top undock after the user has scrolled into the gallery.
   useEffect(() => {
@@ -836,6 +838,7 @@ const App: React.FC = () => {
   // Dock when the sentinel scrolls off-screen; undock when it returns to the
   // top — avoids scroll-delta feedback loops from toolbar height animations.
   useEffect(() => {
+    if (!isStudioRoute) return;
     const sentinel = toolbarDockSentinelRef.current;
     if (!sentinel) return;
 
@@ -884,7 +887,7 @@ const App: React.FC = () => {
       cancelAnimationFrame(rafId);
       observer.disconnect();
     };
-  }, [isToolbarTextInputFocused, setToolbarCollapsed]);
+  }, [isStudioRoute, setToolbarCollapsed]);
 
   // Auto-collapse whenever the user lands on a new large preview. Without
   // this, a freshly-selected image that fits inside the viewport never
@@ -2695,6 +2698,10 @@ const App: React.FC = () => {
     setCatalogMode(null);
     setAdminMode(false);
   };
+
+  if (missingKeys.length > 0) {
+    return <ConfigurationErrorScreen keys={missingKeys} />;
+  }
 
   // Suspended-account hard block. A signed-in user with `isDisabled === true`
   // is stopped here before any studio, history, catalog, settings, or admin UI
