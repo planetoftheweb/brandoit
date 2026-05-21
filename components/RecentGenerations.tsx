@@ -57,19 +57,18 @@ function clampContextPoint(
 const PANEL_ANCHOR_GAP = 8;
 
 type PanelAnchor = {
-  top: number;
   left: number;
   align: 'start' | 'center' | 'end';
+  triggerTop: number;
+  triggerBottom: number;
 };
 
 function panelAnchorFromRect(
   rect: DOMRect,
-  opts?: { align?: PanelAnchor['align']; gap?: number }
+  opts?: { align?: PanelAnchor['align'] }
 ): PanelAnchor {
-  const gap = opts?.gap ?? PANEL_ANCHOR_GAP;
   const align = opts?.align ?? 'start';
   return {
-    top: rect.bottom + gap,
     left:
       align === 'center'
         ? rect.left + rect.width / 2
@@ -77,20 +76,40 @@ function panelAnchorFromRect(
           ? rect.right
           : rect.left,
     align,
+    triggerTop: rect.top,
+    triggerBottom: rect.bottom,
   };
 }
 
 function panelAnchorStyle(
   anchor: PanelAnchor,
-  panelWidth: number
+  panelWidth: number,
+  maxPanelHeight = 320
 ): React.CSSProperties {
   const margin = 8;
+  const gap = PANEL_ANCHOR_GAP;
   const vw = typeof window !== 'undefined' ? window.innerWidth : panelWidth + margin * 2;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : maxPanelHeight + margin * 2;
+
+  const spaceBelow = Math.max(0, vh - anchor.triggerBottom - margin);
+  const spaceAbove = Math.max(0, anchor.triggerTop - margin);
+  const minComfort = Math.min(maxPanelHeight, 100);
+  const openAbove = spaceBelow < minComfort && spaceAbove > spaceBelow;
+
   const style: React.CSSProperties = {
     position: 'fixed',
-    top: anchor.top,
     zIndex: 70,
+    overflowY: 'auto',
   };
+
+  if (openAbove) {
+    style.bottom = vh - anchor.triggerTop + gap;
+    style.maxHeight = Math.min(maxPanelHeight, spaceAbove);
+  } else {
+    style.top = anchor.triggerBottom + gap;
+    style.maxHeight = Math.min(maxPanelHeight, spaceBelow);
+  }
+
   if (anchor.align === 'center') {
     style.left = anchor.left;
     style.transform = 'translateX(-50%)';
@@ -1079,7 +1098,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
             aria-label="Switch folder"
             data-folder-menu
             className="fixed max-h-[min(70vh,480px)] overflow-y-auto rounded-xl border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-xl p-1"
-            style={panelAnchorStyle(folderPickerAnchor, 352)}
+            style={panelAnchorStyle(folderPickerAnchor, 352, 480)}
           >
             <div
               className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 select-none rounded-md hover:bg-gray-50 dark:hover:bg-[#21262d]"
@@ -1454,7 +1473,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
         role="menu"
         data-folder-menu
         className="fixed min-w-[11rem] py-1 rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg"
-        style={panelAnchorStyle(folderActionsMenuAnchor, 176)}
+        style={panelAnchorStyle(folderActionsMenuAnchor, 176, 200)}
       >
         <button
           type="button"
@@ -1881,7 +1900,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                   role="menu"
                   className="fixed min-w-[16rem] max-w-[20rem] rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-3"
                   data-folder-menu
-                  style={panelAnchorStyle(pageMenuAnchor, 320)}
+                  style={panelAnchorStyle(pageMenuAnchor, 320, 400)}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Page jump chips. Wraps freely so even very large
@@ -2056,7 +2075,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
                     role="menu"
                     data-folder-menu
                     className="fixed min-w-[200px] max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-lg p-1"
-                    style={panelAnchorStyle(moveMenuAnchor, 200)}
+                    style={panelAnchorStyle(moveMenuAnchor, 200, 288)}
                   >
                     {visibleFolderRows.map(({ folder, depth }) => {
                       const isHighlighted = folder.id === viewFolderId;
