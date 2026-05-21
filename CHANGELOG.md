@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-20
+
+### Added
+
+- **Nested folders with inherited instructions.** Folders can have `parentId` and optional `sortOrder` among siblings; `folderTreeUtils` builds the tree, sorts children, and merges instructions down the chain so subfolders inherit parent guidance unless they override it (`types.ts`, `services/folderService.ts`, `services/folderTreeUtils.ts`, `services/authService.ts`).
+- **Collapsible folder picker.** The gallery header folder chip opens a portaled tree dropdown with expand/collapse chevrons, per-folder counts, inline rename, create-subfolder, and row action menus (`components/RecentGenerations.tsx`).
+- **Folder drag-and-drop: reorder and nest.** Drag a folder to the top or bottom ~25% of another row to reorder siblings (`reorderFolder`); drop on the middle ~50% to nest inside (`moveFolder`). Teal border lines show insert-before/after; full-row highlight shows nest target. Subfolder shortcut cards in the gallery grid use the same handlers.
+- **Folder and tile context menus.** Right-click a folder row (or the Folders header) for open, subfolder, instructions, rename, and delete. Right-click a gallery tile for open, compare, move-to-folder, copy prompt, and delete — same double-tap discipline as toolbar buttons (`components/RecentGenerations.tsx`).
+
+### Changed
+
+- **New generations save to the open gallery folder.** `galleryViewFolderId` drives which folder receives new tiles so switching folders before generating lands work in the right place (`App.tsx`, `services/historyService.ts`).
+- **Portaled header menus.** Folder picker, row ⋮ menus, page-size popover, and bulk move menu render via `createPortal` to `document.body` with viewport-aware positioning (flip above the trigger when near the bottom) so scroll containers no longer clip them (`components/RecentGenerations.tsx`).
+
+### Fixed
+
+- **React hooks order in gallery and app shell.** Moved hooks above early returns in `RecentGenerations` (empty gallery) and extracted `ConfigurationErrorScreen` so Firebase config checks run after all hooks (`App.tsx`, `components/RecentGenerations.tsx`).
+- **Toolbar dock flicker in focus mode.** IntersectionObserver-based docking with stable collapse thresholds (`App.tsx`).
+
 ## [0.17.0] - 2026-05-15
 
 ### Added

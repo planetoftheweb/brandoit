@@ -23,6 +23,56 @@ import type { WhatsNewEntry } from '../types';
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: 'v0.18.0-nested-folders',
+    title: 'Nested folders, drag to reorder, and smarter menus',
+    summary:
+      'Organize generations in a collapsible folder tree — drag to reorder, drop in the middle to nest, and right-click for quick actions.',
+    blurb:
+      'The gallery now behaves like a real project library. Create nested folders with per-folder instructions that flow down to subfolders and new generations. Open the folder picker to browse a collapsible tree, drag folders to the top or bottom edge to reorder siblings, or drop on the middle of a row to move a folder inside another. Right-click any folder for instructions, rename, subfolder, or delete — and open the row menu without it getting clipped at the bottom of the screen. New images save to whichever folder you have open.',
+    publishedAt: Date.parse('2026-05-20T18:00:00Z'),
+    version: '0.18.0',
+    image: '/whats-new/whatsnew-v0.18.0.png',
+    featured: true,
+    sections: [
+      {
+        heading: 'Browse and switch folders',
+        body: 'The folder chip in the gallery header opens a full tree — expand branches with the chevron, see item counts per folder, and click a row to jump straight into that folder view.',
+        steps: [
+          { text: 'Click the folder name chip in the gallery header to open the picker.', icon: 'Folder' },
+          { text: 'Use the chevron on a row to expand or collapse its subfolders.', icon: 'Layers' },
+          { text: 'Click any folder row to switch the gallery to that folder.', icon: 'Check' },
+        ],
+      },
+      {
+        heading: 'Drag to reorder or nest',
+        body: 'Folder rows are draggable. The drop zone tells you what will happen before you release — a thick teal line above or below means reorder among siblings; highlighting the whole row means move inside that folder.',
+        steps: [
+          { text: 'Drag a folder row by its name area (not Inbox).', icon: 'FolderInput' },
+          { text: 'Hover the top quarter of another row to insert above it — watch for the top border line.', icon: 'ArrowRight' },
+          { text: 'Hover the bottom quarter to insert below — watch for the bottom border line.', icon: 'ArrowRight' },
+          { text: 'Drop on the middle of a row to nest the dragged folder inside it — the row highlights in teal.', icon: 'Folder' },
+        ],
+      },
+      {
+        heading: 'Right-click and row actions',
+        body: 'Every folder supports a context menu from a right-click, and a compact ⋮ menu for the same actions. Menus render above the trigger when you are near the bottom of the screen so nothing gets cut off.',
+        steps: [
+          { text: 'Right-click a folder row for Open, Add subfolder, Instructions, Rename, or Delete.', icon: 'Pencil' },
+          { text: 'Or click the ⋮ button on the row for the same actions in a dropdown.', icon: 'Layers' },
+          { text: 'Right-click the Folders header label to create a new top-level folder.', icon: 'Folder' },
+        ],
+      },
+      {
+        heading: 'Instructions and where new work lands',
+        body: 'Add custom instructions on any folder; subfolders inherit them unless they define their own. Generations you create while viewing a folder are saved into that folder automatically.',
+        steps: [
+          { text: 'Open a folder’s menu and choose Add instructions or Edit instructions.', icon: 'BookOpen' },
+          { text: 'Generate or refine while that folder is selected — the tile stays in that folder.', icon: 'Sparkles' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'v0.17.0-slideshow-and-safer-deletes',
     title: 'Fullscreen slideshow, calmer canvas, safer deletes',
     summary:
