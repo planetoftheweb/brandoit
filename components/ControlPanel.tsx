@@ -55,10 +55,13 @@ import {
   KeyRound,
   UserPlus,
   Bookmark,
-  BookmarkPlus
+  BookmarkPlus,
+  MoreHorizontal,
 } from 'lucide-react';
 import { RichSelect } from './RichSelect';
 import { useConfirmAction } from '../hooks/useConfirmAction';
+import { AnchorRect, PresetActionPopover } from './PresetActionPopover';
+import { PresetHoverPreview } from './PresetHoverPreview';
 
 /** Fields persisted when saving/updating a toolbar preset (see App `handleSavePreset`). */
 type ToolbarPresetSnapshot = Omit<ToolbarPreset, 'id' | 'name' | 'createdAt'>;
@@ -140,8 +143,12 @@ interface ControlPanelProps {
    * (tweak a style or model, then re-save) without accumulating duplicates.
    */
   onUpdatePreset?: (presetId: string) => Promise<void> | void;
+  /** Rename a preset by id without touching its toolbar snapshot. */
+  onRenamePreset?: (presetId: string, name: string) => Promise<void> | void;
   /** Remove a preset by id. */
   onDeletePreset?: (presetId: string) => Promise<void> | void;
+  /** Convert a preset to human-readable labels for the hover preview. */
+  getPresetLabels?: (preset: ToolbarPreset) => import('./PresetHoverPreview').PresetLabels;
   /**
    * When true the secondary "options" row (Type/Style/Colors/Size/Model/etc)
    * collapses to zero height so the user can focus on previews. The prompt
@@ -550,7 +557,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onApplyPreset,
   onSavePreset,
   onUpdatePreset,
+  onRenamePreset,
   onDeletePreset,
+  getPresetLabels,
   isOptionsCollapsed = false,
   hasGenerated = false,
   activePromptImageStyleReference = null,
@@ -646,44 +655,90 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   // Inline "click twice to confirm" pattern, mirrors the image-related
   // delete buttons. First click arms the trash icon (swaps to a check on a
   // pulsing amber background); second click within 3s actually deletes.
-  const confirmPresetDelete = useConfirmAction<string>({
-    onConfirm: async (presetId) => {
-      if (!onDeletePreset) return;
-      try {
-        await onDeletePreset(presetId);
-      } catch (err) {
-        console.error('Failed to delete preset', err);
-      }
-    },
-  });
-  const handleDeletePreset = (e: React.MouseEvent, presetId: string) => {
-    e.stopPropagation();
-    if (!onDeletePreset) return;
-    confirmPresetDelete.trigger(presetId);
-  };
+  // Row-side popover + hover preview state. The actual rename/overwrite/delete
+  // logic lives inside `PresetActionPopover` — this menu just tracks which row
+  // is open and where to anchor the floating panels.
+  const [actionMenuPresetId, setActionMenuPresetId] = useState<string | null>(null);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState<AnchorRect | null>(null);
+  const [hoverPresetId, setHoverPresetId] = useState<string | null>(null);
+  const [hoverAnchor, setHoverAnchor] = useState<AnchorRect | null>(null);
 
-  // Transient ids used to render per-row feedback after an update completes
-  // (a brief checkmark) and while the request is in flight (spinner). Tracked
-  // by id rather than a boolean so two clicks on different rows don't fight.
-  const [updatingPresetId, setUpdatingPresetId] = useState<string | null>(null);
-  const [justUpdatedPresetId, setJustUpdatedPresetId] = useState<string | null>(null);
-
-  const handleUpdatePreset = async (e: React.MouseEvent, presetId: string) => {
+  const handleToggleActionMenu = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    presetId: string
+  ) => {
     e.stopPropagation();
-    if (!onUpdatePreset || updatingPresetId) return;
-    setUpdatingPresetId(presetId);
-    try {
-      await onUpdatePreset(presetId);
-      setJustUpdatedPresetId(presetId);
-      window.setTimeout(() => {
-        setJustUpdatedPresetId(prev => (prev === presetId ? null : prev));
-      }, 1500);
-    } catch (err) {
-      console.error('Failed to update preset', err);
-    } finally {
-      setUpdatingPresetId(null);
+    if (actionMenuPresetId === presetId) {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      return;
     }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setActionMenuAnchor({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
+    setActionMenuPresetId(presetId);
+    setHoverPresetId(null);
+    setHoverAnchor(null);
   };
+
+  const handlePresetRowEnter = (
+    e: React.MouseEvent<HTMLDivElement>,
+    presetId: string
+  ) => {
+    if (actionMenuPresetId) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoverAnchor({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
+    setHoverPresetId(presetId);
+  };
+
+  const handlePresetRowLeave = () => {
+    setHoverPresetId(null);
+    setHoverAnchor(null);
+  };
+
+  // When the toolbar's presets dropdown closes, clear the satellite panels too.
+  useEffect(() => {
+    if (activeDropdown !== 'presets') {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      setHoverPresetId(null);
+      setHoverAnchor(null);
+    }
+  }, [activeDropdown]);
+
+  // Close the action popover and hover preview on scroll/resize since they are
+  // anchored to viewport coordinates and would otherwise drift off-target.
+  useEffect(() => {
+    if (!actionMenuPresetId && !hoverPresetId) return;
+    const close = () => {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      setHoverPresetId(null);
+      setHoverAnchor(null);
+    };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [actionMenuPresetId, hoverPresetId]);
+
+  const activeActionPreset = actionMenuPresetId
+    ? presets.find((p) => p.id === actionMenuPresetId) ?? null
+    : null;
+  const activeHoverPreset = hoverPresetId
+    ? presets.find((p) => p.id === hoverPresetId) ?? null
+    : null;
 
   const currentToolbarPresetSnapshot = useMemo<ToolbarPresetSnapshot>(
     () => ({
@@ -843,12 +898,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   }, [user]);
 
-  // Close dropdowns when clicking outside the toolbar
+  // Close dropdowns when clicking outside the toolbar. Portaled satellites
+  // (the preset action popover / hover preview) live outside `containerRef`
+  // but should not count as "outside" — they belong to the same widget.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setActiveDropdown(null);
-      }
+      const target = e.target as HTMLElement;
+      const insideContainer = containerRef.current?.contains(target);
+      const insidePortal = target.closest?.('[data-preset-popover]');
+      if (insideContainer || insidePortal) return;
+      setActiveDropdown(null);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -1807,7 +1866,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             // `aria-hidden` alone doesn't remove them from the focus order.
             inert={isOptionsCollapsed}
           >
-          <div className="overflow-hidden min-h-0">
+          <div className={`min-h-0 ${isOptionsCollapsed ? 'overflow-hidden' : 'overflow-visible'}`}>
           <div className="flex flex-wrap lg:flex-nowrap items-center justify-center gap-0.5 md:gap-1 xl:gap-1.5 w-full lg:min-w-0">
             
             {/* Graphic Type */}
@@ -2185,14 +2244,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                               currentToolbarPresetSnapshot
                             );
                             const isApplied = !isDirty;
-                            const isUpdatingThis = updatingPresetId === preset.id;
-                            const showOverwriteRow =
-                              onUpdatePreset &&
-                              (isDirty || isUpdatingThis || justUpdatedPresetId === preset.id);
+                            const isActionMenuOpen = actionMenuPresetId === preset.id;
+                            const hasAnyAction = !!(onRenamePreset || onUpdatePreset || onDeletePreset);
                             return (
                             <div
                               key={preset.id}
                               aria-selected={isApplied}
+                              onMouseEnter={(e) => handlePresetRowEnter(e, preset.id)}
+                              onMouseLeave={handlePresetRowLeave}
                               className={`rounded-md border transition-colors ${
                                 isApplied
                                   ? 'bg-brand-teal/10 ring-1 ring-brand-teal/30 dark:ring-brand-teal/40 border-transparent hover:bg-brand-teal/15'
@@ -2205,10 +2264,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                   onClick={() => handleApplyPreset(preset)}
                                   title={`Apply preset: ${preset.name}`}
                                 >
-                                  {/* Icon stays brand-teal regardless of applied state — the
-                                      bookmark glyph is the affordance for "preset", not a
-                                      selection signal. The name and subtitle below are what
-                                      change so the applied row reads as bold + teal. */}
                                   <Bookmark
                                     size={16}
                                     className={`shrink-0 mt-0.5 ${
@@ -2240,50 +2295,26 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                                     </span>
                                   </div>
                                 </div>
-                                {(() => {
-                                  const isArmed = confirmPresetDelete.isArmed(preset.id);
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleDeletePreset(e, preset.id)}
-                                      className={`p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center rounded-md transition-colors ${
-                                        isArmed
-                                          ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
-                                          : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-red-500 dark:hover:text-red-400'
-                                      }`}
-                                      title={isArmed ? 'Click again to confirm' : 'Delete preset'}
-                                      aria-label={isArmed ? `Confirm delete preset ${preset.name}` : `Delete preset ${preset.name}`}
-                                    >
-                                      {isArmed ? <Check size={12} /> : <Trash2 size={12} />}
-                                    </button>
-                                  );
-                                })()}
-                              </div>
-                              {showOverwriteRow && (
-                                <div className="px-2 pb-2 pt-0">
+                                {hasAnyAction && (
                                   <button
                                     type="button"
-                                    onClick={(e) => handleUpdatePreset(e, preset.id)}
-                                    disabled={isUpdatingThis}
-                                    className="w-full text-left rounded-md px-2 py-2 sm:py-1.5 text-[11px] font-semibold text-brand-teal hover:bg-brand-teal/10 dark:hover:bg-brand-teal/15 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center gap-2 min-h-[44px] sm:min-h-0"
-                                    title="Replace this preset with your current toolbar settings"
+                                    onClick={(e) => handleToggleActionMenu(e, preset.id)}
+                                    aria-expanded={isActionMenuOpen}
+                                    aria-label={
+                                      isActionMenuOpen
+                                        ? `Close actions for ${preset.name}`
+                                        : `Actions for ${preset.name}`
+                                    }
+                                    className={`p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center rounded-md transition-colors ${
+                                      isActionMenuOpen
+                                        ? 'bg-gray-200 dark:bg-[#30363d] text-slate-700 dark:text-slate-200'
+                                        : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                                    }`}
                                   >
-                                    {isUpdatingThis ? (
-                                      <>
-                                        <Loader2 size={14} className="animate-spin shrink-0" />
-                                        <span>Saving to preset…</span>
-                                      </>
-                                    ) : justUpdatedPresetId === preset.id ? (
-                                      <>
-                                        <CheckIcon size={14} className="shrink-0" />
-                                        <span>Preset updated</span>
-                                      </>
-                                    ) : (
-                                      <span>Overwrite with current toolbar</span>
-                                    )}
+                                    <MoreHorizontal size={14} />
                                   </button>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </div>
                             );
                           })
@@ -2354,6 +2385,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                       </button>
                     )}
                   </div>
+                )}
+                {activeActionPreset && actionMenuAnchor && (
+                  <PresetActionPopover
+                    preset={activeActionPreset}
+                    anchor={actionMenuAnchor}
+                    isApplied={!presetToolbarDiffersFromSnapshot(activeActionPreset, currentToolbarPresetSnapshot)}
+                    onClose={() => {
+                      setActionMenuPresetId(null);
+                      setActionMenuAnchor(null);
+                    }}
+                    onUpdate={onUpdatePreset ? (id) => Promise.resolve(onUpdatePreset(id)) : undefined}
+                    onDelete={onDeletePreset ? (id) => Promise.resolve(onDeletePreset(id)) : undefined}
+                    onRename={onRenamePreset ? (id, name) => Promise.resolve(onRenamePreset(id, name)) : undefined}
+                  />
+                )}
+                {activeHoverPreset && hoverAnchor && getPresetLabels && (
+                  <PresetHoverPreview
+                    anchor={hoverAnchor}
+                    name={activeHoverPreset.name}
+                    labels={getPresetLabels(activeHoverPreset)}
+                  />
                 )}
               </div>
             )}

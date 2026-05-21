@@ -734,6 +734,36 @@ const App: React.FC = () => {
   const context = { brandColors, visualStyles, graphicTypes, aspectRatios };
   const selectedModel = user?.preferences.selectedModel || guestSelectedModel;
 
+  // Build a human-readable label map for a preset's snapshot. Used by the
+  // hover preview in both the toolbar preset menu and the gallery preset menu
+  // so the user can scan stored parameters without applying the preset first.
+  const getPresetLabels = useCallback(
+    (preset: ToolbarPreset) => {
+      const ratio = preset.aspectRatio
+        ? aspectRatios.find((r) => r.value === preset.aspectRatio)
+        : undefined;
+      return {
+        type: preset.graphicTypeId
+          ? graphicTypes.find((t) => t.id === preset.graphicTypeId)?.name
+          : undefined,
+        style: preset.visualStyleId
+          ? visualStyles.find((s) => s.id === preset.visualStyleId)?.name
+          : undefined,
+        colors: preset.colorSchemeId
+          ? brandColors.find((c) => c.id === preset.colorSchemeId)?.name
+          : undefined,
+        size: ratio?.label || preset.aspectRatio,
+        svgMode:
+          preset.svgMode && preset.svgMode !== 'static' ? preset.svgMode : undefined,
+        model: preset.selectedModel
+          ? MODEL_NAME_BY_ID[preset.selectedModel] || preset.selectedModel
+          : undefined,
+        quality: preset.openaiImageQuality,
+      };
+    },
+    [brandColors, visualStyles, graphicTypes, aspectRatios]
+  );
+
   // Multi-model "compare" selection. When length > 1, handleGenerate fans the
   // batch out across every selected model, tagging every produced history tile
   // with a shared comparisonBatchId. Single-model generation is the default
@@ -2625,6 +2655,33 @@ const App: React.FC = () => {
     await handleUpdatePreset(presetId);
   };
 
+  const handleRenamePreset = async (presetId: string, name: string) => {
+    if (!user) throw new Error('Sign in to rename presets.');
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Preset name is required.');
+    const presets = await presetService.updatePreset(user, presetId, { name: trimmed });
+    setUser((prev) =>
+      prev ? { ...prev, preferences: { ...prev.preferences, presets } } : prev
+    );
+  };
+
+  const handleGalleryRenamePreset = async (presetId: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Preset name is required.');
+    if (galleryPresetSource === 'folder') {
+      const nextFolders = await folderService.updateFolderPreset(
+        user || null,
+        folders,
+        galleryViewFolderId,
+        presetId,
+        { name: trimmed }
+      );
+      syncFoldersToUser(nextFolders);
+      return;
+    }
+    await handleRenamePreset(presetId, trimmed);
+  };
+
   const handleGalleryDeletePreset = async (presetId: string) => {
     if (galleryPresetSource === 'folder') {
       const nextFolders = await folderService.deleteFolderPreset(
@@ -3209,7 +3266,9 @@ const App: React.FC = () => {
             onApplyPreset={handleApplyPreset}
             onSavePreset={user ? handleSavePreset : undefined}
             onUpdatePreset={user ? handleUpdatePreset : undefined}
+            onRenamePreset={user ? handleRenamePreset : undefined}
             onDeletePreset={user ? handleDeletePreset : undefined}
+            getPresetLabels={getPresetLabels}
             isOptionsCollapsed={isToolbarCollapsed}
             hasGenerated={!!currentGeneration}
             activePromptImageStyleReference={promptImageStyleReference}
@@ -3573,9 +3632,13 @@ const App: React.FC = () => {
               onUpdateGalleryPreset={
                 galleryPresetSource === 'folder' || user ? handleGalleryUpdatePreset : undefined
               }
+              onRenameGalleryPreset={
+                galleryPresetSource === 'folder' || user ? handleGalleryRenamePreset : undefined
+              }
               onDeleteGalleryPreset={
                 galleryPresetSource === 'folder' || user ? handleGalleryDeletePreset : undefined
               }
+              getPresetLabels={getPresetLabels}
               galleryFolderName={galleryViewFolder?.name}
             />
           </main>
@@ -3623,6 +3686,19 @@ const App: React.FC = () => {
             history={history}
             onSelect={(gen) => void handleRestoreFromHistory(gen)}
             onClose={() => setIsSearchOpen(false)}
+            getGenerationLabels={(gen) =>
+              getPresetLabels({
+                id: gen.id,
+                name: '',
+                createdAt: gen.createdAt,
+                graphicTypeId: gen.config.graphicTypeId,
+                visualStyleId: gen.config.visualStyleId,
+                colorSchemeId: gen.config.colorSchemeId,
+                aspectRatio: gen.config.aspectRatio,
+                svgMode: gen.config.svgMode,
+                selectedModel: gen.modelId,
+              })
+            }
           />
         </Suspense>
       )}

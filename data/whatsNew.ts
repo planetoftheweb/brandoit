@@ -23,6 +23,55 @@ import type { WhatsNewEntry } from '../types';
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: 'v0.19.0-preset-actions-and-search',
+    title: 'Preset hamburger menus, hover previews, and a bigger search',
+    summary:
+      'Each preset row gets a ⋯ menu for Rename / Overwrite / Delete, hovering shows its full parameter set, and search results open a much larger preview.',
+    blurb:
+      'Saved presets are now safer to scan and easier to manage. Each row has a single ⋯ button that opens a side popover with Rename, Overwrite with current toolbar, and Delete — so the destructive "overwrite" is no longer one accidental click away. Hovering any preset pops a panel beside it showing the full snapshot — type, style, colors, size, model, quality — so you can vet a preset before applying it. The same treatment lives in both the toolbar Presets dropdown and each folder\'s gallery preset menu. Search (⌘K) was redesigned too: the results column is narrower, the preview panel is much larger, and the active result shows its prompt, every parameter that produced it, and the full creation date.',
+    publishedAt: Date.parse('2026-05-21T17:00:00Z'),
+    version: '0.19.0',
+    image: '/whats-new/whatsnew-v0.19.0.png',
+    sections: [
+      {
+        heading: 'Per-row hamburger menu replaces the inline buttons',
+        body: 'The old delete trash icon and the auto-appearing "Overwrite with current toolbar" row are gone. Each preset now has a single ⋯ button that opens a portaled side popover with three actions, so applying a preset is one safe click and destructive actions live behind a deliberate second click.',
+        steps: [
+          { text: 'Open the Presets dropdown — either the toolbar one or a folder\'s gallery preset menu.', icon: 'Bookmark' },
+          { text: 'Click the ⋯ button on any preset row to open the side popover.', icon: 'Layers' },
+          { text: 'Choose Rename, Overwrite with current toolbar, or Delete preset. Delete arms first; click again within ~3s to confirm.', icon: 'Pencil' },
+        ],
+      },
+      {
+        heading: 'Hover to preview a preset\'s parameters',
+        body: 'Hovering a preset row pops a small panel beside it listing every saved parameter — type, style, colors, size, SVG mode, model, and quality. Lets you check exactly what a preset will apply before you click it.',
+        steps: [
+          { text: 'Open any presets menu.', icon: 'Bookmark' },
+          { text: 'Move the pointer over a preset row — the preview opens to the side automatically.', icon: 'Eye' },
+          { text: 'Click the row to apply, or click the ⋯ to manage it.', icon: 'Check' },
+        ],
+      },
+      {
+        heading: 'Bigger, more useful search modal',
+        body: 'Press ⌘K (or ⌃K on Windows) to open search. The results list is now a narrow left rail, and the right panel shows a large preview of the active result with its full prompt, every parameter that produced it, and the creation date.',
+        steps: [
+          { text: 'Press ⌘K / ⌃K to open search.', icon: 'Sparkles' },
+          { text: 'Type to filter, or use ↑ / ↓ to step through recent results.', icon: 'ArrowRight' },
+          { text: 'The right panel updates as you move; ↵ opens the highlighted generation.', icon: 'Check' },
+        ],
+      },
+      {
+        heading: 'Per-folder gallery presets',
+        body: 'A folder can now keep its own preset list separate from your global presets. Open the gallery preset menu and switch between Global and This folder — saving while in folder mode persists the preset to that folder only.',
+        steps: [
+          { text: 'Open the gallery Presets menu (the ⌘ chip next to a folder name).', icon: 'Folder' },
+          { text: 'Toggle between Global and This folder at the top of the menu.', icon: 'Layers' },
+          { text: 'Save the current toolbar — it goes to whichever source is active.', icon: 'BookOpen' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'v0.18.0-nested-folders',
     title: 'Nested folders, drag to reorder, and smarter menus',
     summary:

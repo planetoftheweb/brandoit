@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-05-21
+
+### Added
+
+- **Per-row hamburger action menu on presets.** Every preset row in the toolbar Presets dropdown and the gallery preset menu now ends in a `⋯` button that opens a portaled side popover (`components/PresetActionPopover.tsx`) with Rename / Overwrite with current toolbar / Delete preset. Overwrite is disabled when the row already matches the toolbar; delete uses the existing double-tap confirm pattern. Replaces the always-visible trash icon and auto-appearing "Overwrite" row that made destructive actions one accidental click away when the user just meant to apply a preset.
+- **Hover preview for preset parameters.** Hovering a preset row pops a portaled side panel (`components/PresetHoverPreview.tsx`) listing every saved parameter — Type, Style, Colors, Size, SVG mode, Model, Quality — resolved to human-readable names via a new `getPresetLabels` callback in `App.tsx` that joins preset ids against `graphicTypes` / `visualStyles` / `brandColors` / `aspectRatios` / `MODEL_NAME_BY_ID`. Lets the user vet a preset before applying it.
+- **Per-folder gallery presets.** Each folder can keep its own preset list separate from the user's global presets. The gallery preset menu (`components/GalleryPresetMenu.tsx`) has a Global / This folder toggle at the top; saving while in folder mode persists to that folder only via `folderService.saveFolderPreset` / `updateFolderPreset` / `deleteFolderPreset`.
+- **Rename support for presets.** New `handleRenamePreset` / `handleGalleryRenamePreset` in `App.tsx` reuse the existing `presetService.updatePreset` and `folderService.updateFolderPreset` partial-update paths, plumbed through `ControlPanel` and `RecentGenerations` as the new `onRenamePreset` / `onRenameGalleryPreset` props.
+- **Search modal redesign with a much larger preview.** `components/SearchModal.tsx` was rebuilt: the results column is now a narrow fixed-width rail (`sm:w-80`) with compact rows + small thumbnails, and the right preview panel takes the remaining flex space — much bigger image (constrained to 55vh), and the metadata pane below it now lists every parameter that produced the active generation in addition to the prompt and full creation date. Modal max-width grows from `max-w-md` (no preview) to `max-w-5xl` once results exist.
+- **Folder instructions toolbar button and per-tile download menu.** Carried over from the unreleased `6c74e18` commit: gallery toolbar now has a dedicated "Add/Edit folder instructions" button and tiles expose a download menu for individual images.
+
+### Changed
+
+- **Toolbar / gallery preset menus share extracted components.** `PresetActionPopover` and `PresetHoverPreview` are now the single source for the action popover and hover preview; both menus consume them so behavior stays in lockstep. `useConfirmAction` for preset delete moved out of `ControlPanel` and `GalleryPresetMenu` into the shared popover (`ControlPanel` still uses it for catalog deletes).
+- **Portaled-satellite outside-click awareness.** Click-outside handlers in both menus now check `event.target.closest('[data-preset-popover]')` so the portaled action popover and hover preview (rendered into `document.body`) don't count as "outside" and don't close their parent menu.
+
+### Fixed
+
+- **Toolbar dropdowns no longer clipped by the collapsible options grid.** The inner wrapper of the toolbar grid in `components/ControlPanel.tsx` now uses `overflow-visible` while expanded and only flips to `overflow-hidden` during the brief collapsed-state animation, so absolute-positioned dropdown panels (Type / Style / Colors / Size / Model / Quality / Presets) can escape the grid box again.
+- **Search modal had a tiny preview.** Old layout was `max-w-3xl` with a fixed `w-56` preview column; the new layout doubles available preview width and lets the image breathe.
+
 ## [0.18.0] - 2026-05-20
 
 ### Added

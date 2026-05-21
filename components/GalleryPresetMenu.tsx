@@ -1,17 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Bookmark,
-  Check as CheckIcon,
-  ChevronDown,
-  Loader2,
-  Trash2,
-} from 'lucide-react';
+import { Bookmark, ChevronDown, MoreHorizontal } from 'lucide-react';
 import { ToolbarPreset } from '../types';
 import {
   presetToolbarDiffersFromSnapshot,
   ToolbarPresetSnapshot,
 } from '../utils/toolbarPresetUtils';
-import { useConfirmAction } from '../hooks/useConfirmAction';
+import { AnchorRect, PresetActionPopover } from './PresetActionPopover';
+import { PresetHoverPreview, PresetLabels } from './PresetHoverPreview';
 
 export type GalleryPresetSource = 'global' | 'folder';
 
@@ -23,7 +18,9 @@ interface GalleryPresetMenuProps {
   onApplyPreset: (preset: ToolbarPreset) => void;
   onSavePreset?: (name: string) => Promise<void>;
   onUpdatePreset?: (presetId: string) => Promise<void>;
+  onRenamePreset?: (presetId: string, name: string) => Promise<void>;
   onDeletePreset?: (presetId: string) => Promise<void>;
+  getPresetLabels?: (preset: ToolbarPreset) => PresetLabels;
   folderName?: string;
   disabled?: boolean;
 }
@@ -36,7 +33,9 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
   onApplyPreset,
   onSavePreset,
   onUpdatePreset,
+  onRenamePreset,
   onDeletePreset,
+  getPresetLabels,
   folderName,
   disabled = false,
 }) => {
@@ -45,36 +44,34 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
   const [presetNameDraft, setPresetNameDraft] = useState('');
   const [presetError, setPresetError] = useState<string | null>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
-  const [updatingPresetId, setUpdatingPresetId] = useState<string | null>(null);
-  const [justUpdatedPresetId, setJustUpdatedPresetId] = useState<string | null>(null);
+  const [actionMenuPresetId, setActionMenuPresetId] = useState<string | null>(null);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState<AnchorRect | null>(null);
+  const [hoverPresetId, setHoverPresetId] = useState<string | null>(null);
+  const [hoverAnchor, setHoverAnchor] = useState<AnchorRect | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const presetNameInputRef = useRef<HTMLInputElement>(null);
-  const confirmPresetDelete = useConfirmAction<string>({
-    onConfirm: async (presetId) => {
-      if (!onDeletePreset) return;
-      try {
-        await onDeletePreset(presetId);
-      } catch (err) {
-        console.warn('[GalleryPresetMenu] delete failed:', err);
-      }
-    },
-  });
 
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setIsNamingPreset(false);
-        setPresetError(null);
-      }
+      const target = event.target as HTMLElement;
+      const insideContainer = containerRef.current?.contains(target);
+      const insidePortal = target.closest?.('[data-preset-popover]');
+      if (insideContainer || insidePortal) return;
+      setIsOpen(false);
+      setIsNamingPreset(false);
+      setPresetError(null);
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-        setIsNamingPreset(false);
-        setPresetError(null);
+      if (event.key !== 'Escape') return;
+      if (actionMenuPresetId) {
+        setActionMenuPresetId(null);
+        setActionMenuAnchor(null);
+        return;
       }
+      setIsOpen(false);
+      setIsNamingPreset(false);
+      setPresetError(null);
     };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
@@ -82,11 +79,38 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isOpen]);
+  }, [isOpen, actionMenuPresetId]);
+
+  // Close the side popover when the user scrolls (inside the list or page),
+  // since its position is anchored to viewport coords and would otherwise drift.
+  useEffect(() => {
+    if (!actionMenuPresetId && !hoverPresetId) return;
+    const close = () => {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      setHoverPresetId(null);
+      setHoverAnchor(null);
+    };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [actionMenuPresetId, hoverPresetId]);
 
   useEffect(() => {
     if (isNamingPreset) presetNameInputRef.current?.focus();
   }, [isNamingPreset]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      setHoverPresetId(null);
+      setHoverAnchor(null);
+    }
+  }, [isOpen]);
 
   const sortedPresets = useMemo(
     () =>
@@ -100,25 +124,58 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
     [presets, currentSnapshot]
   );
 
-  const handleDeletePreset = (e: React.MouseEvent, presetId: string) => {
+  const activeActionPreset = useMemo(
+    () => (actionMenuPresetId ? sortedPresets.find((p) => p.id === actionMenuPresetId) ?? null : null),
+    [sortedPresets, actionMenuPresetId]
+  );
+
+  const activeHoverPreset = useMemo(
+    () => (hoverPresetId ? sortedPresets.find((p) => p.id === hoverPresetId) ?? null : null),
+    [sortedPresets, hoverPresetId]
+  );
+
+  const handleToggleActionMenu = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    presetId: string
+  ) => {
     e.stopPropagation();
-    if (!onDeletePreset) return;
-    confirmPresetDelete.trigger(presetId);
+    if (actionMenuPresetId === presetId) {
+      setActionMenuPresetId(null);
+      setActionMenuAnchor(null);
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setActionMenuAnchor({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
+    setActionMenuPresetId(presetId);
+    // Suppress hover preview while the action popover is showing so the two
+    // panels don't compete for the same screen real estate.
+    setHoverPresetId(null);
+    setHoverAnchor(null);
   };
 
-  const handleUpdatePreset = async (e: React.MouseEvent, presetId: string) => {
-    e.stopPropagation();
-    if (!onUpdatePreset) return;
-    setUpdatingPresetId(presetId);
-    try {
-      await onUpdatePreset(presetId);
-      setJustUpdatedPresetId(presetId);
-      window.setTimeout(() => setJustUpdatedPresetId(null), 2000);
-    } catch (err) {
-      console.warn('[GalleryPresetMenu] update failed:', err);
-    } finally {
-      setUpdatingPresetId(null);
-    }
+  const handleRowEnter = (
+    e: React.MouseEvent<HTMLDivElement>,
+    presetId: string
+  ) => {
+    if (actionMenuPresetId) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoverAnchor({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
+    setHoverPresetId(presetId);
+  };
+
+  const handleRowLeave = () => {
+    setHoverPresetId(null);
+    setHoverAnchor(null);
   };
 
   const handleConfirmSavePreset = async () => {
@@ -221,13 +278,13 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
               sortedPresets.map((preset) => {
                 const isDirty = presetToolbarDiffersFromSnapshot(preset, currentSnapshot);
                 const isApplied = !isDirty;
-                const isUpdatingThis = updatingPresetId === preset.id;
-                const showOverwriteRow =
-                  onUpdatePreset &&
-                  (isDirty || isUpdatingThis || justUpdatedPresetId === preset.id);
+                const isActionMenuOpen = actionMenuPresetId === preset.id;
+                const hasAnyAction = !!(onRenamePreset || onUpdatePreset || onDeletePreset);
                 return (
                   <div
                     key={preset.id}
+                    onMouseEnter={(e) => handleRowEnter(e, preset.id)}
+                    onMouseLeave={handleRowLeave}
                     className={`rounded-md border transition-colors ${
                       isApplied
                         ? 'bg-brand-teal/10 ring-1 ring-brand-teal/30 border-transparent'
@@ -259,50 +316,26 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
                           </span>
                         </div>
                       </button>
-                      {onDeletePreset && (
+                      {hasAnyAction && (
                         <button
                           type="button"
-                          onClick={(e) => handleDeletePreset(e, preset.id)}
-                          className={`p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center rounded-md transition-colors ${
-                            confirmPresetDelete.isArmed(preset.id)
-                              ? 'bg-amber-500 text-white'
-                              : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-red-500'
-                          }`}
+                          onClick={(e) => handleToggleActionMenu(e, preset.id)}
+                          aria-expanded={isActionMenuOpen}
                           aria-label={
-                            confirmPresetDelete.isArmed(preset.id)
-                              ? `Confirm delete ${preset.name}`
-                              : `Delete ${preset.name}`
+                            isActionMenuOpen
+                              ? `Close actions for ${preset.name}`
+                              : `Actions for ${preset.name}`
                           }
+                          className={`p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 shrink-0 flex items-center justify-center rounded-md transition-colors ${
+                            isActionMenuOpen
+                              ? 'bg-gray-200 dark:bg-[#30363d] text-slate-700 dark:text-slate-200'
+                              : 'hover:bg-gray-100 dark:hover:bg-[#30363d] text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                          }`}
                         >
-                          {confirmPresetDelete.isArmed(preset.id) ? (
-                            <CheckIcon size={12} />
-                          ) : (
-                            <Trash2 size={12} />
-                          )}
+                          <MoreHorizontal size={14} />
                         </button>
                       )}
                     </div>
-                    {showOverwriteRow && (
-                      <div className="px-2 pb-2">
-                        <button
-                          type="button"
-                          onClick={(e) => handleUpdatePreset(e, preset.id)}
-                          disabled={isUpdatingThis}
-                          className="w-full text-left rounded-md px-2 py-2 text-[11px] font-semibold text-brand-teal hover:bg-brand-teal/10 disabled:opacity-60 min-h-[44px] sm:min-h-0"
-                        >
-                          {isUpdatingThis ? (
-                            <span className="inline-flex items-center gap-2">
-                              <Loader2 size={14} className="animate-spin" />
-                              Saving…
-                            </span>
-                          ) : justUpdatedPresetId === preset.id ? (
-                            'Preset updated'
-                          ) : (
-                            'Overwrite with current toolbar'
-                          )}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 );
               })
@@ -378,6 +411,32 @@ export const GalleryPresetMenu: React.FC<GalleryPresetMenuProps> = ({
           )}
         </div>
       )}
+
+      {actionMenuPresetId && actionMenuAnchor && activeActionPreset && (
+        <PresetActionPopover
+          preset={activeActionPreset}
+          anchor={actionMenuAnchor}
+          isApplied={!presetToolbarDiffersFromSnapshot(activeActionPreset, currentSnapshot)}
+          onClose={() => {
+            setActionMenuPresetId(null);
+            setActionMenuAnchor(null);
+          }}
+          onUpdate={onUpdatePreset}
+          onDelete={onDeletePreset}
+          onRename={onRenamePreset}
+        />
+      )}
+
+      {hoverPresetId &&
+        hoverAnchor &&
+        activeHoverPreset &&
+        getPresetLabels && (
+          <PresetHoverPreview
+            anchor={hoverAnchor}
+            name={activeHoverPreset.name}
+            labels={getPresetLabels(activeHoverPreset)}
+          />
+        )}
     </div>
   );
 };
