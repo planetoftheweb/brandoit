@@ -132,6 +132,14 @@ const normalizeGeneration = (input: Partial<Generation>): Generation => {
     : safeVersions.length - 1;
   const currentVersionIndex = Math.min(Math.max(0, indexRaw), safeVersions.length - 1);
 
+  // Validate `starredVersionId` against the surviving version ids — if a
+  // previously-starred Mark was later deleted, drop the dangling reference
+  // so the prev/next-starred navigation never lands on a ghost version.
+  const incomingStarred = typeof input.starredVersionId === 'string' ? input.starredVersionId : undefined;
+  const starredVersionId = incomingStarred && safeVersions.some((v) => v.id === incomingStarred)
+    ? incomingStarred
+    : undefined;
+
   return {
     id,
     createdAt,
@@ -145,6 +153,7 @@ const normalizeGeneration = (input: Partial<Generation>): Generation => {
     folderId: typeof input.folderId === 'string' && input.folderId.length > 0
       ? input.folderId
       : INBOX_FOLDER_ID,
+    ...(starredVersionId ? { starredVersionId } : {}),
   };
 };
 
@@ -266,6 +275,18 @@ const mergeGenerationCollections = (
 const getRemoteCacheCap = (isAdmin: boolean): number =>
   isAdmin ? ADMIN_REMOTE_CACHE_LIMIT : REMOTE_LIMIT;
 
+/** Metadata-only mirror for localStorage — raster bytes live in Storage + IndexedDB. */
+const stripGenerationForStorageMirror = (generation: Generation): Generation => {
+  const normalized = normalizeGeneration(generation);
+  return {
+    ...normalized,
+    versions: normalized.versions.map((version) => ({
+      ...version,
+      imageData: '',
+    })),
+  };
+};
+
 const readJsonArray = (key: string): unknown[] => {
   try {
     const raw = localStorage.getItem(key);
@@ -278,10 +299,29 @@ const readJsonArray = (key: string): unknown[] => {
 };
 
 const writeJsonArray = (key: string, values: unknown[]) => {
+  const attempt = (items: unknown[]) => {
+    localStorage.setItem(key, JSON.stringify(items));
+  };
   try {
-    localStorage.setItem(key, JSON.stringify(values));
+    attempt(values);
   } catch (error) {
-    console.error(`Failed to write storage key ${key}:`, error);
+    const isQuota =
+      error instanceof DOMException && error.name === 'QuotaExceededError';
+    if (!isQuota) {
+      console.error(`Failed to write storage key ${key}:`, error);
+      return;
+    }
+    // History caches are newest-first — drop oldest entries until something fits.
+    for (let keep = values.length - 1; keep >= 1; keep -= Math.max(1, Math.ceil(keep / 4))) {
+      try {
+        attempt(values.slice(0, keep));
+        console.warn(`[historyService] Trimmed ${key} to ${keep} items after quota exceeded.`);
+        return;
+      } catch {
+        // keep shrinking
+      }
+    }
+    console.warn(`[historyService] Dropped write to ${key} — localStorage quota exceeded.`);
   }
 };
 
@@ -296,7 +336,10 @@ const readUserRemoteCache = (userId: string, isAdmin: boolean): Generation[] =>
     .slice(0, getRemoteCacheCap(isAdmin));
 
 const writeUserRemoteCache = (userId: string, history: Generation[], isAdmin: boolean) => {
-  writeJsonArray(getUserRemoteCacheKey(userId), history.slice(0, getRemoteCacheCap(isAdmin)));
+  const slim = history
+    .slice(0, getRemoteCacheCap(isAdmin))
+    .map(stripGenerationForStorageMirror);
+  writeJsonArray(getUserRemoteCacheKey(userId), slim);
 };
 
 const upsertUserRemoteCache = (userId: string, generation: Generation, isAdmin: boolean) => {
@@ -651,9 +694,17 @@ export const historyService = {
   saveGeneration: async (user: User | null, generation: Generation): Promise<void> => {
     const normalized = normalizeGeneration(generation);
     if (user) {
-      upsertUserRemoteCache(user.id, normalized, user.isAdmin === true);
       try {
-        await historyService.saveToRemote(user.id, normalized, user.isAdmin === true);
+        const remotePayload = await historyService.saveToRemote(
+          user.id,
+          normalized,
+          user.isAdmin === true
+        );
+        upsertUserRemoteCache(
+          user.id,
+          hydrateGenerationFromRemote(normalized.id, remotePayload),
+          user.isAdmin === true
+        );
         historyService.deleteFromLocal(normalized.id);
       } catch (e) {
         // Preserve locally if remote write fails so data is not lost on refresh.
@@ -668,9 +719,17 @@ export const historyService = {
   updateGeneration: async (user: User | null, generation: Generation): Promise<void> => {
     const normalized = normalizeGeneration(generation);
     if (user) {
-      upsertUserRemoteCache(user.id, normalized, user.isAdmin === true);
       try {
-        await historyService.updateRemote(user.id, normalized, user.isAdmin === true);
+        const remotePayload = await historyService.updateRemote(
+          user.id,
+          normalized,
+          user.isAdmin === true
+        );
+        upsertUserRemoteCache(
+          user.id,
+          hydrateGenerationFromRemote(normalized.id, remotePayload),
+          user.isAdmin === true
+        );
         historyService.deleteFromLocal(normalized.id);
       } catch (e) {
         // Preserve locally if remote write fails so refinements can be retried/synced.
@@ -909,7 +968,11 @@ export const historyService = {
 
   // --- Firestore Logic ---
 
-  saveToRemote: async (userId: string, generation: Generation, isAdmin: boolean = false) => {
+  saveToRemote: async (
+    userId: string,
+    generation: Generation,
+    isAdmin: boolean = false
+  ): Promise<Record<string, unknown>> => {
     const historyRef = collection(db, "users", userId, "history");
     const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
     await addDoc(historyRef, payload);
@@ -918,33 +981,39 @@ export const historyService = {
     // audit, recover, or repurpose past assets. Regular accounts are capped at
     // REMOTE_LIMIT to keep storage costs predictable; this will become tier-aware
     // once paid plans are introduced.
-    if (isAdmin) return;
+    if (!isAdmin) {
+      const q = query(historyRef, orderBy("createdAt", "desc"));
+      const snapshot = await getDocs(q);
 
-    const q = query(historyRef, orderBy("createdAt", "desc"));
-    const snapshot = await getDocs(q);
-
-    if (snapshot.size > REMOTE_LIMIT) {
-      const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
-      const deletePromises = itemsToDelete.map(async (d) => {
-        const evictedId = d.data().id || d.id;
-        await deleteDoc(doc(db, "users", userId, "history", d.id));
-        await deleteGenerationImages(userId, evictedId);
-        void removeCachedGeneration(evictedId);
-      });
-      await Promise.all(deletePromises);
+      if (snapshot.size > REMOTE_LIMIT) {
+        const itemsToDelete = snapshot.docs.slice(REMOTE_LIMIT);
+        const deletePromises = itemsToDelete.map(async (d) => {
+          const evictedId = d.data().id || d.id;
+          await deleteDoc(doc(db, "users", userId, "history", d.id));
+          await deleteGenerationImages(userId, evictedId);
+          void removeCachedGeneration(evictedId);
+        });
+        await Promise.all(deletePromises);
+      }
     }
+
+    return payload;
   },
 
-  updateRemote: async (userId: string, generation: Generation, isAdmin: boolean = false) => {
+  updateRemote: async (
+    userId: string,
+    generation: Generation,
+    isAdmin: boolean = false
+  ): Promise<Record<string, unknown>> => {
     const historyRef = collection(db, "users", userId, "history");
     const genId = generation.id;
+    const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
     const byIdQ = query(historyRef, where("id", "==", genId), limit(5));
     const byIdSnap = await getDocs(byIdQ);
     const byIdMatch = byIdSnap.docs[0];
     if (byIdMatch) {
-      const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
       await updateDoc(doc(db, "users", userId, "history", byIdMatch.id), payload);
-      return;
+      return payload;
     }
     // Fallback: legacy docs missing `id` in payload — scan recent docs only.
     const scanLimit = isAdmin ? Math.max(REMOTE_SCAN_LIMIT, 500) : REMOTE_SCAN_LIMIT;
@@ -952,11 +1021,10 @@ export const historyService = {
     const snapshot = await getDocs(q);
     const existing = snapshot.docs.find(d => d.data().id === generation.id);
     if (existing) {
-      const payload = await serializeGenerationForRemote(userId, normalizeGeneration(generation));
       await updateDoc(doc(db, "users", userId, "history", existing.id), payload);
-    } else {
-      await historyService.saveToRemote(userId, generation, isAdmin);
+      return payload;
     }
+    return historyService.saveToRemote(userId, generation, isAdmin);
   },
 
   getFromRemote: async (userId: string, isAdmin: boolean = false): Promise<Generation[]> => {
@@ -1028,9 +1096,13 @@ export const historyService = {
     let synced = 0;
 
     for (const gen of [...localHistory].reverse()) {
-      upsertUserRemoteCache(userId, gen, isAdmin);
       try {
-        await historyService.saveToRemote(userId, gen, isAdmin);
+        const remotePayload = await historyService.saveToRemote(userId, gen, isAdmin);
+        upsertUserRemoteCache(
+          userId,
+          hydrateGenerationFromRemote(gen.id, remotePayload),
+          isAdmin
+        );
         synced += 1;
       } catch (e) {
         console.error("Failed to sync local generation to remote:", gen.id, e);
