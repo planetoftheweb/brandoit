@@ -23,6 +23,50 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(uid)).data.isDisabled == true);
     }
 
+    // Catalog resources (graphic_types, visual_styles, etc.) — must align with
+    // resourceService.fetchScopedResources queries. Guests read system + public
+    // only; signed-in users also read their private items and team-shared items.
+    function isPublicCatalogScope() {
+      return resource.data.scope in ['system', 'public'];
+    }
+
+    function isOwnPrivateCatalog() {
+      return isSignedIn()
+        && resource.data.scope == 'private'
+        && resource.data.authorId == request.auth.uid;
+    }
+
+    function canReadTeamCatalog() {
+      return isSignedIn()
+        && resource.data.scope == 'team'
+        && resource.data.teamId is string
+        && exists(/databases/$(database)/documents/teams/$(resource.data.teamId))
+        && (
+          request.auth.uid == get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.ownerId
+          || request.auth.uid in get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.memberIds
+        );
+    }
+
+    function canReadCatalogResource() {
+      return isPublicCatalogScope()
+        || isOwnPrivateCatalog()
+        || canReadTeamCatalog()
+        || isAdmin();
+    }
+
+    // ---- Username lookup (signup + login-by-username) ---------------------
+    // Doc id is the normalized (lowercase) username. `get` is public so
+    // pre-auth signup can check uniqueness and login can resolve email.
+    match /usernames/{usernameKey} {
+      allow get: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && !exists(/databases/$(database)/documents/usernames/$(usernameKey));
+      allow update: if false;
+      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow list: if isAdmin();
+    }
+
     // ---- Users ------------------------------------------------------------
     // Owner can read/write their own doc. Admins can read/write any user doc.
     // Admins can also list (enables paginated user table on the admin page).
@@ -51,31 +95,31 @@ service cloud.firestore {
     }
 
     // ---- Shared catalog collections --------------------------------------
-    // Readable to any signed-in user. Writes require sign-in; authorship is
-    // enforced by the client (authorId == request.auth.uid). Admins override.
+    // system + public: readable without auth (guest studio + community catalog).
+    // private + team: scoped per user/team. Writes still require sign-in.
     match /graphic_types/{docId} {
-      allow read:   if isSignedIn();
+      allow read:   if canReadCatalogResource();
       allow create: if isSignedIn();
       allow update, delete: if isSignedIn()
         && (resource.data.authorId == request.auth.uid || isAdmin());
     }
 
     match /visual_styles/{docId} {
-      allow read:   if isSignedIn();
+      allow read:   if canReadCatalogResource();
       allow create: if isSignedIn();
       allow update, delete: if isSignedIn()
         && (resource.data.authorId == request.auth.uid || isAdmin());
     }
 
     match /brand_colors/{docId} {
-      allow read:   if isSignedIn();
+      allow read:   if canReadCatalogResource();
       allow create: if isSignedIn();
       allow update, delete: if isSignedIn()
         && (resource.data.authorId == request.auth.uid || isAdmin());
     }
 
     match /aspect_ratios/{docId} {
-      allow read:   if isSignedIn();
+      allow read:   if canReadCatalogResource();
       allow create: if isSignedIn();
       allow update, delete: if isSignedIn()
         && (resource.data.authorId == request.auth.uid || isAdmin());

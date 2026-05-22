@@ -7,14 +7,12 @@ import {
   onAuthStateChanged
 } from "firebase/auth";
 import { 
-  collection,
-  query,
-  where,
-  getDocs,
   doc, 
   setDoc, 
   getDoc, 
   updateDoc,
+  deleteDoc,
+  writeBatch,
   serverTimestamp
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
@@ -314,21 +312,49 @@ const recordSignIn = async (uid: string): Promise<void> => {
   }
 };
 
-const checkUsernameUnique = async (username: string, excludeUserId?: string): Promise<void> => {
-  if (!username) return; // Empty username check is handled by UI validation for requirement
-  
-  const usersRef = collection(db, "users");
-  const q = query(usersRef, where("username", "==", username));
-  const querySnapshot = await getDocs(q);
+/** Lowercase doc id in `usernames` — uniqueness is case-insensitive. */
+const normalizeUsernameKey = (username: string): string => username.trim().toLowerCase();
 
-  if (!querySnapshot.empty) {
-    // If excluding a user (e.g. current user updating profile), check if the found doc is NOT them
-    if (excludeUserId) {
-      const isTakenByOther = querySnapshot.docs.some(doc => doc.id !== excludeUserId);
-      if (isTakenByOther) throw new Error("Username is already taken.");
-    } else {
-      throw new Error("Username is already taken.");
-    }
+const usernameDocRef = (username: string) => doc(db, "usernames", normalizeUsernameKey(username));
+
+// Public `get` on `usernames/{key}` (see firestore.rules). Replaces querying
+// `users` by username, which is admin-list-only and fails during signup/login.
+const checkUsernameUnique = async (username: string, excludeUserId?: string): Promise<void> => {
+  if (!username) return;
+
+  const snap = await getDoc(usernameDocRef(username));
+  if (!snap.exists()) return;
+
+  const ownerUid = snap.data()?.uid as string | undefined;
+  if (excludeUserId && ownerUid === excludeUserId) return;
+  throw new Error("Username is already taken.");
+};
+
+const reserveUsername = async (uid: string, username: string, email: string): Promise<void> => {
+  await setDoc(usernameDocRef(username), { uid, email });
+};
+
+const releaseUsername = async (username: string): Promise<void> => {
+  const key = normalizeUsernameKey(username);
+  if (!key) return;
+  await deleteDoc(doc(db, "usernames", key));
+};
+
+/** Backfill `usernames` for accounts created before the lookup collection existed. */
+const ensureUsernameReservation = async (
+  uid: string,
+  username: string | undefined,
+  email: string | undefined
+): Promise<void> => {
+  if (!username?.trim() || !email?.trim()) return;
+  try {
+    const ref = usernameDocRef(username);
+    const snap = await getDoc(ref);
+    if (snap.exists() && snap.data()?.uid === uid) return;
+    if (snap.exists() && snap.data()?.uid !== uid) return;
+    await setDoc(ref, { uid, email: email.trim() });
+  } catch (err) {
+    console.warn("Failed to ensure username reservation:", err);
   }
 };
 
@@ -353,7 +379,10 @@ export const authService = {
         createdAt: new Date().toISOString()
       };
 
-      await setDoc(doc(db, "users", user.uid), newUserProfile);
+      const batch = writeBatch(db);
+      batch.set(doc(db, "users", user.uid), newUserProfile);
+      batch.set(usernameDocRef(username), { uid: user.uid, email });
+      await batch.commit();
 
       return transformUser(user, newUserProfile);
     } catch (error: any) {
@@ -373,15 +402,15 @@ export const authService = {
       
       // If input doesn't look like an email, try to find the email by username
       if (!emailOrUsername.includes('@')) {
-        const usersRef = collection(db, "users");
-        const q = query(usersRef, where("username", "==", emailOrUsername));
-        const querySnapshot = await getDocs(q);
-        
-        if (querySnapshot.empty) {
+        const usernameSnap = await getDoc(usernameDocRef(emailOrUsername));
+        if (!usernameSnap.exists()) {
           throw new Error('Username not found.');
         }
-        
-        email = querySnapshot.docs[0].data().email;
+        const resolvedEmail = usernameSnap.data()?.email;
+        if (typeof resolvedEmail !== 'string' || !resolvedEmail.includes('@')) {
+          throw new Error('Username not found.');
+        }
+        email = resolvedEmail;
       }
 
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -404,6 +433,11 @@ export const authService = {
       }
 
       await recordSignIn(user.uid);
+      void ensureUsernameReservation(
+        user.uid,
+        userData.username as string | undefined,
+        user.email ?? (userData.email as string | undefined)
+      );
       const isAdmin = await readAdminClaim(user);
       return transformUser(user, userData, isAdmin);
     } catch (error: any) {
@@ -466,6 +500,15 @@ export const authService = {
 
   updateUserProfile: async (userId: string, data: { name?: string; username?: string; photoURL?: string }) => {
     try {
+      const userRef = doc(db, "users", userId);
+      const existingSnap = await getDoc(userRef);
+      const existing = existingSnap.exists() ? existingSnap.data() : {};
+      const previousUsername = typeof existing.username === 'string' ? existing.username : '';
+      const accountEmail =
+        (typeof existing.email === 'string' && existing.email.includes('@')
+          ? existing.email
+          : auth.currentUser?.email) ?? '';
+
       if (data.username) {
         await checkUsernameUnique(data.username, userId);
       }
@@ -478,9 +521,19 @@ export const authService = {
       if (typeof data.username === 'string' && data.username.length > 0) clean.username = data.username;
       if (typeof data.photoURL === 'string' && data.photoURL.length > 0) clean.photoURL = data.photoURL;
 
-      const userRef = doc(db, "users", userId);
       if (Object.keys(clean).length > 0) {
         await updateDoc(userRef, clean);
+      }
+
+      if (data.username && accountEmail) {
+        const prevKey = previousUsername ? normalizeUsernameKey(previousUsername) : '';
+        const nextKey = normalizeUsernameKey(data.username);
+        if (prevKey && prevKey !== nextKey) {
+          await releaseUsername(previousUsername);
+        }
+        if (prevKey !== nextKey) {
+          await reserveUsername(userId, data.username, accountEmail);
+        }
       }
 
       // If name or photo changed, update Auth profile too. Passing undefined to
