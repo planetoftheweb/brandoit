@@ -43,7 +43,7 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/teams/$(resource.data.teamId))
         && (
           request.auth.uid == get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.ownerId
-          || request.auth.uid in get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.memberIds
+          || request.auth.uid in get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.members
         );
     }
 
@@ -131,7 +131,7 @@ service cloud.firestore {
     match /teams/{teamId} {
       allow read:   if isSignedIn()
         && (resource.data.ownerId == request.auth.uid
-            || request.auth.uid in resource.data.memberIds
+            || request.auth.uid in resource.data.members
             || isAdmin());
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isSignedIn()
@@ -140,7 +140,7 @@ service cloud.firestore {
       match /{subPath=**} {
         allow read, write: if isSignedIn()
           && (get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid
-              || request.auth.uid in get(/databases/$(database)/documents/teams/$(teamId)).data.memberIds
+              || request.auth.uid in get(/databases/$(database)/documents/teams/$(teamId)).data.members
               || isAdmin());
       }
     }

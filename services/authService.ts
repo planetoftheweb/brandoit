@@ -2,7 +2,8 @@ import {
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signOut, 
-  updateProfile, 
+  updateProfile,
+  deleteUser,
   User as FirebaseUser,
   onAuthStateChanged
 } from "firebase/auth";
@@ -299,15 +300,49 @@ const readAdminClaim = async (firebaseUser: FirebaseUser): Promise<boolean> => {
   }
 };
 
+type UserProfileSeed = {
+  name?: string;
+  username?: string;
+  email?: string;
+  preferences?: ReturnType<typeof sanitizePreferences>;
+};
+
+/** Create `users/{uid}` when Auth exists but Firestore profile write never landed. */
+const ensureUserDocument = async (
+  uid: string,
+  seed: UserProfileSeed = {}
+): Promise<Record<string, unknown>> => {
+  const userRef = doc(db, "users", uid);
+  const snap = await getDoc(userRef);
+  if (snap.exists()) {
+    return snap.data() as Record<string, unknown>;
+  }
+
+  const fbUser = auth.currentUser?.uid === uid ? auth.currentUser : null;
+  const profile = {
+    name: seed.name ?? fbUser?.displayName ?? "User",
+    username: seed.username ?? "",
+    email: seed.email ?? fbUser?.email ?? "",
+    preferences: seed.preferences ?? sanitizePreferences(defaultPreferences),
+    createdAt: new Date().toISOString(),
+  };
+
+  await setDoc(userRef, profile);
+  void ensureUsernameReservation(
+    uid,
+    profile.username || undefined,
+    profile.email || undefined
+  );
+  return profile;
+};
+
 // Best-effort write of `lastSignInAt`. Never blocks the sign-in flow — the
 // admin table can tolerate a missing value.
 const recordSignIn = async (uid: string): Promise<void> => {
   try {
+    await ensureUserDocument(uid);
     await updateDoc(doc(db, "users", uid), { lastSignInAt: serverTimestamp() });
   } catch (err) {
-    // Non-fatal: the doc may not exist yet (first-ever sign-in for a legacy
-    // account) or the user may be suspended — in either case callers still
-    // get a valid session back.
     console.warn("Failed to record lastSignInAt:", err);
   }
 };
@@ -382,7 +417,17 @@ export const authService = {
       const batch = writeBatch(db);
       batch.set(doc(db, "users", user.uid), newUserProfile);
       batch.set(usernameDocRef(username), { uid: user.uid, email });
-      await batch.commit();
+      try {
+        await batch.commit();
+      } catch (batchError) {
+        // Auth user exists but profile write failed (VPN/ad-block, offline, etc.).
+        try {
+          await deleteUser(user);
+        } catch (deleteError) {
+          console.warn("Failed to roll back Auth user after profile write error:", deleteError);
+        }
+        throw batchError;
+      }
 
       return transformUser(user, newUserProfile);
     } catch (error: any) {
@@ -419,18 +464,13 @@ export const authService = {
       const docRef = doc(db, "users", user.uid);
       const docSnap = await getDoc(docRef);
 
-      let userData: any = {};
-      if (docSnap.exists()) {
-        userData = docSnap.data();
-      } else {
-        userData = {
-          name: user.displayName || 'User',
-          username: '', // Default empty if not exists
-          email: user.email,
-          preferences: sanitizePreferences(defaultPreferences)
-        };
-        await setDoc(docRef, userData);
-      }
+      const userData = docSnap.exists()
+        ? (docSnap.data() as Record<string, unknown>)
+        : await ensureUserDocument(user.uid, {
+            name: user.displayName || "User",
+            email: user.email ?? "",
+            preferences: sanitizePreferences(defaultPreferences),
+          });
 
       await recordSignIn(user.uid);
       void ensureUsernameReservation(
@@ -463,9 +503,7 @@ export const authService = {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
           try {
-            const docRef = doc(db, "users", user.uid);
-            const docSnap = await getDoc(docRef);
-            const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
+            const userData = await ensureUserDocument(user.uid);
             const isAdmin = await readAdminClaim(user);
             resolve(transformUser(user, userData, isAdmin));
           } catch (e) {
@@ -483,12 +521,9 @@ export const authService = {
   updateUserPreferences: async (userId: string, preferences: UserPreferences) => {
     try {
       const userRef = doc(db, "users", userId);
-      
-      // Only update specific fields (settings, api key)
-      // We do NOT want to overwrite the whole preferences object if it contains other stuff
-      // But based on our new sanitize, it only returns what we want.
       const cleanPreferences = sanitizePreferences(preferences);
-      
+
+      await ensureUserDocument(userId, { preferences: cleanPreferences });
       await updateDoc(userRef, {
         preferences: cleanPreferences
       });
@@ -554,11 +589,8 @@ export const authService = {
   onAuthStateChange: (callback: (user: User | null) => void) => {
     return onAuthStateChanged(auth, async (user) => {
       if (user) {
-        const docRef = doc(db, "users", user.uid);
-        const docSnap = await getDoc(docRef);
-        const userData = docSnap.exists() ? docSnap.data() : { preferences: sanitizePreferences(defaultPreferences) };
+        const userData = await ensureUserDocument(user.uid);
         const isAdmin = await readAdminClaim(user);
-        // Fire-and-forget — don't block the callback on the timestamp write.
         void recordSignIn(user.uid);
         callback(transformUser(user, userData, isAdmin));
       } else {
