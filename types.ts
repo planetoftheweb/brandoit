@@ -125,6 +125,14 @@ export interface Generation {
    * folder.
    */
   folderId: string;
+
+  /**
+   * Optional id of the user's "best" Mark within this generation. At most
+   * one version is marked per tile. When set, the prev/next-generation
+   * arrows on the canvas skip tiles without a starred Mark and land on
+   * the starred version when navigating across history.
+   */
+  starredVersionId?: string;
 }
 
 /**

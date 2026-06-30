@@ -142,6 +142,13 @@ export const SUPPORTED_MODELS = [
     group: 'Gemini' as const
   },
   {
+    id: 'gemini-3.1-flash-lite-image',
+    name: 'Nano Banana 2 Lite',
+    description: 'Gemini 3.1 Flash Lite Image — fastest, most cost-efficient',
+    format: 'raster' as const,
+    group: 'Gemini' as const
+  },
+  {
     id: 'gemini-svg',
     name: 'Gemini SVG',
     description: 'Gemini 3.1 Pro \u2014 SVG vector graphics',

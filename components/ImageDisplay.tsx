@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption, INBOX_FOLDER_ID } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check, Star } from 'lucide-react';
 import { useConfirmAction } from '../hooks/useConfirmAction';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlob, getCachedImageBlobUrl } from '../services/imageCache';
@@ -44,6 +44,12 @@ interface ImageDisplayProps {
    * the editor.
    */
   onRerun?: (rerunPrompt: string, count?: number) => void;
+  /**
+   * Toggle the "best Mark" star on a version within the current tile. Only
+   * one version per tile is starred at a time; the canvas prev/next arrows
+   * skip non-starred tiles when any starred tiles exist in history.
+   */
+  onToggleStarred?: (versionId: string) => void;
   /**
    * In-flight "Add a new Mark" re-rolls owned by the App. The version rail
    * renders this many spinner placeholders after the real versions so a
@@ -89,6 +95,12 @@ interface ImageDisplayProps {
    * Recent Generations grid so state stays consistent.
    */
   onNavigateToGeneration?: (gen: Generation) => void;
+  /**
+   * True when the toolbar/prompt is collapsed (focus mode). The preview grows
+   * to fill the reclaimed vertical space instead of sitting capped in a tall,
+   * mostly-empty frame.
+   */
+  toolbarCollapsed?: boolean;
 }
 
 /** Keydown targets where cursor/preview idle auto-hide should pause while the user types. */
@@ -103,6 +115,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   generation,
   onRefine,
   onRerun,
+  onToggleStarred,
   pendingRerunCount = 0,
   onAnalyzeRefinePrompt,
   onExpandRefinementPrompt,
@@ -124,7 +137,12 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onExitComparePicker,
   onPickMark,
   onNavigateToGeneration,
+  toolbarCollapsed = false,
 }) => {
+  // In focus mode the toolbar is gone, so let the image claim that height
+  // (less letterboxing). With the toolbar open we stay conservative so the
+  // image + toolbar both fit without forcing a scroll.
+  const previewMaxHeight = toolbarCollapsed ? '86vh' : '70vh';
   const isCompareMode = comparisonState?.mode === 'picking';
   const comparisonA = comparisonState?.a || null;
   const comparisonB = comparisonState?.b || null;
@@ -181,6 +199,12 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   };
   const [refinementInput, setRefinementInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  // Transient toast for star-toggle feedback so the user gets a confirmation
+  // even when the version rail is faded out (idle) or off-screen. Mirrors the
+  // shape of copyNotice but lives separately so a copy + star fired in quick
+  // succession don't clobber each other's message.
+  const [starFeedback, setStarFeedback] = useState<{ message: string; on: boolean } | null>(null);
+  const starFeedbackTimerRef = useRef<number | null>(null);
   const [noticeTimer, setNoticeTimer] = useState<number | null>(null);
   const [renderImageSrc, setRenderImageSrc] = useState<string>('');
   const [fallbackBlobUrl, setFallbackBlobUrl] = useState<string | null>(null);
@@ -337,33 +361,46 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   }, [history, galleryViewFolderId, generation?.id]);
   const navHistory =
     isFullscreen && folderScopedNavHistory ? folderScopedNavHistory : history;
+  // When any tile in scope has a starred Mark, the prev/next arrows become a
+  // curated "best-of" walk — they only step through starred tiles and land on
+  // the starred version of each. Falls back to "all tiles" when nothing is
+  // starred so the affordance never becomes a dead-end.
+  const starredFilteredHistory = useMemo(
+    () => navHistory.filter((g) => g.starredVersionId),
+    [navHistory]
+  );
+  const useStarredNav = starredFilteredHistory.length > 0;
+  const navList = useStarredNav ? starredFilteredHistory : navHistory;
   const currentIdxInHistory = generation
-    ? navHistory.findIndex((g) => g.id === generation.id)
+    ? navList.findIndex((g) => g.id === generation.id)
     : -1;
   const newerGeneration =
-    currentIdxInHistory > 0 ? navHistory[currentIdxInHistory - 1] : null;
+    currentIdxInHistory > 0 ? navList[currentIdxInHistory - 1] : null;
   const olderGeneration =
-    currentIdxInHistory >= 0 && currentIdxInHistory < navHistory.length - 1
-      ? navHistory[currentIdxInHistory + 1]
+    currentIdxInHistory >= 0 && currentIdxInHistory < navList.length - 1
+      ? navList[currentIdxInHistory + 1]
       : null;
   const canNavigate = !!onNavigateToGeneration && !isComparing && !isCompareMode;
   const canGoNewer = canNavigate && !!newerGeneration;
   const canGoOlder = canNavigate && !!olderGeneration;
-  // Carousel arrows always land on the newest mark of the next generation.
-  // Without this override, restoring would re-show whatever `currentVersionIndex`
-  // was stored on the doc (often Mark 1) — surprising when the user is browsing
-  // history and expects the latest refinement.
-  const withLatestVersion = (gen: Generation): Generation => ({
-    ...gen,
-    currentVersionIndex: Math.max(0, gen.versions.length - 1),
-  });
+  // Carousel arrows land on a curated version of the next generation: the
+  // starred Mark when one exists (so "best-of" mode is honored), otherwise
+  // the newest Mark so the user sees the latest refinement rather than
+  // whatever stale `currentVersionIndex` happened to be persisted.
+  const withCarouselVersion = (gen: Generation): Generation => {
+    const targetIdx = gen.starredVersionId
+      ? gen.versions.findIndex((v) => v.id === gen.starredVersionId)
+      : -1;
+    const safeIdx = targetIdx >= 0 ? targetIdx : Math.max(0, gen.versions.length - 1);
+    return { ...gen, currentVersionIndex: safeIdx };
+  };
   const goNewer = useCallback(() => {
     if (!onNavigateToGeneration || !newerGeneration) return;
-    onNavigateToGeneration(withLatestVersion(newerGeneration));
+    onNavigateToGeneration(withCarouselVersion(newerGeneration));
   }, [onNavigateToGeneration, newerGeneration]);
   const goOlder = useCallback(() => {
     if (!onNavigateToGeneration || !olderGeneration) return;
-    onNavigateToGeneration(withLatestVersion(olderGeneration));
+    onNavigateToGeneration(withCarouselVersion(olderGeneration));
   }, [onNavigateToGeneration, olderGeneration]);
 
   const versionCount = generation?.versions.length ?? 0;
@@ -418,17 +455,49 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     };
   }, []);
 
+  // Wraps the App-level `onToggleStarred` so click and keyboard both produce
+  // the same visible confirmation toast. The toast tells the user which Mark
+  // just got starred (or unstarred) so the gesture is never silent — important
+  // because the rail is often faded out when "S" is the only way to discover
+  // the result. Defined BEFORE the keyboard `useEffect` below so its deps
+  // array can safely reference it on the first render.
+  const handleStarToggle = useCallback(
+    (versionId: string) => {
+      if (!onToggleStarred || !generation) return;
+      const v = generation.versions.find((vv) => vv.id === versionId);
+      const wasStarred = generation.starredVersionId === versionId;
+      const nowStarred = !wasStarred;
+      const label = v?.label || 'Mark';
+      onToggleStarred(versionId);
+      if (starFeedbackTimerRef.current) window.clearTimeout(starFeedbackTimerRef.current);
+      setStarFeedback({
+        message: nowStarred ? `Starred ${label}` : `Unstarred ${label}`,
+        on: nowStarred,
+      });
+      starFeedbackTimerRef.current = window.setTimeout(() => {
+        setStarFeedback(null);
+        starFeedbackTimerRef.current = null;
+      }, 1600);
+    },
+    [generation, onToggleStarred]
+  );
+
   // Keyboard carousel: ←/→ steps the main viewport to the neighboring
   // generation; ↑/↓ cycles Marks (Mark I, II, …) on the current tile, with
   // wrap (last ↓ → Mark I). Same window listener and focus guards as ←/→.
   useEffect(() => {
-    if (!canNavigate && !canCycleVersions) return;
+    // The "S" star toggle works whenever a generation is showing — even on
+    // single-version tiles where cycling/navigation are both no-ops — so we
+    // only bail out when none of those affordances are wired up at all.
+    if (!canNavigate && !canCycleVersions && !onToggleStarred) return;
     const onKey = (e: KeyboardEvent) => {
       if (
         e.key !== 'ArrowLeft' &&
         e.key !== 'ArrowRight' &&
         e.key !== 'ArrowUp' &&
-        e.key !== 'ArrowDown'
+        e.key !== 'ArrowDown' &&
+        e.key !== 's' &&
+        e.key !== 'S'
       ) {
         return;
       }
@@ -456,6 +525,17 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
         }
         return;
       }
+      // "S" toggles the star on the currently-displayed Mark. Form-field
+      // and prompt-editor guards above already prevent stray typing from
+      // arming this; modifier keys are ignored so ⌘S still saves the page.
+      if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (!generation || !onToggleStarred) return;
+        const v = generation.versions[generation.currentVersionIndex];
+        if (!v) return;
+        e.preventDefault();
+        handleStarToggle(v.id);
+        return;
+      }
       if (!canNavigate) return;
       if (e.key === 'ArrowLeft' && canGoNewer) {
         e.preventDefault();
@@ -477,6 +557,9 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     goNextVersion,
     goPrevVersion,
     isPromptEditorOpen,
+    generation,
+    onToggleStarred,
+    handleStarToggle,
   ]);
 
   // ===== Fullscreen / slideshow mode =====
@@ -867,6 +950,14 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
     const timer = window.setTimeout(() => setCopyNotice(null), 2000);
     setNoticeTimer(timer);
   };
+
+  useEffect(() => {
+    // Cleanup the star-feedback timer on unmount so a late tick doesn't
+    // call setState on a torn-down component.
+    return () => {
+      if (starFeedbackTimerRef.current) window.clearTimeout(starFeedbackTimerRef.current);
+    };
+  }, []);
 
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana Pro',
@@ -1578,12 +1669,23 @@ ${version.svgCode}
 
   return (
     <>
-    <div className="flex-1 flex flex-col h-full relative">
+    <div className={`relative flex flex-col ${toolbarCollapsed ? '' : 'flex-1 h-full'}`}>
       {/* Main Viewport — the thumbnail rail (when multiple versions exist)
           lives inside the same centered row as the image card so its height
           tracks the image, not the full viewport. This avoids a tall,
-          mostly-empty rail when there are only a handful of marks. */}
-      <div className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center min-h-0">
+          mostly-empty rail when there are only a handful of marks.
+
+          In focus mode (toolbar hidden) the area HUGS the image instead of
+          stretching to fill: a wide (e.g. 16:9) graphic is width-constrained,
+          so a flex-1 area just wraps it in big empty bands above and below.
+          Hugging removes that dead space; the gallery sits right under the
+          image. Expanded mode keeps flex-1 so the image shrinks to fit
+          alongside the open toolbar without forcing a scroll. */}
+      <div
+        className={`overflow-auto flex items-center justify-center ${
+          toolbarCollapsed ? 'p-2 md:p-3' : 'flex-1 p-4 md:p-8 min-h-0'
+        }`}
+      >
         {/* Keep a concrete row width so compare mode can't shrink-wrap around
             the slider surface. Without `w-full`, this row can collapse to the
             intrinsic width of its children. `group` drives the hover-reveal
@@ -1740,6 +1842,7 @@ ${version.svgCode}
                   const isRailDeleteArmed = confirmVersionDelete.isArmed(v.id);
                   const railDeleteVisible =
                     showRailDelete && (isHovered || deletingRefinementId === v.id || isRailDeleteArmed);
+                  const isStarredVersion = generation.starredVersionId === v.id;
                   return (
                     <div key={v.id} className="relative w-full group/railThumb">
                     <button
@@ -1831,6 +1934,37 @@ ${version.svgCode}
                         ) : (
                           <X size={11} strokeWidth={3} />
                         )}
+                      </button>
+                    )}
+                    {/* "Best Mark" star toggle on each rail thumb. Hidden by
+                        default (revealed on hover of the thumb) when not
+                        starred; persistently visible with a filled amber glyph
+                        when starred. Top-left corner pairs with the delete X
+                        on the right; suppressed during compare-pick so the
+                        A/B letter pill in the same corner stays unambiguous. */}
+                    {onToggleStarred && !pickSide && (
+                      <button
+                        type="button"
+                        onMouseEnter={() => setHoveredVersionIdx(idx)}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleStarToggle(v.id);
+                        }}
+                        aria-label={isStarredVersion ? `Unstar ${v.label}` : `Star ${v.label} as the best Mark`}
+                        aria-pressed={isStarredVersion}
+                        title={isStarredVersion ? `Starred — Unstar ${v.label}` : `Star ${v.label} as the best Mark (S)`}
+                        className={`absolute top-1 left-1 z-10 inline-flex items-center justify-center h-5 w-5 rounded-full shadow ring-1 ring-white/40 dark:ring-black/40 transition-all focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-amber-400/70 ${
+                          isStarredVersion
+                            ? 'opacity-100 bg-amber-400 text-white hover:bg-amber-300'
+                            : 'opacity-0 group-hover/railThumb:opacity-100 bg-black/50 text-white hover:bg-amber-400'
+                        }`}
+                      >
+                        <Star
+                          size={11}
+                          strokeWidth={2.5}
+                          className={isStarredVersion ? 'fill-current' : ''}
+                        />
                       </button>
                     )}
                     </div>
@@ -2207,7 +2341,7 @@ ${version.svgCode}
                 labelA={comparisonA.markLabel}
                 labelB={comparisonB.markLabel}
                 aspectRatio={comparisonA.aspectRatio || comparisonB.aspectRatio}
-                maxHeight="78vh"
+                maxHeight={previewMaxHeight}
                 toolbarOverlay
                 className="block"
                 onDraggingChange={setIsSliderDragging}
@@ -2223,10 +2357,30 @@ ${version.svgCode}
               <img
                 src={renderImageSrc || version.imageUrl}
                 alt="Generated Output"
-                className="max-w-full max-h-[70vh] object-contain block rounded-lg"
+                style={{ maxHeight: previewMaxHeight }}
+                className="max-w-full object-contain block rounded-lg transition-[max-height] duration-300"
                 onError={handleImageError}
               />
             )}
+
+          {/* Persistent "this Mark is starred" indicator on the canvas. Shows
+              whenever the displayed version is the one marked as the user's
+              best for this tile. Top-left of the image so it stays out of
+              the way of the bottom-right info overlay and the on-canvas
+              chrome (delete / fullscreen) at top-right. */}
+          {generation.starredVersionId && generation.starredVersionId === version.id && (
+            <div
+              className="absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-amber-400 text-white shadow-lg ring-2 ring-white/60 dark:ring-black/40 animate-in fade-in slide-in-from-left-2 duration-150"
+              role="status"
+              aria-label={`${version.label} is starred as the best Mark`}
+              title={`${version.label} is starred as the best Mark — press S to unstar`}
+            >
+              <Star size={12} strokeWidth={2.5} className="fill-current" />
+              <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+                Best
+              </span>
+            </div>
+          )}
 
           {/* Info overlay (toggle) */}
           {infoVisible && (
@@ -2959,6 +3113,31 @@ ${version.svgCode}
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
           <div className="bg-brand-red text-white text-base px-6 py-4 rounded-2xl shadow-2xl border border-brand-red/70 animate-in fade-in duration-150 pointer-events-none" role="status" aria-live="polite">
             {copyNotice}
+          </div>
+        </div>
+      )}
+
+      {/* Star-toggle feedback. Centered amber pill with a filled / outline
+          star glyph that matches the on/off state. Pointer-events disabled
+          so it never intercepts a follow-up click. Auto-dismisses ~1.6s
+          after the toggle. */}
+      {starFeedback && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className={`inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl shadow-2xl border animate-in fade-in zoom-in-95 duration-150 ${
+              starFeedback.on
+                ? 'bg-amber-400 text-white border-amber-300'
+                : 'bg-slate-800 text-white border-slate-700'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            <Star
+              size={20}
+              strokeWidth={2.5}
+              className={starFeedback.on ? 'fill-current' : ''}
+            />
+            <span className="text-base font-semibold">{starFeedback.message}</span>
           </div>
         </div>
       )}

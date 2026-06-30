@@ -191,7 +191,11 @@ export const getAspectRatiosForModel = (
 ): AspectRatioOption[] => {
   const source = dedupeByValue(allRatios?.length ? allRatios : ASPECT_RATIOS);
 
-  if (modelId === 'gemini' || modelId === 'gemini-3.1-flash-image-preview') {
+  if (
+    modelId === 'gemini' ||
+    modelId === 'gemini-3.1-flash-image-preview' ||
+    modelId === 'gemini-3.1-flash-lite-image'
+  ) {
     return buildFilteredRatios(GEMINI_ALLOWED_ASPECT_RATIOS, GEMINI_LABELS, source);
   }
 

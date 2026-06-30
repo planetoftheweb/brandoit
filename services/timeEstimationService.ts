@@ -19,6 +19,7 @@ const DEFAULT_SECONDS_PER_GEN: Record<string, number> = {
   "gemini-svg": 150,
   gemini: 18,
   "gemini-3.1-flash-image-preview": 12,
+  "gemini-3.1-flash-lite-image": 8,
   openai: 35,
 };
 

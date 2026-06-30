@@ -19,6 +19,7 @@ const INBOX_FOLDER_ID = "folder-inbox";
 
 const NANO_BANANA_PRO_MODEL = "gemini-3-pro-image-preview";
 const NANO_BANANA_2_MODEL = "gemini-3.1-flash-image-preview";
+const NANO_BANANA_2_LITE_MODEL = "gemini-3.1-flash-lite-image";
 
 const GEMINI_ALLOWED_ASPECT_RATIOS = [
   "1:1",
@@ -126,7 +127,11 @@ interface AspectRatioRow {
 
 const getAspectRatiosForModel = (modelId: string, source: AspectRatioRow[]): AspectRatioRow[] => {
   let allowed: readonly string[];
-  if (modelId === "gemini" || modelId === NANO_BANANA_2_MODEL) {
+  if (
+    modelId === "gemini" ||
+    modelId === NANO_BANANA_2_MODEL ||
+    modelId === NANO_BANANA_2_LITE_MODEL
+  ) {
     allowed = GEMINI_ALLOWED_ASPECT_RATIOS;
   } else if (modelId === "openai-2") {
     allowed = OPENAI_2_ALLOWED_ASPECT_RATIOS;
@@ -181,6 +186,7 @@ const getProviderForModel = (modelId: string): ApiKeyProvider | undefined => {
   if (
     modelId === "gemini" ||
     modelId === NANO_BANANA_2_MODEL ||
+    modelId === NANO_BANANA_2_LITE_MODEL ||
     modelId === "gemini-svg"
   ) {
     return "gemini";
@@ -519,10 +525,13 @@ const extractImageFromGeminiResponse = (
   };
 };
 
-const getGeminiImageModelCandidates = (selectedModel?: string): readonly string[] =>
-  selectedModel === NANO_BANANA_2_MODEL
-    ? [NANO_BANANA_2_MODEL, NANO_BANANA_PRO_MODEL]
-    : [NANO_BANANA_PRO_MODEL];
+const getGeminiImageModelCandidates = (selectedModel?: string): readonly string[] => {
+  if (selectedModel === NANO_BANANA_2_LITE_MODEL)
+    return [NANO_BANANA_2_LITE_MODEL, NANO_BANANA_PRO_MODEL];
+  if (selectedModel === NANO_BANANA_2_MODEL)
+    return [NANO_BANANA_2_MODEL, NANO_BANANA_PRO_MODEL];
+  return [NANO_BANANA_PRO_MODEL];
+};
 
 async function generateGeminiImage(
   fullPrompt: string,
@@ -1140,7 +1149,11 @@ export const agentGenerateImage = onRequest(
               quality: openAIQuality,
               systemPrompt: systemCombined,
             });
-          } else if (selectedModel === "gemini" || selectedModel === NANO_BANANA_2_MODEL) {
+          } else if (
+            selectedModel === "gemini" ||
+            selectedModel === NANO_BANANA_2_MODEL ||
+            selectedModel === NANO_BANANA_2_LITE_MODEL
+          ) {
             const geminiPrompt = constructGeminiPrompt(config, ctx);
             resultImage = await generateGeminiImage(
               geminiPrompt,

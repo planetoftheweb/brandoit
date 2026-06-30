@@ -449,6 +449,15 @@ const App: React.FC = () => {
     });
   }, []);
 
+  // Discoverability hint: when the toolbar collapses there's nothing left on
+  // screen explaining where it went, so flash a brief auto-fading pill telling
+  // the user how to bring it back. Throttled so rapid scroll-driven collapses
+  // (auto-dock) don't nag — shows at most once every 12s. (The effect that
+  // drives it lives below, after `isStudioRoute` is defined.)
+  const [showToolbarHint, setShowToolbarHint] = useState(false);
+  const toolbarHintCooldownRef = useRef(0);
+  const toolbarHintTimerRef = useRef<number | undefined>(undefined);
+
   // Analysis Modal State
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<BrandGuidelinesAnalysis | null>(null);
@@ -861,6 +870,29 @@ const App: React.FC = () => {
   const isStudioRoute =
     !adminMode && !settingsMode && !catalogMode && !whatsNewMode;
 
+  useEffect(() => {
+    if (!isStudioRoute) {
+      setShowToolbarHint(false);
+      return;
+    }
+    if (isToolbarCollapsed) {
+      const now = Date.now();
+      if (now - toolbarHintCooldownRef.current < 12000) return;
+      toolbarHintCooldownRef.current = now;
+      setShowToolbarHint(true);
+      window.clearTimeout(toolbarHintTimerRef.current);
+      toolbarHintTimerRef.current = window.setTimeout(
+        () => setShowToolbarHint(false),
+        4000
+      );
+    } else {
+      // Toolbar is back — drop the hint immediately, don't let it linger.
+      setShowToolbarHint(false);
+      window.clearTimeout(toolbarHintTimerRef.current);
+    }
+    return () => window.clearTimeout(toolbarHintTimerRef.current);
+  }, [isToolbarCollapsed, isStudioRoute]);
+
   // Re-enable scroll-to-top undock after the user has scrolled into the gallery.
   useEffect(() => {
     const onScroll = () => {
@@ -926,6 +958,33 @@ const App: React.FC = () => {
       observer.disconnect();
     };
   }, [isStudioRoute, setToolbarCollapsed]);
+
+  // Reversible scroll-to-toggle at the very top. When you're already at the
+  // top the sentinel observer has nothing to react to (no scroll room — the
+  // focus-mode preview hugs the image, so the page often doesn't scroll at
+  // all), which left the toolbar stuck: scroll-up wouldn't show it, scroll-
+  // down wouldn't hide it. Catch the wheel/trackpad gesture at the top and
+  // drive it directly — up shows, down hides — so it's fully reversible
+  // without reaching for the ⤢ button.
+  useEffect(() => {
+    if (!isStudioRoute) return;
+    const onWheel = (e: WheelEvent) => {
+      if (window.scrollY > 8) return; // only act at the very top
+      if (isToolbarCollapsed && e.deltaY < 0) {
+        toolbarUserPinnedRef.current = 'expanded';
+        toolbarAutoUndockEnabledRef.current = true;
+        toolbarCollapseIgnoreUntilRef.current = Date.now() + 400;
+        setIsToolbarCollapsed(false);
+      } else if (!isToolbarCollapsed && e.deltaY > 0) {
+        toolbarUserPinnedRef.current = null;
+        toolbarAutoUndockEnabledRef.current = false;
+        toolbarCollapseIgnoreUntilRef.current = Date.now() + 400;
+        setIsToolbarCollapsed(true);
+      }
+    };
+    window.addEventListener('wheel', onWheel, { passive: true });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, [isStudioRoute, isToolbarCollapsed]);
 
   // Auto-collapse whenever the user lands on a new large preview. Without
   // this, a freshly-selected image that fits inside the viewport never
@@ -1933,6 +1992,32 @@ const App: React.FC = () => {
       }
     }
   };
+
+  // Star (or unstar) a Mark within the current generation. At most one Mark
+  // per generation is starred — calling this with the already-starred id
+  // clears the star; calling with a different id moves the star. Persists to
+  // the same storage as every other generation mutation so the choice
+  // survives reload + cross-device sync.
+  const handleToggleStarred = useCallback(
+    (versionId: string) => {
+      const current = currentGenerationRef.current;
+      if (!current) return;
+      const alreadyStarred = current.starredVersionId === versionId;
+      const next: Generation = alreadyStarred
+        ? (() => {
+            const { starredVersionId: _drop, ...rest } = current;
+            return rest as Generation;
+          })()
+        : { ...current, starredVersionId: versionId };
+      setCurrentGeneration(next);
+      currentGenerationRef.current = next;
+      setHistory((prev) => prev.map((g) => (g.id === next.id ? next : g)));
+      void historyService.updateGeneration(user, next).catch((err) => {
+        console.warn('[App] Failed to persist starred Mark:', err);
+      });
+    },
+    [user]
+  );
 
   const handleAnalyzeRefinePrompt = async (): Promise<string> => {
     if (!currentGeneration) {
@@ -3399,6 +3484,21 @@ const App: React.FC = () => {
             onPromptImageStyleReferenceChange={setPromptImageStyleReference}
           />
 
+          {/* Auto-fading "where did the toolbar go?" hint. Always mounted so it
+              can fade both ways via opacity; pointer-events off so it never
+              eats clicks on the preview underneath. */}
+          <div
+            className={`pointer-events-none fixed left-1/2 top-[88px] z-[45] -translate-x-1/2 transition-opacity duration-500 ${
+              showToolbarHint ? 'opacity-100' : 'opacity-0'
+            }`}
+            aria-hidden={!showToolbarHint}
+          >
+            <div className="flex items-center gap-2 rounded-full bg-slate-900/90 dark:bg-[#161b22]/95 px-3.5 py-2 text-xs font-medium text-white shadow-lg ring-1 ring-white/10 backdrop-blur-sm">
+              <Maximize2 size={13} className="shrink-0 text-brand-teal" />
+              <span>Toolbar hidden — scroll up or tap <span className="font-semibold">⤢</span> to show it</span>
+            </div>
+          </div>
+
           {/* When this leaves the viewport the toolbar docks; when it returns,
               undock (unless focus-mode just selected a preview at the top). */}
           <div
@@ -3684,6 +3784,7 @@ const App: React.FC = () => {
                 generation={currentGeneration}
                 onRefine={handleRefine}
                 onRerun={handleRerun}
+                onToggleStarred={handleToggleStarred}
                 pendingRerunCount={pendingRerunCount}
                 onAnalyzeRefinePrompt={handleAnalyzeRefinePrompt}
                 onExpandRefinementPrompt={handleExpandRefinementPrompt}
@@ -3714,6 +3815,7 @@ const App: React.FC = () => {
                 onExitComparePicker={exitComparePickerMode}
                 onPickMark={pickMarkForComparison}
                 onNavigateToGeneration={handleRestoreFromHistory}
+                toolbarCollapsed={isToolbarCollapsed}
               />
             )}
 

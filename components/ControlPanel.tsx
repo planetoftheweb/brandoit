@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { GenerationConfig, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Team, SvgMode, ToolbarPreset, GeneratedImage, PromptImageStyleInfluenceMode, PromptImageStyleReference } from '../types';
 import { analyzeImageForOption, describeImageContentPrompt, expandPrompt } from '../services/geminiService';
 import {
@@ -733,6 +734,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     };
   }, [actionMenuPresetId, hoverPresetId]);
 
+  // The variations dropdown is portaled with a captured anchor rect, so close
+  // it on scroll/resize rather than letting it float detached from its trigger.
+  useEffect(() => {
+    if (activeDropdown !== 'batch-count') return;
+    const close = () => setActiveDropdown(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [activeDropdown]);
+
   const activeActionPreset = actionMenuPresetId
     ? presets.find((p) => p.id === actionMenuPresetId) ?? null
     : null;
@@ -765,6 +779,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   // Batch generation controls: variations-per-prompt count and brace expansion preview.
   const [batchCount, setBatchCount] = useState<number>(1);
+  // The variations dropdown lives inside the prompt row, which is clipped by
+  // `overflow-hidden` (needed for the toolbar collapse animation) and sits on
+  // the base stacking layer — so an in-flow `top-full` panel gets cut off and
+  // painted behind the image below. Portal it to <body> (like
+  // PresetActionPopover) and anchor it to the trigger instead.
+  const batchCountTriggerRef = useRef<HTMLDivElement>(null);
+  const [batchCountAnchor, setBatchCountAnchor] = useState<DOMRect | null>(null);
   const batchCap = batchCapFor(user);
   const isAdmin = isAdminUser(user);
   const batchCapLabel = Number.isFinite(batchCap) ? String(batchCap) : 'unlimited';
@@ -904,14 +925,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      const insideContainer = containerRef.current?.contains(target);
-      const insidePortal = target.closest?.('[data-preset-popover]');
-      if (insideContainer || insidePortal) return;
+      const insidePortal = target.closest?.('[data-preset-popover], [data-batch-count-popover]');
+      if (insidePortal) return;
+      // The variations dropdown is portaled OUT of the toolbar, so a click
+      // anywhere else in the toolbar (empty space, the adjacent send/expand
+      // buttons) is genuinely outside it — only its own trigger keeps it
+      // open. The in-toolbar dropdowns (type/style/…) keep the broad
+      // container exemption since their panels live inside `containerRef`.
+      if (activeDropdown === 'batch-count') {
+        if (batchCountTriggerRef.current?.contains(target)) return;
+        setActiveDropdown(null);
+        return;
+      }
+      if (containerRef.current?.contains(target)) return;
       setActiveDropdown(null);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [activeDropdown]);
 
   // Clear search when dropdown changes
   useEffect(() => {
@@ -1353,15 +1384,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setActiveDropdown(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  // (Outside-click dismissal is handled by the single comprehensive handler
+  // above — it exempts the portaled satellites and treats the variations
+  // dropdown's clicks correctly. A second, simpler copy used to live here but
+  // it closed the portaled panel on its own clicks, so it was removed.)
 
   useEffect(() => {
     if (activeColorIndex === null) return;
@@ -1748,6 +1774,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const modelLabelMap: Record<string, string> = {
     gemini: 'Nano Banana Pro',
     'gemini-3.1-flash-image-preview': 'Nano Banana 2',
+    'gemini-3.1-flash-lite-image': 'Nano Banana 2 Lite',
     'openai-2': 'GPT Image 2',
     'openai-mini': 'GPT Image Mini',
     openai: 'GPT Image 1.5',
@@ -1840,12 +1867,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   return (
     <>
       <div
-        className={`sticky top-[73px] z-40 w-full bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d] transition-[padding] duration-300 [overflow-anchor:none] ${
-          isOptionsCollapsed ? 'px-4 py-0' : 'p-4'
+        className={`sticky top-[73px] z-40 w-full transition-[padding] duration-300 [overflow-anchor:none] ${
+          isOptionsCollapsed
+            // Collapsed = truly invisible: no padding, no glass strip, no
+            // border. Otherwise the toolbar leaves a thin bordered band that
+            // — together with the header's own border — reads as a weird
+            // "double line" with dead space where the prompt used to be.
+            ? 'p-0 border-b-0'
+            : 'p-4 bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-md border-b border-gray-200 dark:border-[#30363d]'
         }`}
         ref={containerRef}
       >
-        <div className="max-w-[96rem] mx-auto flex flex-col gap-4">
+        <div className={`max-w-[96rem] mx-auto flex flex-col ${isOptionsCollapsed ? 'gap-0' : 'gap-4'}`}>
 
           {/* 1. Toolbar Controls — menu bar. The collapsible wrapper hides
               this row entirely so the user can focus on previews. We keep
@@ -2462,6 +2495,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               <>
                 {/* Variations: typable number with a 1–5 quick-pick dropdown. */}
                 <div
+                  ref={batchCountTriggerRef}
                   className="relative group flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#0d1117] shadow-sm"
                   title={`Variations per prompt${Number.isFinite(batchCap) ? ` (max ${batchCapLabel})` : ''}`}
                 >
@@ -2490,7 +2524,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => toggleDropdown('batch-count')}
+                    onClick={() => {
+                      if (activeDropdown !== 'batch-count') {
+                        setBatchCountAnchor(
+                          batchCountTriggerRef.current?.getBoundingClientRect() ?? null
+                        );
+                      }
+                      toggleDropdown('batch-count');
+                    }}
                     aria-haspopup="listbox"
                     aria-expanded={activeDropdown === 'batch-count'}
                     aria-label="Pick a preset count"
@@ -2504,37 +2545,47 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     />
                   </button>
 
-                  {activeDropdown === 'batch-count' && (
-                    <div
-                      className="absolute top-full right-0 mt-2 w-16 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 py-0.5"
-                      role="listbox"
-                      aria-label="Variations per prompt"
-                    >
-                      {[1, 2, 3, 4, 5].map((n) => {
-                        const isSelected = batchCount === n;
-                        return (
-                          <button
-                            key={n}
-                            type="button"
-                            role="option"
-                            aria-selected={isSelected}
-                            onClick={() => {
-                              setBatchCount(n);
-                              setActiveDropdown(null);
-                            }}
-                            className={`w-full flex items-center justify-between px-2.5 py-0.5 text-sm tabular-nums transition-colors ${
-                              isSelected
-                                ? 'bg-brand-teal/10 text-brand-teal font-semibold'
-                                : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
-                            }`}
-                          >
-                            <span>{n}</span>
-                            {isSelected && <Check size={12} />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {activeDropdown === 'batch-count' && batchCountAnchor && typeof document !== 'undefined' &&
+                    createPortal(
+                      <div
+                        data-batch-count-popover
+                        style={{
+                          position: 'fixed',
+                          top: batchCountAnchor.bottom + 8,
+                          left: Math.max(8, batchCountAnchor.right - 64),
+                          width: 64,
+                          zIndex: 70,
+                        }}
+                        className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 py-0.5"
+                        role="listbox"
+                        aria-label="Variations per prompt"
+                      >
+                        {[1, 2, 3, 4, 5].map((n) => {
+                          const isSelected = batchCount === n;
+                          return (
+                            <button
+                              key={n}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onClick={() => {
+                                setBatchCount(n);
+                                setActiveDropdown(null);
+                              }}
+                              className={`w-full flex items-center justify-between px-2.5 py-0.5 text-sm tabular-nums transition-colors ${
+                                isSelected
+                                  ? 'bg-brand-teal/10 text-brand-teal font-semibold'
+                                  : 'text-slate-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-[#21262d]'
+                              }`}
+                            >
+                              <span>{n}</span>
+                              {isSelected && <Check size={12} />}
+                            </button>
+                          );
+                        })}
+                      </div>,
+                      document.body
+                    )}
                 </div>
 
                 <button

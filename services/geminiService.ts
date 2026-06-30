@@ -16,6 +16,7 @@ import {
 
 const NANO_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 const NANO_BANANA_2_MODEL = 'gemini-3.1-flash-image-preview';
+const NANO_BANANA_2_LITE_MODEL = 'gemini-3.1-flash-lite-image';
 
 /** True when another Gemini image model may still work for the same key/project. */
 const shouldRetryImageModelAfterError = (err: unknown): boolean =>
@@ -66,13 +67,19 @@ const withSystemInstruction = <T extends Record<string, any>>(
   return { ...(baseConfig || {} as T), systemInstruction: trimmed };
 };
 
-const getGeminiImageModelCandidates = (selectedModel?: string): readonly string[] =>
-  selectedModel === NANO_BANANA_2_MODEL
-    ? [NANO_BANANA_2_MODEL, NANO_BANANA_PRO_MODEL]
-    : [NANO_BANANA_PRO_MODEL];
+const getGeminiImageModelCandidates = (selectedModel?: string): readonly string[] => {
+  if (selectedModel === NANO_BANANA_2_LITE_MODEL)
+    return [NANO_BANANA_2_LITE_MODEL, NANO_BANANA_PRO_MODEL];
+  if (selectedModel === NANO_BANANA_2_MODEL)
+    return [NANO_BANANA_2_MODEL, NANO_BANANA_PRO_MODEL];
+  return [NANO_BANANA_PRO_MODEL];
+};
 
-const getUiModelIdForGeminiImageModel = (generationModel: string): string =>
-  generationModel === NANO_BANANA_2_MODEL ? NANO_BANANA_2_MODEL : 'gemini';
+const getUiModelIdForGeminiImageModel = (generationModel: string): string => {
+  if (generationModel === NANO_BANANA_2_LITE_MODEL) return NANO_BANANA_2_LITE_MODEL;
+  if (generationModel === NANO_BANANA_2_MODEL) return NANO_BANANA_2_MODEL;
+  return 'gemini';
+};
 
 const withActualGeminiModel = (image: GeneratedImage, generationModel: string): GeneratedImage => ({
   ...image,

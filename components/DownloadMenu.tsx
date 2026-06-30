@@ -119,10 +119,13 @@ export const DownloadMenu: React.FC<DownloadMenuProps> = ({
     setBusy(true);
     setIsOpen(false);
     try {
-      const zip = await buildGenerationsZipBlob(allGenerations, { format });
-      downloadBlobAsFile(zip, defaultBatchExportFilename());
-      const n = allGenerations.length;
-      notify(`ZIP download started (${n} item${n === 1 ? "" : "s"})`);
+      const { blob, successCount, failCount } = await buildGenerationsZipBlob(allGenerations, { format });
+      downloadBlobAsFile(blob, defaultBatchExportFilename());
+      if (failCount > 0) {
+        notify(`ZIP downloaded (${successCount} of ${successCount + failCount} images — ${failCount} could not be loaded)`);
+      } else {
+        notify(`ZIP download started (${successCount} item${successCount === 1 ? "" : "s"})`);
+      }
     } catch (err) {
       console.error("ZIP failed:", err);
       notify("ZIP download failed");

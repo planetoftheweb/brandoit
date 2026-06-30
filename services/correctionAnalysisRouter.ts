@@ -9,6 +9,7 @@ const getProviderForModel = (modelId: string): ApiKeyProvider | undefined => {
   if (
     modelId === 'gemini' ||
     modelId === 'gemini-3.1-flash-image-preview' ||
+    modelId === 'gemini-3.1-flash-lite-image' ||
     modelId === 'gemini-svg'
   ) {
     return 'gemini';
@@ -107,6 +108,7 @@ export function resolveAuxiliaryByokProvider(
   const geminiToolbar =
     selectedModel === 'gemini' ||
     selectedModel === 'gemini-3.1-flash-image-preview' ||
+    selectedModel === 'gemini-3.1-flash-lite-image' ||
     selectedModel === 'gemini-svg';
 
   if (openaiToolbar && openaiKey) return { provider: 'openai', apiKey: openaiKey };
