@@ -4,7 +4,7 @@ import { ImageDisplay } from './components/ImageDisplay';
 import { RecentGenerations } from './components/RecentGenerations';
 import type { GalleryPresetSource } from './components/GalleryPresetMenu';
 import { ToolbarPresetSnapshot } from './utils/toolbarPresetUtils';
-import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID, PromptImageStyleReference } from './types';
+import { GenerationConfig, GeneratedImage, BrandColor, VisualStyle, GraphicType, AspectRatioOption, User, Generation, GenerationVersion, UserSettings, BrandGuidelinesAnalysis, ToolbarPreset, Folder, INBOX_FOLDER_ID, PromptImageStyleReference } from './types';
 import { 
   BRAND_COLORS, 
   VISUAL_STYLES, 
@@ -109,6 +109,9 @@ const WhatsNewPage = lazy(() =>
 );
 const SearchModal = lazy(() =>
   import('./components/SearchModal').then((mod) => ({ default: mod.SearchModal }))
+);
+const BuildStudio = lazy(() =>
+  import('./components/BuildStudio').then((mod) => ({ default: mod.BuildStudio }))
 );
 
 interface ToolbarSelectionCache {
@@ -327,6 +330,10 @@ const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  // Build Studio (reveal animator) target — the generation+version to animate.
+  const [buildStudioTarget, setBuildStudioTarget] = useState<
+    { generation: Generation; version: GenerationVersion } | null
+  >(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
 
@@ -3816,11 +3823,22 @@ const App: React.FC = () => {
                 onPickMark={pickMarkForComparison}
                 onNavigateToGeneration={handleRestoreFromHistory}
                 toolbarCollapsed={isToolbarCollapsed}
+                onOpenBuildStudio={
+                  currentGeneration
+                    ? () => {
+                        const gen = currentGeneration;
+                        const ver = gen.versions[gen.currentVersionIndex] || gen.versions[0];
+                        if (ver) setBuildStudioTarget({ generation: gen, version: ver });
+                      }
+                    : undefined
+                }
               />
             )}
 
             {/* History Gallery */}
             <RecentGenerations
+              hasPreviewAbove={!!currentGeneration || hasRunningGenerationJobs || history.length === 0}
+              toolbarCollapsed={isToolbarCollapsed}
               history={history}
               activeGenerationId={currentGeneration?.id}
               onSelect={handleRestoreFromHistory}
@@ -3927,6 +3945,17 @@ const App: React.FC = () => {
                 selectedModel: gen.modelId,
               })
             }
+          />
+        </Suspense>
+      )}
+
+      {/* Build Studio — reveal animator over the current image */}
+      {buildStudioTarget && (
+        <Suspense fallback={<LazyModalFallback />}>
+          <BuildStudio
+            generation={buildStudioTarget.generation}
+            version={buildStudioTarget.version}
+            onClose={() => setBuildStudioTarget(null)}
           />
         </Suspense>
       )}

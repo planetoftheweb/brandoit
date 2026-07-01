@@ -135,6 +135,86 @@ export interface Generation {
   starredVersionId?: string;
 }
 
+/** A point in normalized image space (0..1 on each axis). */
+export interface BuildPoint {
+  x: number;
+  y: number;
+}
+
+/** Where the camera zooms in from for a step. */
+export type BuildZoomFrom = 'smart' | 'center';
+
+/** Whether a shape adds to or subtracts from a step's revealed region. */
+export type BuildShapeOp = 'add' | 'sub';
+
+/** A filled polygon (freeform lasso, rectangle, or straight-line vertices). */
+export interface BuildPolyShape {
+  kind: 'poly';
+  op: BuildShapeOp;
+  points: BuildPoint[]; // normalized, 3+ points
+}
+
+/** A brush stroke: a thick path with round caps. `radius` is a fraction of min(imgW,imgH). */
+export interface BuildBrushShape {
+  kind: 'brush';
+  op: BuildShapeOp;
+  points: BuildPoint[]; // normalized path, 1+ points
+  radius: number;
+}
+
+export type BuildShape = BuildPolyShape | BuildBrushShape;
+
+/**
+ * One reveal step in a Build: a region of the image built from one or more
+ * shapes (add/subtract composited), stored normalized 0..1 so it survives any
+ * display/export resolution. The camera centers and zooms on the region's
+ * bounds.
+ */
+export interface BuildStep {
+  id: string;
+  shapes: BuildShape[];
+  /** Per-step hold length. Falls back to the build's global default when unset. */
+  durationMs?: number;
+  /**
+   * Per-step camera origin. 'smart' pans from the previous item; 'center'
+   * pulls back to the whole image, then zooms in. Falls back to the build's
+   * global default when unset.
+   */
+  zoomFrom?: BuildZoomFrom;
+}
+
+/** How the not-yet-revealed area of the image looks during a build. */
+export type BuildBackground = 'dim' | 'blank' | 'blur';
+
+/** How each step's region appears as it is revealed. */
+export type BuildRevealStyle = 'fade' | 'wipe' | 'spotlight';
+
+/**
+ * A "build" turns a finished infographic into a sequential reveal animation
+ * (PowerPoint-style builds): the camera zooms to each box as its content fades
+ * in. Saved locally per generation+version (see services/buildStore.ts) and
+ * rendered deterministically by services/buildAnimator.ts so the live player
+ * and the exported MP4 stay identical.
+ */
+export interface ImageBuild {
+  steps: BuildStep[];
+  revealStyle: BuildRevealStyle; // default 'fade'
+  /**
+   * false (default): show one item at a time — the previous item hides as the
+   * next appears; the end reveals all selected items together.
+   * true: cumulative "build up" — each item stays visible as the next is added.
+   */
+  cumulative: boolean;
+  zoom: number;                  // 0 = no camera zoom … 1 = fully frame each region
+  fps: number;                   // export frame rate, default 30
+  transitionMs: number;          // cross-step camera ease + content fade
+  endShowFull: boolean;          // zoom back out to the whole image at the end
+  background: BuildBackground;   // look of the not-yet-revealed area
+  defaultDurationMs: number;     // global "seconds to show" per item (per-step override wins)
+  defaultZoomFrom: BuildZoomFrom;// global camera origin (per-step override wins)
+  autoPlay: boolean;             // Preview opens auto-playing vs. manual arrow-key advance
+}
+
 /**
  * Reserved id of the always-present "Inbox" folder. Auto-created on first
  * init (per user / per guest device) and undeletable, but renameable. Used

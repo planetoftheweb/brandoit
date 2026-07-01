@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
               if (id.includes('/react/') || id.includes('/react-dom/')) return 'vendor-react';
               if (id.includes('/lucide-react/')) return 'vendor-icons';
               if (id.includes('/jszip/')) return 'vendor-zip';
+              // Keep mediabunny (MP4 export) in its own chunk so it loads only
+              // when the Build Studio exporter is dynamically imported, instead
+              // of being folded into the eagerly-loaded shared `vendor` chunk.
+              if (id.includes('/mediabunny/')) return 'vendor-mediabunny';
               return 'vendor';
             },
           },

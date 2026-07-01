@@ -254,9 +254,24 @@ interface RecentGenerationsProps {
    * scrolling, paginating, or restoring from history.
    */
   activeGenerationId?: string;
+  /**
+   * Whether the large preview (`ImageDisplay`) is rendered above the gallery.
+   * When it is, the gallery draws a top divider + margin to separate itself
+   * from the preview. On first load with nothing selected there's no preview,
+   * so that divider would just stack a redundant second line under the toolbar
+   * with dead space between — drop it in that case.
+   */
+  hasPreviewAbove?: boolean;
+  /**
+   * Whether the toolbar is collapsed (focus mode). In focus mode the preview
+   * hugs the image with even padding, so the gallery's top separator/margin
+   * would read as extra, unbalanced space below the image — drop it and let
+   * the gallery sit flush so the image's framing stays even on all sides.
+   */
+  toolbarCollapsed?: boolean;
 }
 
-export const RecentGenerations: React.FC<RecentGenerationsProps> = ({ 
+export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   history, 
   onSelect,
   onDelete,
@@ -286,6 +301,8 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   getPresetLabels,
   galleryFolderName,
   activeGenerationId,
+  hasPreviewAbove = true,
+  toolbarCollapsed = false,
 }) => {
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
   const [imageSrcById, setImageSrcById] = React.useState<Record<string, string>>({});
@@ -1902,7 +1919,7 @@ export const RecentGenerations: React.FC<RecentGenerationsProps> = ({
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 md:px-6 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 border-t border-gray-200 dark:border-[#30363d] mt-8">
+    <div className={`w-full max-w-7xl mx-auto px-4 md:px-6 pb-8 ${toolbarCollapsed ? 'pt-0' : 'pt-8'} animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150 ${hasPreviewAbove && !toolbarCollapsed ? 'border-t border-gray-200 dark:border-[#30363d] mt-8' : ''}`}>
       {/* Single-line header. The folder picker is the section's identity
           (it already shows the active folder name + count + pin state), so
           the prior Clock + "RECENT" heading was redundant chrome. When the

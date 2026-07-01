@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Generation, GenerationVersion, BrandColor, VisualStyle, GraphicType, AspectRatioOption, INBOX_FOLDER_ID } from '../types';
-import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check, Star } from 'lucide-react';
+import { Download, RefreshCw, Send, Image as ImageIcon, Copy, Link, Trash2, ChevronDown, ChevronLeft, ChevronRight, Layers, FileImage, Code, Play, Pause, FileCode, Info, X, Globe, Wand2, Maximize, Maximize2, Minimize, GitCompare, Plus, Expand, ScanSearch, Check, Star, Film } from 'lucide-react';
 import { useConfirmAction } from '../hooks/useConfirmAction';
 import { createBlobUrlFromImage } from '../services/imageSourceService';
 import { getCachedImageBlob, getCachedImageBlobUrl } from '../services/imageCache';
@@ -101,6 +101,8 @@ interface ImageDisplayProps {
    * mostly-empty frame.
    */
   toolbarCollapsed?: boolean;
+  /** Open the Build Studio (reveal animator) for the current version. */
+  onOpenBuildStudio?: () => void;
 }
 
 /** Keydown targets where cursor/preview idle auto-hide should pause while the user types. */
@@ -138,6 +140,7 @@ export const ImageDisplay: React.FC<ImageDisplayProps> = ({
   onPickMark,
   onNavigateToGeneration,
   toolbarCollapsed = false,
+  onOpenBuildStudio,
 }) => {
   // In focus mode the toolbar is gone, so let the image claim that height
   // (less letterboxing). With the toolbar open we stay conservative so the
@@ -2932,6 +2935,18 @@ ${version.svgCode}
               >
                 <Maximize size={18} />
               </ActionButton>
+
+              {/* Build Studio — turn this image into a sequential reveal
+                  animation (draw boxes, zoom/fade-in tour) and export MP4. */}
+              {onOpenBuildStudio && (
+                <ActionButton
+                  onClick={onOpenBuildStudio}
+                  title="Build Studio — reveal parts of this image as an animation you can play and export"
+                  tooltip="Animate"
+                >
+                  <Film size={18} />
+                </ActionButton>
+              )}
 
               {/* Animation toggle (SVG only) */}
               {isSvg && (
